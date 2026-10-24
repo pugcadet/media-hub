@@ -68,13 +68,14 @@ export interface Candidate {
 export interface PlanOp {
   from: string;
   to: string;
-  kind: "video" | "sidecar";
+  kind: "video" | "sidecar" | "folder";
   status: "ok" | "unchanged" | "conflict" | "unparsed";
   note: string | null;
   season: number | null;
   episodes: number[];
   verified: boolean;
   score: number | null;
+  title: string | null;
 }
 
 export interface PlanResult {
@@ -90,6 +91,7 @@ export interface PlanResult {
   candidates: Candidate[];
   chosen: Candidate | null;
   matchedMovies: number;
+  mode: "tv" | "movie";
 }
 
 export interface FindReplace {
@@ -99,7 +101,7 @@ export interface FindReplace {
 }
 
 export interface PlanArgs {
-  mode: "tv" | "movie";
+  mode: "auto" | "tv" | "movie";
   folder: string;
   template: string;
   show: string | null;
@@ -108,6 +110,8 @@ export interface PlanArgs {
   recursive: boolean;
   source: "auto" | "jellyfin" | "tmdb" | "tvmaze" | "none";
   matchId: string | null;
+  renameFolder: boolean | null;
+  seasonFolders: boolean;
 }
 
 export interface Batch {
