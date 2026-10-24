@@ -14,6 +14,10 @@ pub struct Settings {
     pub library_root: Option<String>,
     /// Preferred subtitle languages, 3-letter codes in order ("eng", "dut").
     pub sub_langs: Vec<String>,
+    /// ffmpeg chosen by the user, if it is not in a usual place.
+    pub ffmpeg_path: Option<String>,
+    /// How Jellyfin's file paths map to this computer (learned automatically).
+    pub path_map: Option<crate::media_tools::PathMap>,
     /// While true, the app only reads from Jellyfin. Later modules check this
     /// flag before they change anything. It starts on and stays on by default.
     pub read_only: bool,
@@ -26,6 +30,8 @@ impl Default for Settings {
             server_name: None,
             library_root: None,
             sub_langs: vec!["eng".into()],
+            ffmpeg_path: None,
+            path_map: None,
             read_only: true,
         }
     }

@@ -360,7 +360,7 @@ impl Store {
     pub fn changes_for(&self, item_id: &str, limit: i64) -> Result<Vec<Change>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, CAST(at AS INTEGER), action, target, undone FROM undo_journal
-             WHERE action IN ('item_update','identify','image','subtitle') AND (target = ?1 OR target LIKE ?1 || '|%')
+             WHERE action IN ('item_update','identify','image','subtitle','segment') AND (target = ?1 OR target LIKE ?1 || '|%')
              ORDER BY id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![item_id, limit.clamp(1, 100)], |r| {

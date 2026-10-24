@@ -210,6 +210,10 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
                 w.upload_image(id, kind, index, &bytes, ct).await?;
             }
         }
+        "segment" => {
+            check_id(&ch.target)?;
+            crate::seg_cmds::undo_segments(&w, &ch.target, &ch.old_value).await?;
+        }
         "subtitle" => {
             check_id(&ch.target)?;
             crate::sub_cmds::undo_download(&w, &ch.target, &ch.old_value).await?;

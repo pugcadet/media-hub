@@ -382,6 +382,57 @@ impl Client {
     }
 }
 
+/// Where the MediaSegments API plugin accepts new segments and deletions. Found in the
+/// server's own API description, so the app adapts to the installed plugin version.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SegmentApi {
+    /// e.g. "/MediaSegmentsApi/{itemId}"
+    pub create: String,
+    /// e.g. "/MediaSegmentsApi/{segmentId}"
+    pub delete: String,
+}
+
+pub fn parse_segment_api(spec: &serde_json::Value) -> Option<SegmentApi> {
+    let paths = spec.get("paths")?.as_object()?;
+    let mut create = None;
+    let mut delete = None;
+    for (path, methods) in paths {
+        if !path.to_lowercase().contains("mediasegmentsapi") {
+            continue;
+        }
+        let m = methods.as_object()?;
+        if m.contains_key("post") && path.contains("{itemId}") && path.matches('{').count() == 1 {
+            create.get_or_insert_with(|| path.clone());
+        }
+        if m.contains_key("delete") && path.matches('{').count() == 1 && !path.contains("{itemId}") {
+            delete.get_or_insert_with(|| path.clone());
+        }
+    }
+    Some(SegmentApi { create: create?, delete: delete? })
+}
+
+pub const TICKS_PER_SECOND: f64 = 10_000_000.0;
+
+fn valid_segment_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 40 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+impl Client {
+    pub async fn segment_api(&self) -> Result<Option<SegmentApi>> {
+        let spec: serde_json::Value = self.get_json("/api-docs/openapi.json", &[]).await?;
+        Ok(parse_segment_api(&spec))
+    }
+
+    /// Segments Jellyfin knows for an item: [{Id, Type, StartTicks, EndTicks}, ...].
+    pub async fn segments(&self, id: &str) -> Result<Vec<serde_json::Value>> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let v: serde_json::Value = self.get_json(&format!("/MediaSegments/{id}"), &[]).await?;
+        Ok(v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default())
+    }
+}
+
 /// The only type that can change anything in Jellyfin.
 pub struct Writer {
     c: Client,
@@ -462,6 +513,31 @@ impl Writer {
             return Err(Error::msg("bad request"));
         }
         let req = self.c.http.delete(self.c.url(&format!("/Videos/{id}/Subtitles/{index}")));
+        self.c.send(req).await.map(|_| ())
+    }
+
+    pub async fn segment_create(&self, api: &SegmentApi, id: &str, kind: &str, start: f64, end: f64, provider: &str) -> Result<()> {
+        if !valid_item_id(id) || !["Intro", "Outro", "Recap", "Preview", "Commercial"].contains(&kind) || !(0.0..end).contains(&start) {
+            return Err(Error::msg("bad segment"));
+        }
+        let body = serde_json::json!({
+            "ItemId": id,
+            "Type": kind,
+            "StartTicks": (start * TICKS_PER_SECOND).round() as i64,
+            "EndTicks": (end * TICKS_PER_SECOND).round() as i64,
+        });
+        let path = api.create.replace("{itemId}", id);
+        self.post(&path, &[("providerId", provider.to_string())], Some(&body)).await
+    }
+
+    pub async fn segment_delete(&self, api: &SegmentApi, segment_id: &str) -> Result<()> {
+        if !valid_segment_id(segment_id) {
+            return Err(Error::msg("bad segment id"));
+        }
+        let start = api.delete.find('{').ok_or_else(|| Error::msg("bad api"))?;
+        let end = api.delete[start..].find('}').map(|e| start + e + 1).ok_or_else(|| Error::msg("bad api"))?;
+        let path = format!("{}{}{}", &api.delete[..start], segment_id, &api.delete[end..]);
+        let req = self.c.http.delete(self.c.url(&path));
         self.c.send(req).await.map(|_| ())
     }
 
@@ -625,6 +701,22 @@ mod tests {
         assert!(!items[1].has_poster);
         assert_eq!(items[1].sort_name, "inception");
         assert!(items[1].genres.is_empty());
+    }
+
+    #[test]
+    fn finds_segment_endpoints_in_the_api_description() {
+        let spec = serde_json::json!({"paths": {
+            "/MediaSegments/{itemId}": {"get": {}},
+            "/MediaSegmentsApi/{itemId}": {"post": {}, "get": {}},
+            "/MediaSegmentsApi/{segmentId}": {"delete": {}},
+            "/MediaSegmentsApi/{itemId}/{type}": {"delete": {}}
+        }});
+        let api = parse_segment_api(&spec).unwrap();
+        assert_eq!(api.create, "/MediaSegmentsApi/{itemId}");
+        assert_eq!(api.delete, "/MediaSegmentsApi/{segmentId}");
+        assert!(parse_segment_api(&serde_json::json!({"paths": {"/MediaSegments/{itemId}": {"get": {}}}})).is_none());
+        assert!(valid_segment_id("3f2b6c1e-0000-4abc-9def-1234567890ab"));
+        assert!(!valid_segment_id("../x"));
     }
 
     #[test]

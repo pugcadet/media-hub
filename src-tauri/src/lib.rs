@@ -1,15 +1,19 @@
 mod commands;
 mod config;
+mod detect;
 mod error;
+mod fingerprint;
 mod fsops;
 mod images;
 mod jellyfin;
+mod media_tools;
 mod meta_cmds;
 mod naming;
 mod picks;
 mod planner;
 mod rename_cmds;
 mod secrets;
+mod seg_cmds;
 mod state;
 mod store;
 mod sub_cmds;
@@ -57,6 +61,11 @@ pub fn run() {
             sub_cmds::subtitle_options,
             sub_cmds::subtitle_download,
             sub_cmds::subtitle_auto,
+            seg_cmds::segments_overview,
+            seg_cmds::detect_season,
+            seg_cmds::save_segments,
+            seg_cmds::ffmpeg_info,
+            seg_cmds::pick_ffmpeg,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Media Hub");
