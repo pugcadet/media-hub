@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorText, Item, Kind, localDate, Sort, Status } from "./api";
-import Detail from "./Detail";
 import Poster from "./Poster";
 import Nav from "./Nav";
 import type { View } from "./App";
@@ -16,7 +15,7 @@ function ago(ts: number | null): string {
   return `${Math.round(mins / 60 / 24)} d ago`;
 }
 
-export default function Library({ status, onChanged, onNav }: { status: Status; onChanged: () => void; onNav: (v: View) => void }) {
+export default function Library({ status, onChanged, onNav, onOpen }: { status: Status; onChanged: () => void; onNav: (v: View) => void; onOpen: (id: string) => void }) {
   const [kind, setKind] = useState<Kind>(null);
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -24,7 +23,6 @@ export default function Library({ status, onChanged, onNav }: { status: Status; 
   const [items, setItems] = useState<Item[]>([]);
   const [more, setMore] = useState(false);
   const [picks, setPicks] = useState<Item[]>([]);
-  const [open, setOpen] = useState<Item | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
@@ -98,16 +96,6 @@ export default function Library({ status, onChanged, onNav }: { status: Status; 
     }
   }, [status.lastSync, sync]);
 
-  async function disconnect() {
-    if (!window.confirm("Disconnect from this server? The saved key and the local list are removed from this computer. Your server is not touched.")) return;
-    try {
-      await api.disconnect();
-      onChanged();
-    } catch (e) {
-      setMessage(errorText(e));
-    }
-  }
-
   const chip = (label: string, value: Kind) => (
     <button className={`chip ${kind === value ? "on" : ""}`} onClick={() => setKind(value)}>{label}</button>
   );
@@ -129,7 +117,6 @@ export default function Library({ status, onChanged, onNav }: { status: Status; 
           {status.serverName} · {syncing ? "syncing…" : `updated ${ago(status.lastSync)}`}
         </span>
         <button onClick={() => void sync()} disabled={syncing}>{syncing ? "Syncing…" : "Sync"}</button>
-        <button onClick={() => void disconnect()}>Disconnect</button>
       </header>
 
       <main>
@@ -139,7 +126,7 @@ export default function Library({ status, onChanged, onNav }: { status: Status; 
           <section>
             <h2>Picks of the day</h2>
             <div className="picks">
-              {picks.map((p) => <Poster key={p.id} item={p} onOpen={setOpen} width={360} />)}
+              {picks.map((p) => <Poster key={p.id} item={p} onOpen={(i) => onOpen(i.id)} width={360} />)}
             </div>
           </section>
         )}
@@ -166,7 +153,7 @@ export default function Library({ status, onChanged, onNav }: { status: Status; 
             <p className="muted">{total === 0 ? "Nothing here yet. Press Sync." : "No matches."}</p>
           )}
           <div className="grid">
-            {items.map((i) => <Poster key={i.id} item={i} onOpen={setOpen} />)}
+            {items.map((i) => <Poster key={i.id} item={i} onOpen={(i) => onOpen(i.id)} />)}
           </div>
           <div ref={sentinel} style={{ height: 1 }} />
         </section>
@@ -176,7 +163,6 @@ export default function Library({ status, onChanged, onNav }: { status: Status; 
         Read-only mode{status.readOnly ? " is on" : " is off"} · Pictures and details come from your Jellyfin server.
       </footer>
 
-      {open && <Detail item={open} onClose={() => setOpen(null)} />}
     </div>
   );
 }

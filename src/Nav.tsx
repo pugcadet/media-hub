@@ -3,6 +3,7 @@ import type { View } from "./App";
 const ITEMS: { id: View; label: string }[] = [
   { id: "library", label: "Library" },
   { id: "renamer", label: "Renamer" },
+  { id: "settings", label: "Settings" },
 ];
 
 export default function Nav({ current, onNav }: { current: View; onNav: (v: View) => void }) {
