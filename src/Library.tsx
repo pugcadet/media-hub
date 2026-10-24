@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorText, Item, Kind, localDate, Sort, Status } from "./api";
 import Detail from "./Detail";
 import Poster from "./Poster";
+import Nav from "./Nav";
+import type { View } from "./App";
 
 const PAGE = 120;
 
@@ -14,7 +16,7 @@ function ago(ts: number | null): string {
   return `${Math.round(mins / 60 / 24)} d ago`;
 }
 
-export default function Library({ status, onChanged }: { status: Status; onChanged: () => void }) {
+export default function Library({ status, onChanged, onNav }: { status: Status; onChanged: () => void; onNav: (v: View) => void }) {
   const [kind, setKind] = useState<Kind>(null);
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -114,6 +116,7 @@ export default function Library({ status, onChanged }: { status: Status; onChang
     <div className="app">
       <header>
         <div className="brand"><span className="logo" />Media Hub</div>
+        <Nav current="library" onNav={onNav} />
         <input
           className="search"
           type="search"

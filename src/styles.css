@@ -74,3 +74,55 @@ footer { padding: 10px 24px; border-top: 1px solid var(--line); }
 .detail .info { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .detail h2 { font-size: 22px; margin: 0; }
 @media (max-width: 700px) { .detail { flex-direction: column; } .detail .art { flex-basis: auto; width: 180px; } }
+
+/* ---- navigation */
+.nav { display: flex; gap: 4px; }
+.nav button { border-color: transparent; color: var(--muted); }
+.nav button.on { background: var(--panel2); color: var(--text); border-color: var(--line); }
+.path { max-width: 32vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+
+/* ---- renamer */
+.split { flex: 1; display: flex; gap: 20px; padding: 20px 24px; align-items: flex-start; }
+.side { flex: 0 0 280px; padding: 14px; display: flex; flex-direction: column; gap: 10px; position: sticky; top: 76px; max-height: calc(100vh - 100px); }
+.work { flex: 1; min-width: 0; padding: 0; gap: 18px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; align-self: flex-start; }
+.seg button { border: 0; border-radius: 0; height: 30px; color: var(--muted); }
+.seg button.on { background: #22302e; color: #8fe0d0; }
+.crumbs { font-size: 13px; overflow-wrap: anywhere; }
+button.link { all: unset; cursor: pointer; color: var(--accent); }
+button.link:hover { text-decoration: underline; }
+.folders { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; min-height: 120px; }
+.folders li { display: flex; align-items: center; border-radius: 8px; }
+.folders li.on { background: #22302e; }
+.folders li .pick { all: unset; flex: 1; padding: 6px 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folders li .open { height: 28px; padding: 0 10px; border-color: transparent; color: var(--muted); }
+.folders li:hover { background: var(--panel2); }
+.form, .results, .history { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.form label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); flex: 1; min-width: 160px; }
+.form label.narrow { flex: 0 0 90px; min-width: 90px; }
+label.check { flex-direction: row !important; align-items: center; gap: 8px; color: var(--text); font-size: 13px; }
+label.check input { height: auto; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.row.end { justify-content: flex-end; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
+.rules { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.rule { display: flex; gap: 8px; align-items: center; width: 100%; }
+.rule input:not([type=checkbox]) { flex: 1; }
+.note { color: #e8b04a; margin: 0; }
+.chip.ok { color: #8fe0d0; } .chip.bad { color: var(--danger); } .chip.warn { color: #e8b04a; }
+.table { display: flex; flex-direction: column; max-height: 55vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.op { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.op:last-child { border-bottom: 0; }
+.names { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.from { color: var(--muted); }
+.to { color: var(--text); }
+.dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex: 0 0 8px; background: var(--muted); }
+.dot.ok { background: var(--accent); } .dot.conflict { background: var(--danger); } .dot.unparsed { background: #e8b04a; }
+.tree h3 { margin: 6px 0; font-size: 15px; }
+.season { margin: 0 0 10px 12px; }
+.ep { display: flex; gap: 12px; padding: 3px 0; align-items: baseline; }
+.ep span:nth-child(2) { flex: 1; }
+.okmark { color: var(--accent); } .warnmark { color: #e8b04a; font-weight: 700; }
+.applybar { display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+.batch { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+@media (max-width: 900px) { .split { flex-direction: column; } .side { position: static; width: 100%; flex-basis: auto; } }

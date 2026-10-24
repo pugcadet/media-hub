@@ -4,6 +4,7 @@ export interface Status {
   connected: boolean;
   serverUrl: string | null;
   serverName: string | null;
+  libraryRoot: string | null;
   readOnly: boolean;
   movies: number;
   series: number;
@@ -22,6 +23,53 @@ export interface Item {
   hasPoster: boolean;
 }
 
+export interface PlanOp {
+  from: string;
+  to: string;
+  kind: "video" | "sidecar";
+  status: "ok" | "unchanged" | "conflict" | "unparsed";
+  note: string | null;
+  season: number | null;
+  episodes: number[];
+  verified: boolean;
+}
+
+export interface PlanResult {
+  planId: string;
+  ops: PlanOp[];
+  ok: number;
+  unchanged: number;
+  conflict: number;
+  unparsed: number;
+  titlesFound: number;
+  warning: string | null;
+}
+
+export interface FindReplace {
+  find: string;
+  replace: string;
+  regex: boolean;
+}
+
+export interface PlanArgs {
+  mode: "tv" | "movie";
+  folder: string;
+  template: string;
+  show: string | null;
+  year: number | null;
+  findReplace: FindReplace[];
+  seriesId: string | null;
+  recursive: boolean;
+}
+
+export interface Batch {
+  batch: string;
+  at: number;
+  files: number;
+  undone: number;
+  example: string;
+}
+
 export type Sort = "name" | "rating" | "year" | "added";
 export type Kind = "movie" | "series" | null;
 
@@ -34,6 +82,13 @@ export const api = {
   list: (kind: Kind, query: string, sort: Sort, offset: number, limit: number) =>
     invoke<Item[]>("list_items", { kind, query, sort, offset, limit }),
   picks: (date: string) => invoke<Item[]>("todays_picks", { date }),
+  pickRoot: () => invoke<string | null>("pick_library_root"),
+  folders: (folder: string) => invoke<{ name: string }[]>("list_folders", { folder }),
+  plan: (args: PlanArgs) => invoke<PlanResult>("plan_rename", { args }),
+  apply: (planId: string, removeEmpty: boolean) =>
+    invoke<{ batch: string; done: number; failed: string[] }>("apply_plan", { planId, removeEmpty }),
+  history: () => invoke<Batch[]>("rename_history"),
+  undo: (batch: string) => invoke<{ restored: number; skipped: string[] }>("undo_rename", { batch }),
 };
 
 /** Tauri reports errors from Rust as plain strings. */
