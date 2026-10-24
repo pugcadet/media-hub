@@ -50,6 +50,36 @@ pub struct RawItem {
     pub image_tags: Option<HashMap<String, String>>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct RawEpisode {
+    pub name: Option<String>,
+    pub index_number: Option<u32>,
+    pub index_number_end: Option<u32>,
+    pub parent_index_number: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct EpisodePage {
+    items: Vec<RawEpisode>,
+}
+
+/// (season, episode) -> episode title, as Jellyfin knows it.
+pub fn episode_titles(eps: &[RawEpisode]) -> HashMap<(u32, u32), String> {
+    let mut out = HashMap::new();
+    for e in eps {
+        let (Some(season), Some(first), Some(name)) = (e.parent_index_number, e.index_number, e.name.as_ref()) else {
+            continue;
+        };
+        let last = e.index_number_end.unwrap_or(first).clamp(first, first + 20);
+        for n in first..=last {
+            out.insert((season, n), name.clone());
+        }
+    }
+    out
+}
+
 /// What the local database stores for one title.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewItem {
@@ -188,6 +218,20 @@ impl Client {
         self.get_json("/Items", &q).await
     }
 
+    pub async fn episodes(&self, series_id: &str) -> Result<Vec<RawEpisode>> {
+        if !valid_item_id(series_id) {
+            return Err(Error::msg("bad id"));
+        }
+        let q = vec![
+            ("ParentId", series_id.to_string()),
+            ("IncludeItemTypes", "Episode".to_string()),
+            ("Recursive", "true".to_string()),
+            ("Limit", "5000".to_string()),
+        ];
+        let page: EpisodePage = self.get_json("/Items", &q).await?;
+        Ok(page.items)
+    }
+
     /// Returns (bytes, content-type) of one picture. Only allow-listed picture kinds.
     pub async fn image(&self, id: &str, kind: &str, max_width: u32) -> Result<(Vec<u8>, String)> {
         if !valid_item_id(id) {
@@ -249,6 +293,19 @@ mod tests {
         assert!(!items[1].has_poster);
         assert_eq!(items[1].sort_name, "inception");
         assert!(items[1].genres.is_empty());
+    }
+
+    #[test]
+    fn episode_titles_cover_double_episodes() {
+        let page: EpisodePage = serde_json::from_str(r#"{"Items":[
+            {"Name":"Magic Xylophone","IndexNumber":1,"ParentIndexNumber":1},
+            {"Name":"Double","IndexNumber":3,"IndexNumberEnd":4,"ParentIndexNumber":1},
+            {"Name":"No number","ParentIndexNumber":1}
+        ]}"#).unwrap();
+        let t = episode_titles(&page.items);
+        assert_eq!(t.get(&(1, 1)).map(String::as_str), Some("Magic Xylophone"));
+        assert_eq!(t.get(&(1, 4)).map(String::as_str), Some("Double"));
+        assert_eq!(t.len(), 3);
     }
 
     #[test]

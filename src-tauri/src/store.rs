@@ -26,6 +26,25 @@ pub struct ItemRow {
     pub has_poster: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct JournalEntry {
+    pub id: i64,
+    pub root: String,
+    pub from: String,
+    pub to: String,
+    pub undone: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchInfo {
+    pub batch: String,
+    pub at: i64,
+    pub files: i64,
+    pub undone: i64,
+    pub example: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Counts {
@@ -66,6 +85,16 @@ fn migrate(conn: &Connection) -> Result<()> {
              );
              CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              PRAGMA user_version = 1;
+             COMMIT;",
+        )?;
+    }
+    if version < 2 {
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE undo_journal ADD COLUMN batch TEXT NOT NULL DEFAULT '';
+             ALTER TABLE undo_journal ADD COLUMN state TEXT NOT NULL DEFAULT 'done';
+             CREATE INDEX undo_batch ON undo_journal(batch);
+             PRAGMA user_version = 2;
              COMMIT;",
         )?;
     }
@@ -245,9 +274,92 @@ impl Store {
     }
 }
 
+impl Store {
+    // ------------------------------------------------------------ undo journal
+
+    /// Written BEFORE a file is moved. State goes to "done" after the move succeeds.
+    pub fn journal_begin(&self, batch: &str, root: &str, from: &str, to: &str) -> Result<i64> {
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.conn.execute(
+            "INSERT INTO undo_journal(at, action, target, old_value, new_value, batch, state)
+             VALUES (?1, 'rename', ?2, ?3, ?4, ?5, 'pending')",
+            params![at.to_string(), root, from, to, batch],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn journal_set_state(&self, id: i64, state: &str) -> Result<()> {
+        self.conn.execute("UPDATE undo_journal SET state=?1 WHERE id=?2", params![state, id])?;
+        Ok(())
+    }
+
+    pub fn journal_delete(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM undo_journal WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn journal_mark_undone(&self, id: i64) -> Result<()> {
+        self.conn.execute("UPDATE undo_journal SET undone=1 WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    /// Newest first. Pending rows (app closed mid-move) are included: undo checks the disk anyway.
+    pub fn journal_entries(&self, batch: &str) -> Result<Vec<JournalEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, target, old_value, new_value, undone FROM undo_journal
+             WHERE batch=?1 AND action='rename' ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map(params![batch], |r| {
+            Ok(JournalEntry {
+                id: r.get(0)?,
+                root: r.get(1)?,
+                from: r.get(2)?,
+                to: r.get(3)?,
+                undone: r.get::<_, i64>(4)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn journal_batches(&self, limit: i64) -> Result<Vec<BatchInfo>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT batch, MAX(CAST(at AS INTEGER)), COUNT(*), SUM(undone), MIN(new_value)
+             FROM undo_journal WHERE batch <> '' GROUP BY batch ORDER BY MAX(id) DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit.clamp(1, 200)], |r| {
+            Ok(BatchInfo {
+                batch: r.get(0)?,
+                at: r.get(1)?,
+                files: r.get(2)?,
+                undone: r.get(3)?,
+                example: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn journal_records_batches() {
+        let s = Store::in_memory().unwrap();
+        let a = s.journal_begin("b1", "/root", "a.mkv", "A.mkv").unwrap();
+        s.journal_set_state(a, "done").unwrap();
+        let b = s.journal_begin("b1", "/root", "b.mkv", "B.mkv").unwrap();
+        s.journal_delete(b).unwrap();
+        let e = s.journal_entries("b1").unwrap();
+        assert_eq!(e.len(), 1);
+        assert_eq!((e[0].from.as_str(), e[0].to.as_str()), ("a.mkv", "A.mkv"));
+        s.journal_mark_undone(a).unwrap();
+        let batches = s.journal_batches(10).unwrap();
+        assert_eq!((batches[0].files, batches[0].undone), (1, 1));
+    }
 
     fn item(id: &str, kind: &'static str, name: &str, poster: bool) -> NewItem {
         NewItem {

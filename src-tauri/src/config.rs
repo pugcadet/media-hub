@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 pub struct Settings {
     pub server_url: Option<String>,
     pub server_name: Option<String>,
+    /// The folder on this computer where the NAS share is mounted (for renaming).
+    pub library_root: Option<String>,
     /// While true, the app only reads from Jellyfin. Later modules check this
     /// flag before they change anything. It starts on and stays on by default.
     pub read_only: bool,
@@ -20,6 +22,7 @@ impl Default for Settings {
         Settings {
             server_url: None,
             server_name: None,
+            library_root: None,
             read_only: true,
         }
     }
