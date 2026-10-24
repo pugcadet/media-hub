@@ -1,22 +1,22 @@
 
-added 72 packages in 2s
+added 72 packages in 1s
 [1m[92m    Updating[0m crates.io index
 [1m[92m   Compiling[0m media-hub v0.8.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 15.17s
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 9.58s
 [1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-60d02e3dd1f7f069)
 
 running 86 tests
 test config::tests::key_validation ... ok
-test detect::tests::chapters_with_names_are_used ... ok
 test config::tests::rejects_bad_input ... ok
-test config::tests::strips_trailing_slash_query_and_fragment ... ok
 test config::tests::adds_scheme_and_keeps_port ... ok
 test detect::tests::windows_and_snapping ... ok
+test config::tests::strips_trailing_slash_query_and_fragment ... ok
+test detect::tests::chapters_with_names_are_used ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
 test downloads::tests::audio_mode ... ok
 test downloads::tests::builds_safe_arguments ... ok
-test downloads::tests::summarizes_playlists ... ok
 test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
+test downloads::tests::summarizes_playlists ... ok
 test fingerprint::tests::fft_matches_a_plain_dft ... ok
 test downloads::tests::reads_progress_and_checksums ... ok
 test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
@@ -93,7 +93,7 @@ test fingerprint::tests::survives_noise_like_a_different_encode ... ok
 test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.91s
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.58s
 
 [1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-998c40114bdc97d9)
 
@@ -126,14 +126,22 @@ computing gzip size...
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 1.34s[39m
+[32m✓ built in 1.04s[39m
 [1m[92m   Compiling[0m media-hub v0.8.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 2m 00s
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 1m 46s
        Built application at: /Users/runner/work/media-hub/media-hub/src-tauri/target/release/media-hub
     Bundling Media Hub.app (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app)
+     Signing with identity "-"
+Signing with identity "-"
+Signing /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app/Contents/MacOS/media-hub
+/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app/Contents/MacOS/media-hub: replacing existing signature
+Signing with identity "-"
+Signing /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app
+/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app: replacing existing signature
+        Warn skipping app notarization, no APPLE_ID & APPLE_PASSWORD & APPLE_TEAM_ID or APPLE_API_KEY & APPLE_API_ISSUER & APPLE_API_KEY_PATH environment variables found
     Bundling Media Hub_0.8.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.8.0_aarch64.dmg)
      Running bundle_dmg.sh
     Cleaning /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app
     Finished 1 bundle at:
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.8.0_aarch64.dmg (5.14 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.8.0_aarch64.dmg (5.10 MiB)
 
