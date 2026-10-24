@@ -1,10 +1,17 @@
 //! Builds a rename plan from a list of file paths. Pure: no disk, no network.
 //! Every path in and out is relative to the library root and uses `/` between folders.
+//!
+//! Renames happen IN PLACE: files keep their folder, existing season folders and the show
+//! (or movie) folder are renamed rather than recreated. Nothing new is created unless you
+//! ask for it (episodes into season folders, or a loose movie into its own folder).
+//!
+//! Apply order matters and is the order of the returned list: files first (inside their
+//! current folders), then season folders, then the show folder.
 
 use crate::naming::*;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub const TV_TOKENS: &[&str] = &[
     "show", "year", "s", "e", "sxe", "seasondir", "title", "ext", "tmdbtag", "tvdbtag",
@@ -24,12 +31,19 @@ pub struct FindReplace {
 #[serde(rename_all = "camelCase")]
 pub struct PlanRequest {
     pub template: String,
-    /// Show folder (TV) or folder with movie files, relative to the root. May be empty for movies.
+    /// The show folder (TV) or folder with movies, relative to the root ("" = the root itself).
     pub folder: String,
     pub show: Option<String>,
     pub year: Option<i32>,
     #[serde(default)]
     pub find_replace: Vec<FindReplace>,
+    /// Rename the chosen folder itself to the show name. None = decide (yes when it already
+    /// looks like the show's folder).
+    #[serde(default)]
+    pub rename_folder: Option<bool>,
+    /// Move episodes that sit directly in the show folder into season folders.
+    #[serde(default)]
+    pub season_folders: bool,
     /// Ids of the matched show (tmdb/tvdb), used for {tmdbtag}/{tvdbtag}. Filled by the app.
     #[serde(default, skip_deserializing)]
     pub ids: HashMap<String, String>,
@@ -47,8 +61,9 @@ pub struct MovieMatch {
 #[serde(rename_all = "camelCase")]
 pub struct PlanOp {
     pub from: String,
+    /// Where it ends up after everything is applied (shown to you).
     pub to: String,
-    /// "video" | "sidecar"
+    /// "video" | "sidecar" | "folder"
     pub kind: &'static str,
     /// "ok" | "unchanged" | "conflict" | "unparsed"
     pub status: &'static str,
@@ -59,6 +74,11 @@ pub struct PlanOp {
     pub verified: bool,
     /// How sure the online match is (0-100), when one was made.
     pub score: Option<u8>,
+    /// The single rename this step performs (before later folder renames). Internal.
+    #[serde(skip)]
+    pub step_to: String,
+    /// Episode title, for the Infuse preview.
+    pub title: Option<String>,
 }
 
 enum Rule {
@@ -82,7 +102,12 @@ fn compile_rules(rules: &[FindReplace]) -> Result<Vec<Rule>, String> {
     Ok(out)
 }
 
-fn apply_rules(stem: &str, rules: &[Rule]) -> String {
+/// Applies the find/replace rules to a file name (never to folders or the extension).
+fn name_with_rules(name: &str, rules: &[Rule]) -> String {
+    if rules.is_empty() {
+        return name.to_string();
+    }
+    let (stem, ext) = split_ext(name);
     let mut s = stem.to_string();
     for r in rules {
         s = match r {
@@ -90,109 +115,146 @@ fn apply_rules(stem: &str, rules: &[Rule]) -> String {
             Rule::Pattern(re, t) => re.replace_all(&s, t.as_str()).to_string(),
         };
     }
-    s
-}
-
-/// Applies the find/replace rules to the file name part only (never to folders or the extension).
-fn with_rules(path: &str, rules: &[Rule]) -> String {
-    if rules.is_empty() {
-        return path.to_string();
-    }
-    let (dir, name) = split_path(path);
-    let (stem, ext) = split_ext(name);
-    let new_stem = apply_rules(stem, rules);
-    let mut new_name = if ext.is_empty() { new_stem } else { format!("{new_stem}.{ext}") };
-    new_name = sanitize_keep_ext(&new_name);
-    if dir.is_empty() { new_name } else { format!("{dir}/{new_name}") }
-}
-
-fn sanitize_keep_ext(name: &str) -> String {
-    let (stem, ext) = split_ext(name);
-    let s = sanitize(stem);
+    let s = sanitize(&s);
     if ext.is_empty() { s } else { format!("{s}.{ext}") }
 }
 
-struct VideoInfo {
-    from: String,
-    to: String,
+fn join(dir: &str, name: &str) -> String {
+    if dir.is_empty() { name.to_string() } else { format!("{dir}/{name}") }
 }
 
+/// Path of `p` relative to folder `f` ("" when p == f). None when outside.
+fn rel_to<'a>(p: &'a str, f: &str) -> Option<&'a str> {
+    if f.is_empty() {
+        return Some(p);
+    }
+    if p == f {
+        return Some("");
+    }
+    p.strip_prefix(f).and_then(|r| r.strip_prefix('/'))
+}
+
+/// Rendered template split into its folder and file parts.
+struct Parts {
+    /// first folder (show folder for TV, movie folder for movies)
+    top: Option<String>,
+    /// second folder (season folder), TV only
+    season: Option<String>,
+    file: String,
+}
+
+fn parts_of(rendered: &str, tv: bool) -> Parts {
+    let p: Vec<&str> = rendered.split('/').collect();
+    let n = p.len();
+    let file = p[n - 1].to_string();
+    match (tv, n) {
+        (_, 1) => Parts { top: None, season: None, file },
+        (true, 2) => Parts { top: Some(p[0].into()), season: None, file },
+        (true, _) => Parts { top: Some(p[0].into()), season: Some(p[n - 2].into()), file },
+        (false, _) => Parts { top: Some(p[n - 2].into()), season: None, file },
+    }
+}
+
+fn op(from: &str, step_to: &str, to: &str, kind: &'static str) -> PlanOp {
+    PlanOp {
+        from: from.into(),
+        to: to.into(),
+        kind,
+        status: "ok",
+        note: None,
+        season: None,
+        episodes: Vec::new(),
+        verified: true,
+        score: None,
+        step_to: step_to.into(),
+        title: None,
+    }
+}
+
+fn unparsed(f: &str, why: String, season: Option<u32>, eps: Vec<u32>) -> PlanOp {
+    let mut o = op(f, f, f, "video");
+    o.status = "unparsed";
+    o.note = Some(why);
+    o.season = season;
+    o.episodes = eps;
+    o.verified = false;
+    o
+}
+
+/// Sets ok / unchanged / conflict. Files are checked on their own step (inside their
+/// current folder); folders on their new name next to them.
 fn status_pass(ops: &mut [PlanOp], exists: &dyn Fn(&str) -> bool) {
     let lower = |s: &str| s.to_lowercase();
     let mut count: HashMap<String, usize> = HashMap::new();
-    for op in ops.iter() {
-        *count.entry(lower(&op.to)).or_default() += 1;
+    for o in ops.iter().filter(|o| o.status != "unparsed") {
+        *count.entry(lower(&o.step_to)).or_default() += 1;
     }
-    let vacated: HashSet<String> = ops
-        .iter()
-        .filter(|o| o.from != o.to)
-        .map(|o| lower(&o.from))
-        .collect();
-    for op in ops.iter_mut() {
-        if op.status == "unparsed" {
+    let vacated: HashSet<String> = ops.iter().filter(|o| o.from != o.step_to).map(|o| lower(&o.from)).collect();
+    for o in ops.iter_mut() {
+        if o.status == "unparsed" {
             continue;
         }
-        if op.from == op.to {
-            op.status = "unchanged";
+        if o.from == o.step_to {
+            o.status = "unchanged";
             continue;
         }
-        let same_name_ignoring_case = lower(&op.from) == lower(&op.to);
-        if count[&lower(&op.to)] > 1 {
-            op.status = "conflict";
-            op.note = Some("Another file would get exactly this name.".into());
-        } else if !same_name_ignoring_case && vacated.contains(&lower(&op.to)) {
-            op.status = "conflict";
-            op.note = Some("This name belongs to a file that is also being renamed. Rename in two rounds.".into());
-        } else if !same_name_ignoring_case && exists(&op.to) {
-            op.status = "conflict";
-            op.note = Some("A file with this name already exists.".into());
+        let case_only = lower(&o.from) == lower(&o.step_to);
+        let what = if o.kind == "folder" { "folder" } else { "file" };
+        if count[&lower(&o.step_to)] > 1 {
+            o.status = "conflict";
+            o.note = Some(format!("Another {what} would get exactly this name."));
+        } else if !case_only && vacated.contains(&lower(&o.step_to)) {
+            o.status = "conflict";
+            o.note = Some("This name belongs to something that is also being renamed. Run the renamer twice.".into());
+        } else if !case_only && exists(&o.step_to) {
+            o.status = "conflict";
+            o.note = Some(format!("A {what} with this name already exists."));
         } else {
-            op.status = "ok";
+            o.status = "ok";
         }
     }
 }
 
-/// Subtitle files travel with their video: "X.en.srt" follows "X.mkv".
-fn add_sidecars(files: &[String], videos: &[VideoInfo], rules: &[Rule], ops: &mut Vec<PlanOp>) {
+/// Subtitles follow their video: "X.en.srt" becomes "<new X>.en.srt" in the same place.
+fn add_sidecars(files: &[String], videos: &[(String, String, String)], ops: &mut Vec<PlanOp>) {
     for f in files {
         let (dir, name) = split_path(f);
         if !is_sidecar(name) {
             continue;
         }
-        let mut best: Option<(&VideoInfo, usize)> = None;
-        for v in videos {
-            let (vdir, vname) = split_path(&v.from);
-            if vdir != dir {
-                continue;
-            }
-            let vstem = split_ext(vname).0;
-            let prefix = format!("{vstem}.");
-            if name.starts_with(&prefix) && best.map(|b| vstem.len() > b.1).unwrap_or(true) {
-                best = Some((v, vstem.len()));
-            }
-        }
-        let Some((v, old_len)) = best else { continue };
-        let rest = &name[old_len..]; // ".en.srt"
-        let (ndir, nname) = split_path(&v.to);
-        let new_stem = split_ext(nname).0;
-        let mut to = if ndir.is_empty() { format!("{new_stem}{rest}") } else { format!("{ndir}/{new_stem}{rest}") };
-        // Rules were already applied to the video's name; the sidecar follows it exactly.
-        let _ = rules;
-        if to.is_empty() {
-            to = f.clone();
-        }
-        ops.push(PlanOp {
-            from: f.clone(),
-            to,
-            kind: "sidecar",
-            status: "ok",
-            note: None,
-            season: None,
-            episodes: Vec::new(),
-            verified: true,
-            score: None,
-        });
+        // (from, step_to, final)
+        let best = videos
+            .iter()
+            .filter(|(from, _, _)| split_path(from).0 == dir)
+            .filter_map(|v| {
+                let stem = split_ext(split_path(&v.0).1).0;
+                name.starts_with(&format!("{stem}.")).then_some((v, stem.len()))
+            })
+            .max_by_key(|(_, l)| *l);
+        let Some(((_, step, fin), len)) = best else { continue };
+        let rest = &name[len..];
+        let with = |p: &str| {
+            let (d, n) = split_path(p);
+            join(d, &format!("{}{rest}", split_ext(n).0))
+        };
+        ops.push(op(f, &with(step), &with(fin), "sidecar"));
     }
+}
+
+/// "tv" when most videos have a season/episode number, otherwise "movie".
+pub fn detect_kind(files: &[String]) -> &'static str {
+    let videos: Vec<&String> = files.iter().filter(|f| is_video(split_path(f).1)).collect();
+    if videos.is_empty() {
+        return "movie";
+    }
+    let episodes = videos
+        .iter()
+        .filter(|f| {
+            let (dir, name) = split_path(f);
+            parse_episode(split_ext(name).0, dir.rsplit('/').find_map(season_from_dir)).is_some()
+        })
+        .count();
+    if episodes * 2 >= videos.len() { "tv" } else { "movie" }
 }
 
 /// A year written in the file names ("Bluey (2018) - S01E01"), when the folder has none.
@@ -201,7 +263,7 @@ pub fn year_from_files(files: &[String]) -> Option<i32> {
         let stem = split_ext(split_path(f).1).0;
         let before = match parse_episode(stem, None) {
             Some(m) => {
-                let marker = stem[..m.end].rfind(|c: char| c == 's' || c == 'S').unwrap_or(0);
+                let marker = stem[..m.end].rfind(['s', 'S']).unwrap_or(0);
                 &stem[..marker]
             }
             None => stem,
@@ -212,32 +274,46 @@ pub fn year_from_files(files: &[String]) -> Option<i32> {
 
 /// Best guess of the show's name and year, from the folder or else the file names.
 pub fn guess_show(folder: &str, files: &[String]) -> (String, Option<i32>) {
-    let p = parse_name(folder.rsplit('/').next().unwrap_or(""));
+    let name = folder.rsplit('/').next().unwrap_or("");
+    let p = parse_name(name);
     let year = p.year.or_else(|| year_from_files(files));
-    if !p.title.trim().is_empty() {
-        return (p.title, year);
+    let from_file = files
+        .iter()
+        .find(|f| is_video(split_path(f).1))
+        .map(|f| {
+            let stem = split_ext(split_path(f).1).0;
+            let end = parse_episode(stem, None).map(|m| stem[..m.end].rfind(['s', 'S']).unwrap_or(0)).unwrap_or(0);
+            parse_name(&stem[..end]).title
+        })
+        .filter(|t| !t.trim().is_empty());
+    let folder_ok = !p.title.trim().is_empty() && season_from_dir(name).is_none();
+    // The folder name wins, unless the files clearly name a different show
+    // (a folder like "Downloads" or "Season 1" says nothing about the show).
+    match (folder_ok, from_file) {
+        (true, Some(f)) if title_similarity(&p.title, &f) < 0.5 => (f, year),
+        (true, _) => (p.title, year),
+        (false, Some(f)) => (f, year),
+        (false, None) => (p.title, year),
     }
-    let from_file = files.iter().find(|f| is_video(split_path(f).1)).map(|f| {
-        let stem = split_ext(split_path(f).1).0;
-        let end = parse_episode(stem, None).map(|m| stem[..m.end].rfind(['s', 'S']).unwrap_or(0)).unwrap_or(stem.len());
-        parse_name(&stem[..end]).title
-    });
-    (from_file.unwrap_or_default(), year)
 }
 
 /// Title and year read from a movie file name (or its folder).
 pub fn movie_guess(rel: &str, folder: &str) -> (String, Option<i32>) {
     let (dir, name) = split_path(rel);
     let mut p = parse_name(split_ext(name).0);
-    let folder_name = folder.rsplit('/').next().unwrap_or("");
-    if (p.title.is_empty() || p.year.is_none()) && !dir.is_empty() && dir.rsplit('/').next() != Some(folder_name) {
+    if (p.title.is_empty() || p.year.is_none()) && !dir.is_empty() && dir != folder {
         let d = parse_name(dir.rsplit('/').next().unwrap_or(""));
-        p.year = p.year.or(d.year);
-        if p.title.is_empty() {
+        // A folder like "Inception (2010)" says more than a file called "movie.mkv".
+        if p.title.is_empty() || (p.year.is_none() && d.year.is_some()) {
             p.title = d.title;
         }
+        p.year = p.year.or(d.year);
     }
     (p.title, p.year)
+}
+
+fn title_similarity(a: &str, b: &str) -> f64 {
+    crate::sources::similarity(a, b)
 }
 
 pub fn plan_tv(
@@ -248,57 +324,44 @@ pub fn plan_tv(
 ) -> Result<Vec<PlanOp>, String> {
     let tpl = Template::parse(&req.template, TV_TOKENS)?;
     let rules = compile_rules(&req.find_replace)?;
-
-    let folder_name = req.folder.rsplit('/').next().unwrap_or("");
+    let folder = req.folder.trim_end_matches('/');
+    let folder_name = folder.rsplit('/').next().unwrap_or("");
     let parsed = parse_name(folder_name);
-    let show = req
-        .show
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| parsed.title.clone());
-    let year = req.year.or(parsed.year).or_else(|| year_from_files(files));
+    let (guess, guess_year) = guess_show(folder, files);
+    let show = req.show.clone().filter(|s| !s.trim().is_empty()).unwrap_or(guess);
+    let year = req.year.or(guess_year);
     if show.trim().is_empty() {
         return Err("Could not work out the show name. Type it in.".into());
     }
 
-    let mut ops: Vec<PlanOp> = Vec::new();
-    let mut videos: Vec<VideoInfo> = Vec::new();
+    let mut file_ops: Vec<PlanOp> = Vec::new();
+    let mut videos: Vec<(String, String, String)> = Vec::new(); // (from, step, final-without-folder-renames)
+    let mut top_name: Option<String> = None;
+    // season folder (relative to the show folder) -> wanted names
+    let mut season_dirs: BTreeMap<String, HashSet<String>> = BTreeMap::new();
 
     for f in files.iter().filter(|f| is_video(split_path(f).1)) {
+        let Some(inside) = rel_to(f, folder) else { continue };
         let (dir, name) = split_path(f);
         let (stem, ext) = split_ext(name);
         let hint = dir.rsplit('/').find_map(season_from_dir);
-
         let Some(m) = parse_episode(stem, hint) else {
-            ops.push(PlanOp {
-                from: f.clone(),
-                to: f.clone(),
-                kind: "video",
-                status: "unparsed",
-                note: Some("Could not find a season and episode number in this name.".into()),
-                season: None,
-                episodes: Vec::new(),
-                verified: false,
-                score: None,
-            });
+            file_ops.push(unparsed(f, "No season and episode number found in this name, so it is left alone.".into(), None, vec![]));
             continue;
         };
-
         let looked_up: Vec<&String> = m.episodes.iter().filter_map(|e| titles.get(&(m.season, *e))).collect();
-        let title = if looked_up.len() == m.episodes.len() {
+        let title = if !looked_up.is_empty() && looked_up.len() == m.episodes.len() {
             let mut names: Vec<&str> = looked_up.iter().map(|s| s.as_str()).collect();
             names.dedup();
             names.join(" + ")
         } else {
             title_after(stem, &m)
         };
-
         let first = m.episodes[0];
         let mut sxe = format!("S{:02}E{:02}", m.season, first);
         for e in &m.episodes[1..] {
             sxe.push_str(&format!("-E{e:02}"));
         }
-
         let mut vars: HashMap<&str, Var> = HashMap::new();
         vars.insert("show", Var::text(show.as_str()));
         if let Some(y) = year {
@@ -307,12 +370,9 @@ pub fn plan_tv(
         vars.insert("s", Var::num(m.season));
         vars.insert("e", Var::num(first));
         vars.insert("sxe", Var::text(sxe));
-        vars.insert(
-            "seasondir",
-            Var::text(if m.season == 0 { "Specials".to_string() } else { format!("Season {:02}", m.season) }),
-        );
+        vars.insert("seasondir", Var::text(if m.season == 0 { "Specials".to_string() } else { format!("Season {:02}", m.season) }));
         if !title.is_empty() {
-            vars.insert("title", Var::text(title));
+            vars.insert("title", Var::text(title.clone()));
         }
         vars.insert("ext", Var::text(ext.to_lowercase()));
         if let Some(id) = req.ids.get("tmdb").or(parsed.tmdb.as_ref()) {
@@ -321,47 +381,118 @@ pub fn plan_tv(
         if let Some(id) = req.ids.get("tvdb").or(parsed.tvdb.as_ref()) {
             vars.insert("tvdbtag", Var::text(format!("{{tvdb-{id}}}")));
         }
-
-        let to = match tpl.render(&vars) {
-            Ok(p) => with_rules(&p, &rules),
+        let rendered = match tpl.render(&vars) {
+            Ok(r) => r,
             Err(why) => {
-                ops.push(PlanOp {
-                    from: f.clone(),
-                    to: f.clone(),
-                    kind: "video",
-                    status: "unparsed",
-                    note: Some(why),
-                    season: Some(m.season),
-                    episodes: m.episodes.clone(),
-                    verified: false,
-                    score: None,
-                });
+                file_ops.push(unparsed(f, why, Some(m.season), m.episodes.clone()));
                 continue;
             }
         };
-
-        let (nd, nn) = split_path(&to);
-        let verified = parse_episode(split_ext(nn).0, nd.rsplit('/').find_map(season_from_dir))
+        let parts = parts_of(&rendered, true);
+        let new_name = name_with_rules(&parts.file, &rules);
+        if top_name.is_none() {
+            top_name = parts.top.clone();
+        }
+        // Folder handling: rename an existing season folder, or (on request) move episodes
+        // that sit directly in the show folder into one.
+        let inside_dir = split_path(inside).0;
+        let first_dir = inside_dir.split('/').next().unwrap_or("");
+        let step_dir = if inside_dir.is_empty() {
+            match (&parts.season, req.season_folders) {
+                (Some(sd), true) => join(folder, sd),
+                _ => dir.to_string(),
+            }
+        } else {
+            if let Some(sd) = &parts.season {
+                // Only folders that already are season folders (or hold one season) get renamed.
+                season_dirs.entry(first_dir.to_string()).or_default().insert(sd.clone());
+            }
+            dir.to_string()
+        };
+        let step = join(&step_dir, &new_name);
+        let (nd, nn) = split_path(&step);
+        let verified = parse_episode(split_ext(nn).0, nd.rsplit('/').find_map(season_from_dir).or(parts.season.as_deref().and_then(season_from_dir)))
             .map(|r| r.season == m.season && r.episodes == m.episodes)
             .unwrap_or(false);
-
-        videos.push(VideoInfo { from: f.clone(), to: to.clone() });
-        ops.push(PlanOp {
-            from: f.clone(),
-            to,
-            kind: "video",
-            status: "ok",
-            note: if verified { None } else { Some("The new name does not read back as the same episode. Check the pattern.".into()) },
-            season: Some(m.season),
-            episodes: m.episodes,
-            verified,
-            score: None,
-        });
+        let mut o = op(f, &step, &step, "video");
+        o.season = Some(m.season);
+        o.episodes = m.episodes.clone();
+        o.verified = verified;
+        o.title = (!title.is_empty()).then_some(title);
+        if !verified {
+            o.note = Some("The new name does not read back as the same episode. Check the pattern.".into());
+        }
+        videos.push((f.clone(), step.clone(), step));
+        file_ops.push(o);
     }
 
-    add_sidecars(files, &videos, &rules, &mut ops);
+    // Season folders: rename "Season 1" -> "Season 01" etc. A folder that mixes seasons,
+    // or is not a season folder at all ("Extras"), is left alone.
+    let mut dir_map: Vec<(String, String)> = Vec::new(); // old full path -> new full path
+    let mut folder_ops: Vec<PlanOp> = Vec::new();
+    for (d, wanted) in &season_dirs {
+        if d.is_empty() || wanted.len() != 1 {
+            continue;
+        }
+        let new = wanted.iter().next().cloned().unwrap_or_default();
+        if season_from_dir(d).is_none() && season_from_dir(&new).is_none() {
+            continue;
+        }
+        if season_from_dir(d).is_none() {
+            continue;
+        }
+        if *d != new {
+            let (old_full, new_full) = (join(folder, d), join(folder, &new));
+            dir_map.push((old_full.clone(), new_full.clone()));
+            folder_ops.push(op(&old_full, &new_full, &new_full, "folder"));
+        }
+    }
+
+    // The show folder itself.
+    let rename_top = match req.rename_folder {
+        Some(v) => v,
+        None => {
+            !folder.is_empty()
+                && season_from_dir(folder_name).is_none()
+                && (title_similarity(&parsed.title, &show) >= 0.5 || title_similarity(folder_name, &show) >= 0.5)
+        }
+    };
+    let mut top_map: Option<(String, String)> = None;
+    if let (true, Some(top)) = (rename_top && !folder.is_empty(), &top_name) {
+        if folder_name != top {
+            let parent = split_path(folder).0;
+            let new_full = join(parent, top);
+            top_map = Some((folder.to_string(), new_full.clone()));
+            folder_ops.push(op(folder, &new_full, &new_full, "folder"));
+        }
+    }
+
+    // Final places (after the folder renames), for display.
+    let finalize = |p: &str| -> String {
+        let mut out = p.to_string();
+        for (old, new) in &dir_map {
+            if let Some(r) = rel_to(&out, old) {
+                out = join(new, r);
+                break;
+            }
+        }
+        if let Some((old, new)) = &top_map {
+            if let Some(r) = rel_to(&out, old) {
+                out = join(new, r);
+            }
+        }
+        out
+    };
+    let mut ops = file_ops;
+    add_sidecars(files, &videos, &mut ops);
     status_pass(&mut ops, exists);
-    ops.sort_by(|a, b| a.to.to_lowercase().cmp(&b.to.to_lowercase()).then(a.kind.cmp(b.kind)));
+    status_pass(&mut folder_ops, exists);
+    for o in ops.iter_mut().chain(folder_ops.iter_mut()) {
+        o.to = finalize(&o.step_to);
+    }
+    // Season folders deeper first, show folder last.
+    folder_ops.sort_by_key(|o| std::cmp::Reverse(o.from.matches('/').count()));
+    ops.extend(folder_ops);
     Ok(ops)
 }
 
@@ -373,31 +504,27 @@ pub fn plan_movies(
 ) -> Result<Vec<PlanOp>, String> {
     let tpl = Template::parse(&req.template, MOVIE_TOKENS)?;
     let rules = compile_rules(&req.find_replace)?;
-    let folder_name = req.folder.rsplit('/').next().unwrap_or("");
+    let folder = req.folder.trim_end_matches('/');
+    let videos_in: Vec<&String> = files.iter().filter(|f| is_video(split_path(f).1)).collect();
+    let per_dir = |d: &str| videos_in.iter().filter(|f| split_path(f).0 == d).count();
 
     let mut ops: Vec<PlanOp> = Vec::new();
-    let mut videos: Vec<VideoInfo> = Vec::new();
+    let mut folder_ops: Vec<PlanOp> = Vec::new();
+    let mut videos: Vec<(String, String, String)> = Vec::new();
+    let mut renamed_dirs: HashMap<String, String> = HashMap::new();
 
-    for f in files.iter().filter(|f| is_video(split_path(f).1)) {
+    for f in &videos_in {
         let (dir, name) = split_path(f);
-        let (stem, ext) = split_ext(name);
-        let mut p = parse_name(stem);
-        // A file named "movie.mkv" inside a folder "Inception (2010)" takes its name from the folder.
-        if (p.title.is_empty() || p.year.is_none()) && !dir.is_empty() && dir.rsplit('/').next() != Some(folder_name) {
-            let from_dir = parse_name(dir.rsplit('/').next().unwrap_or(""));
-            if p.year.is_none() {
-                p.year = from_dir.year;
-            }
-            if p.title.is_empty() {
-                p.title = from_dir.title;
-            }
-        }
+        let ext = split_ext(name).1;
+        let (title0, year0) = movie_guess(f, folder);
+        let mut tmdb = parse_name(split_ext(name).0).tmdb;
+        let imdb = parse_name(split_ext(name).0).imdb;
         let found = matches.get(f.as_str());
         if let Some(m) = found {
-            p.tmdb = m.tmdb.clone().or(p.tmdb);
+            tmdb = m.tmdb.clone().or(tmdb);
         }
-        let title = found.map(|m| m.title.clone()).unwrap_or(p.title.clone());
-        let year = found.and_then(|m| m.year).or(p.year);
+        let title = found.map(|m| m.title.clone()).unwrap_or(title0);
+        let year = found.and_then(|m| m.year).or(year0);
 
         let mut vars: HashMap<&str, Var> = HashMap::new();
         vars.insert("title", Var::text(title.as_str()));
@@ -405,49 +532,61 @@ pub fn plan_movies(
             vars.insert("year", Var { text: y.to_string(), num: Some(y.max(0) as u32) });
         }
         vars.insert("ext", Var::text(ext.to_lowercase()));
-        if let Some(id) = &p.tmdb {
+        if let Some(id) = &tmdb {
             vars.insert("tmdbtag", Var::text(format!("{{tmdb-{id}}}")));
         }
-        if let Some(id) = &p.imdb {
+        if let Some(id) = &imdb {
             vars.insert("imdbtag", Var::text(format!("{{imdb-{id}}}")));
         }
-
-        let to = match tpl.render(&vars) {
-            Ok(path) => with_rules(&path, &rules),
+        let rendered = match tpl.render(&vars) {
+            Ok(p) => p,
             Err(why) => {
-                ops.push(PlanOp {
-                    from: f.clone(),
-                    to: f.clone(),
-                    kind: "video",
-                    status: "unparsed",
-                    note: Some(why),
-                    season: None,
-                    episodes: Vec::new(),
-                    verified: false,
-                    score: None,
-                });
+                ops.push(unparsed(f, why, None, vec![]));
                 continue;
             }
         };
-        let back = parse_name(split_ext(split_path(&to).1).0);
-        let verified = back.title.eq_ignore_ascii_case(&title) && back.year == year;
-        videos.push(VideoInfo { from: f.clone(), to: to.clone() });
-        ops.push(PlanOp {
-            from: f.clone(),
-            to,
-            kind: "video",
-            status: "ok",
-            note: if verified { None } else { Some("The new name does not read back as the same title and year.".into()) },
-            season: None,
-            episodes: Vec::new(),
-            verified,
-            score: None,
-        });
+        let parts = parts_of(&rendered, false);
+        let new_name = name_with_rules(&parts.file, &rules);
+        let own_folder = dir != folder && !dir.is_empty() && per_dir(dir) == 1;
+        let (step, note) = match (&parts.top, own_folder, dir == folder) {
+            // In its own folder: rename the file there; the folder is renamed after.
+            (Some(top), true, _) => {
+                let parent = split_path(dir).0;
+                let new_dir = join(parent, top);
+                if new_dir != dir && !renamed_dirs.contains_key(dir) {
+                    renamed_dirs.insert(dir.to_string(), new_dir.clone());
+                    folder_ops.push(op(dir, &new_dir, &new_dir, "folder"));
+                }
+                (join(dir, &new_name), None)
+            }
+            // Loose in the chosen folder and the style wants a folder per movie.
+            (Some(top), false, true) => (join(&join(folder, top), &new_name), Some("Gets its own folder".to_string())),
+            _ => (join(dir, &new_name), None),
+        };
+        let back = parse_name(split_ext(split_path(&step).1).0);
+        let verified = back.title.eq_ignore_ascii_case(&sanitize(&title)) && back.year == year;
+        let mut o = op(f, &step, &step, "video");
+        o.verified = verified;
+        o.note = if verified { note } else { Some("The new name does not read back as the same title and year.".into()) };
+        o.title = Some(title);
+        videos.push((f.to_string(), step.clone(), step));
+        ops.push(o);
     }
 
-    add_sidecars(files, &videos, &rules, &mut ops);
+    add_sidecars(files, &videos, &mut ops);
     status_pass(&mut ops, exists);
-    ops.sort_by(|a, b| a.to.to_lowercase().cmp(&b.to.to_lowercase()).then(a.kind.cmp(b.kind)));
+    status_pass(&mut folder_ops, exists);
+    for o in ops.iter_mut().chain(folder_ops.iter_mut()) {
+        let mut out = o.step_to.clone();
+        for (old, new) in &renamed_dirs {
+            if let Some(r) = rel_to(&out, old) {
+                out = join(new, r);
+                break;
+            }
+        }
+        o.to = out;
+    }
+    ops.extend(folder_ops);
     Ok(ops)
 }
 
@@ -456,10 +595,20 @@ mod tests {
     use super::*;
 
     const TV: &str = "{show}< ({year})>/{seasondir}/{show}< ({year})> - {sxe}< - {title}>.{ext}";
+    const CLEAN: &str = "{show}< ({year})>/{seasondir}/{e:00}< {title}>.{ext}";
     const MOVIE: &str = "{title}< ({year})>/{title}< ({year})>.{ext}";
 
     fn req(folder: &str, template: &str) -> PlanRequest {
-        PlanRequest { template: template.into(), folder: folder.into(), show: None, year: None, find_replace: vec![], ids: HashMap::new() }
+        PlanRequest {
+            template: template.into(),
+            folder: folder.into(),
+            show: None,
+            year: None,
+            find_replace: vec![],
+            rename_folder: None,
+            season_folders: false,
+            ids: HashMap::new(),
+        }
     }
 
     fn files(list: &[&str]) -> Vec<String> {
@@ -471,125 +620,143 @@ mod tests {
     }
 
     fn by_from<'a>(ops: &'a [PlanOp], from: &str) -> &'a PlanOp {
-        ops.iter().find(|o| o.from == from).expect("op for file")
+        ops.iter().find(|o| o.from == from).unwrap_or_else(|| panic!("no op for {from}"))
+    }
+
+    /// Applies a plan to a list of paths the way the disk would end up.
+    fn simulate(files: &[String], ops: &[PlanOp]) -> Vec<String> {
+        let mut paths: Vec<String> = files.to_vec();
+        for o in ops.iter().filter(|o| o.status == "ok") {
+            for p in paths.iter_mut() {
+                if o.kind == "folder" {
+                    if let Some(r) = rel_to(p, &o.from) {
+                        *p = join(&o.step_to, r);
+                    }
+                } else if *p == o.from {
+                    *p = o.step_to.clone();
+                }
+            }
+        }
+        paths.sort();
+        paths
     }
 
     #[test]
-    fn renames_tv_files_into_standard_layout() {
+    fn renames_in_place_including_folders() {
         let f = files(&[
-            "Bluey (2018)/Season 1/Bluey.S01E01.Magic.Xylophone.1080p.mkv",
-            "Bluey (2018)/Season 1/Bluey - 1x02.mp4",
-            "Bluey (2018)/Season 1/Bluey.S01E03-E04.mkv",
-            "Bluey (2018)/Specials/Bluey S00E01 Minisode.mkv",
-            "Bluey (2018)/Season 1/Bluey.S01E01.Magic.Xylophone.1080p.en.srt",
+            "TV/Bluey/Season 1/Bluey.S01E01.Magic.Xylophone.1080p.mkv",
+            "TV/Bluey/Season 1/Bluey.S01E01.Magic.Xylophone.1080p.en.srt",
+            "TV/Bluey/Season 1/Bluey - 1x02.mp4",
+            "TV/Bluey/Specials/Bluey S00E01 Minisode.mkv",
+            "TV/Bluey/poster.jpg",
         ]);
-        let ops = plan_tv(&f, &req("Bluey (2018)", TV), &HashMap::new(), &nothing_exists).unwrap();
-        assert_eq!(
-            by_from(&ops, &f[0]).to,
-            "Bluey (2018)/Season 01/Bluey (2018) - S01E01 - Magic Xylophone.mkv"
-        );
-        assert_eq!(by_from(&ops, &f[1]).to, "Bluey (2018)/Season 01/Bluey (2018) - S01E02.mp4");
-        assert_eq!(by_from(&ops, &f[2]).to, "Bluey (2018)/Season 01/Bluey (2018) - S01E03-E04.mkv");
-        assert_eq!(by_from(&ops, &f[3]).to, "Bluey (2018)/Specials/Bluey (2018) - S00E01 - Minisode.mkv");
-        assert_eq!(
-            by_from(&ops, &f[4]).to,
-            "Bluey (2018)/Season 01/Bluey (2018) - S01E01 - Magic Xylophone.en.srt"
-        );
-        assert!(ops.iter().all(|o| o.status == "ok" && o.verified), "{ops:#?}");
+        let mut r = req("TV/Bluey", TV);
+        r.year = Some(2018);
+        let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
+        // Files are renamed where they are (inside "Season 1")...
+        assert_eq!(by_from(&ops, &f[0]).step_to, "TV/Bluey/Season 1/Bluey (2018) - S01E01 - Magic Xylophone.mkv");
+        // ...and end up in the renamed folders.
+        assert_eq!(by_from(&ops, &f[0]).to, "TV/Bluey (2018)/Season 01/Bluey (2018) - S01E01 - Magic Xylophone.mkv");
+        assert_eq!(by_from(&ops, &f[1]).to, "TV/Bluey (2018)/Season 01/Bluey (2018) - S01E01 - Magic Xylophone.en.srt");
+        assert_eq!(by_from(&ops, "TV/Bluey/Season 1").to, "TV/Bluey (2018)/Season 01");
+        assert_eq!(by_from(&ops, "TV/Bluey").to, "TV/Bluey (2018)");
+        // Specials folder keeps its name.
+        assert!(!ops.iter().any(|o| o.from == "TV/Bluey/Specials"));
+        // Show folder is renamed last.
+        assert_eq!(ops.last().unwrap().from, "TV/Bluey");
+        assert!(ops.iter().all(|o| o.status == "ok"), "{ops:#?}");
+        // Other files (artwork) simply move along with the folder.
+        let after = simulate(&f, &ops);
+        assert!(after.contains(&"TV/Bluey (2018)/poster.jpg".to_string()));
     }
 
     #[test]
-    fn titles_from_the_server_win_over_file_names() {
-        let f = files(&["Peppa Pig (2004)/Season 1/01 muddy puddles.mp4"]);
+    fn running_twice_finds_nothing_to_do() {
+        for template in [TV, CLEAN] {
+            let f = files(&[
+                "TV/Bluey/Season 1/Bluey.S01E01.Magic.Xylophone.mkv",
+                "TV/Bluey/Season 1/bluey 1x02 the weekend.mp4",
+                "TV/Bluey/Season 2/Bluey.S02E03-E04.mkv",
+            ]);
+            let mut r = req("TV/Bluey", template);
+            r.year = Some(2018);
+            let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
+            let after = simulate(&f, &ops);
+            let r2 = PlanRequest { folder: "TV/Bluey (2018)".into(), ..r.clone() };
+            let again = plan_tv(&after, &r2, &HashMap::new(), &nothing_exists).unwrap();
+            assert!(again.iter().all(|o| o.status == "unchanged"), "{template}: {again:#?}");
+            assert!(again.iter().all(|o| o.kind != "folder"), "{template}: {again:#?}");
+        }
+    }
+
+    #[test]
+    fn year_and_name_come_from_files_and_folder_is_kept_when_unrelated() {
+        let f = files(&["Downloads/Bluey (2018) - S01E01 - Magic Xylophone.mkv"]);
+        let ops = plan_tv(&f, &req("Downloads", TV), &HashMap::new(), &nothing_exists).unwrap();
+        assert_eq!(ops.len(), 1, "the Downloads folder is not renamed: {ops:#?}");
+        assert_eq!(ops[0].status, "unchanged");
+        assert_eq!(guess_show("Downloads", &f), ("Bluey".to_string(), Some(2018)));
+        assert_eq!(guess_show("TV/Season 1", &f).0, "Bluey");
+    }
+
+    #[test]
+    fn episodes_can_be_moved_into_season_folders_on_request() {
+        let f = files(&["Kids/Little Wonders Club/Little Wonders Club - S01E01 - Pancake Day.mp4"]);
+        let mut r = req("Kids/Little Wonders Club", TV);
+        assert_eq!(plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap()[0].status, "unchanged");
+        r.season_folders = true;
+        let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
+        assert_eq!(ops[0].to, "Kids/Little Wonders Club/Season 01/Little Wonders Club - S01E01 - Pancake Day.mp4");
+    }
+
+    #[test]
+    fn titles_from_the_internet_win() {
+        let f = files(&["Peppa Pig (2004)/Season 01/01 muddy puddles.mp4"]);
         let mut titles = HashMap::new();
         titles.insert((1, 1), "Muddy Puddles".to_string());
         let ops = plan_tv(&f, &req("Peppa Pig (2004)", TV), &titles, &nothing_exists).unwrap();
         assert_eq!(ops[0].to, "Peppa Pig (2004)/Season 01/Peppa Pig (2004) - S01E01 - Muddy Puddles.mp4");
+        assert_eq!(ops[0].title.as_deref(), Some("Muddy Puddles"));
     }
 
     #[test]
-    fn unreadable_names_are_left_alone() {
-        let f = files(&["Show/Season 1/behind the scenes.mkv"]);
+    fn conflicts_and_unreadable_names() {
+        let f = files(&["Show/Season 1/Show.S01E01.mkv", "Show/Season 1/Show 1x01.mkv", "Show/Season 1/behind the scenes.mkv"]);
         let ops = plan_tv(&f, &req("Show", TV), &HashMap::new(), &nothing_exists).unwrap();
-        assert_eq!(ops[0].status, "unparsed");
-        assert_eq!(ops[0].to, ops[0].from);
+        assert_eq!(by_from(&ops, &f[0]).status, "conflict");
+        assert_eq!(by_from(&ops, &f[1]).status, "conflict");
+        assert_eq!(by_from(&ops, &f[2]).status, "unparsed");
     }
 
     #[test]
-    fn already_correct_files_are_unchanged() {
-        let f = files(&["Bluey (2018)/Season 01/Bluey (2018) - S01E01 - Magic Xylophone.mkv"]);
-        let ops = plan_tv(&f, &req("Bluey (2018)", TV), &HashMap::new(), &nothing_exists).unwrap();
-        assert_eq!(ops[0].status, "unchanged");
-    }
-
-    #[test]
-    fn two_files_for_one_name_conflict() {
-        let f = files(&["Show/Season 1/Show.S01E01.mkv", "Show/Season 1/Show 1x01.mkv"]);
-        let ops = plan_tv(&f, &req("Show", TV), &HashMap::new(), &nothing_exists).unwrap();
-        assert!(ops.iter().all(|o| o.status == "conflict"));
-    }
-
-    #[test]
-    fn existing_target_conflicts_but_case_only_change_does_not() {
-        let f = files(&["Show/Season 1/Show.S01E01.mkv"]);
-        let ops = plan_tv(&f, &req("Show", TV), &HashMap::new(), &|p| p == "Show/Season 01/Other.mkv").unwrap();
-        assert_eq!(ops[0].status, "ok");
-        assert_eq!(ops[0].to, "Show/Season 01/Show - S01E01.mkv");
-        let ops2 = plan_tv(&f, &req("Show", TV), &HashMap::new(), &|_| true).unwrap();
-        assert_eq!(ops2[0].status, "conflict");
-        let f3 = files(&["show/season 01/show - S01E01.mkv"]);
-        let mut r = req("show", TV);
-        r.show = Some("show".into());
-        let ops3 = plan_tv(&f3, &r, &HashMap::new(), &|_| true).unwrap();
-        assert_ne!(ops3[0].status, "conflict");
-    }
-
-    #[test]
-    fn find_replace_changes_only_the_file_name() {
-        let f = files(&["Show/Season 1/Show.S01E01.Title.mkv"]);
+    fn find_replace_only_touches_file_names() {
+        let f = files(&["Show/Season 01/Show.S01E01.Title.mkv"]);
         let mut r = req("Show", TV);
-        r.find_replace = vec![
-            FindReplace { find: "Title".into(), replace: "Name".into(), regex: false },
-            FindReplace { find: r"S(\d+)E(\d+)".into(), replace: "S${1}E${2}".into(), regex: true },
-            FindReplace { find: "Show".into(), replace: "Series".into(), regex: false },
-        ];
+        r.find_replace = vec![FindReplace { find: "Title".into(), replace: "Name".into(), regex: false }];
         let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
-        // Folder "Show" stays; only the file name is rewritten.
-        assert_eq!(ops[0].to, "Show/Season 01/Series - S01E01 - Name.mkv");
-    }
-
-    #[test]
-    fn bad_patterns_report_an_error() {
-        let mut r = req("Show", TV);
+        assert_eq!(ops[0].to, "Show/Season 01/Show - S01E01 - Name.mkv");
         r.find_replace = vec![FindReplace { find: "(".into(), replace: "".into(), regex: true }];
-        assert!(plan_tv(&[], &r, &HashMap::new(), &nothing_exists).is_err());
-        assert!(plan_tv(&[], &req("Show", "{bogus}"), &HashMap::new(), &nothing_exists).is_err());
+        assert!(plan_tv(&f, &r, &HashMap::new(), &nothing_exists).is_err());
     }
 
     #[test]
-    fn movies_get_their_own_folder() {
+    fn movies_rename_their_own_folder() {
         let f = files(&[
-            "The.Matrix.1999.1080p.BluRay.x264.mkv",
-            "The.Matrix.1999.1080p.BluRay.x264.en.srt",
-            "Mission Impossible - Fallout (2018).mp4",
+            "Movies/The.Matrix.1999.1080p.BluRay/The.Matrix.1999.1080p.BluRay.x264.mkv",
+            "Movies/The.Matrix.1999.1080p.BluRay/The.Matrix.1999.1080p.BluRay.x264.en.srt",
+            "Movies/Mission Impossible - Fallout (2018).mp4",
         ]);
-        let ops = plan_movies(&f, &req("", MOVIE), &HashMap::new(), &nothing_exists).unwrap();
-        assert_eq!(by_from(&ops, &f[0]).to, "The Matrix (1999)/The Matrix (1999).mkv");
-        assert_eq!(by_from(&ops, &f[1]).to, "The Matrix (1999)/The Matrix (1999).en.srt");
-        assert_eq!(
-            by_from(&ops, &f[2]).to,
-            "Mission Impossible - Fallout (2018)/Mission Impossible - Fallout (2018).mp4"
-        );
-        assert!(ops.iter().all(|o| o.status == "ok"));
-    }
-
-    #[test]
-    fn year_comes_from_file_names_when_folder_has_none() {
-        let f = files(&["Bluey/Season 1/Bluey (2018) - S01E01 - Magic Xylophone.mkv"]);
-        let ops = plan_tv(&f, &req("Bluey", TV), &HashMap::new(), &nothing_exists).unwrap();
-        assert_eq!(ops[0].to, "Bluey (2018)/Season 01/Bluey (2018) - S01E01 - Magic Xylophone.mkv");
-        assert_eq!(guess_show("Bluey", &f), ("Bluey".to_string(), Some(2018)));
-        assert_eq!(guess_show("", &files(&["Bluey.2018.S01E02.mkv"])), ("Bluey".to_string(), Some(2018)));
+        let ops = plan_movies(&f, &req("Movies", MOVIE), &HashMap::new(), &nothing_exists).unwrap();
+        assert_eq!(by_from(&ops, &f[0]).to, "Movies/The Matrix (1999)/The Matrix (1999).mkv");
+        assert_eq!(by_from(&ops, &f[1]).to, "Movies/The Matrix (1999)/The Matrix (1999).en.srt");
+        assert_eq!(by_from(&ops, "Movies/The.Matrix.1999.1080p.BluRay").to, "Movies/The Matrix (1999)");
+        let loose = by_from(&ops, &f[2]);
+        assert_eq!(loose.to, "Movies/Mission Impossible - Fallout (2018)/Mission Impossible - Fallout (2018).mp4");
+        assert_eq!(loose.note.as_deref(), Some("Gets its own folder"));
+        // Second run: nothing left to do.
+        let after = simulate(&f, &ops);
+        let again = plan_movies(&after, &req("Movies", MOVIE), &HashMap::new(), &nothing_exists).unwrap();
+        assert!(again.iter().all(|o| o.status == "unchanged"), "{again:#?}");
     }
 
     #[test]
@@ -599,19 +766,13 @@ mod tests {
         m.insert("matrix.mkv".to_string(), MovieMatch { title: "The Matrix".into(), year: Some(1999), tmdb: Some("603".into()) });
         let ops = plan_movies(&f, &req("", "{title}< ({year})>< {tmdbtag}>/{title}< ({year})>.{ext}"), &m, &nothing_exists).unwrap();
         assert_eq!(ops[0].to, "The Matrix (1999) {tmdb-603}/The Matrix (1999).mkv");
-        assert_eq!(movie_guess("Inception (2010)/movie.mkv", ""), ("movie".to_string(), Some(2010)));
+        assert_eq!(movie_guess("Inception (2010)/movie.mkv", ""), ("Inception".to_string(), Some(2010)));
     }
 
     #[test]
-    fn movie_id_tags_can_be_kept() {
-        let f = files(&["Inception (2010) {tmdb-27205}.mp4"]);
-        let ops = plan_movies(
-            &f,
-            &req("", "{title}< ({year})>< {tmdbtag}>/{title}< ({year})>< {tmdbtag}>.{ext}"),
-            &HashMap::new(),
-            &nothing_exists,
-        )
-        .unwrap();
-        assert_eq!(ops[0].to, "Inception (2010) {tmdb-27205}/Inception (2010) {tmdb-27205}.mp4");
+    fn detects_shows_and_movies() {
+        assert_eq!(detect_kind(&files(&["a/S01E01.mkv", "a/S01E02.mkv"])), "tv");
+        assert_eq!(detect_kind(&files(&["Season 1/01 Pilot.mkv"])), "tv");
+        assert_eq!(detect_kind(&files(&["The Matrix (1999).mkv", "Heat (1995).mkv"])), "movie");
     }
 }

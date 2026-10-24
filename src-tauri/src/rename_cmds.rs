@@ -85,6 +85,8 @@ pub struct PlanResult {
     candidates: Vec<Candidate>,
     chosen: Option<Candidate>,
     matched_movies: usize,
+    /// "tv" | "movie" (what the folder was treated as)
+    mode: String,
 }
 
 fn tmdb_client(state: &AppState) -> Option<Tmdb> {
@@ -183,8 +185,10 @@ pub async fn plan_rename(state: State<'_, AppState>, args: PlanArgs) -> Result<P
     let source = source.unwrap_or_else(|| "auto".into());
 
     let (root2, folder) = (root.clone(), req.folder.clone());
-    let recurse = mode == "tv" || recursive;
+    let recurse = mode != "movie" || recursive;
     let files = blocking(move || fsops::scan_files(&root2, &folder, recurse)).await?;
+    // "auto": shows when most videos carry a season/episode number, otherwise movies.
+    let mode = if mode == "auto" { planner::detect_kind(&files).to_string() } else { mode };
 
     let mut warn: Vec<String> = Vec::new();
     let mut candidates = Vec::new();
@@ -293,6 +297,7 @@ pub async fn plan_rename(state: State<'_, AppState>, args: PlanArgs) -> Result<P
         candidates: candidates.into_iter().take(8).collect(),
         chosen,
         matched_movies,
+        mode: mode.clone(),
     };
     state.set_plan(StoredPlan { id: result.plan_id.clone(), root, ops })?;
     Ok(result)

@@ -116,9 +116,10 @@ pub fn exists(root: &Path, rel: &str) -> bool {
 fn move_one(root: &Path, root_canon: &Path, from_rel: &str, to_rel: &str) -> Result<()> {
     let from = root.join(safe_rel(from_rel)?);
     let to = root.join(safe_rel(to_rel)?);
-    let md = fs::symlink_metadata(&from).map_err(|_| Error::msg("The file is no longer there."))?;
-    if !md.is_file() {
-        return Err(Error::msg("Not a regular file."));
+    let md = fs::symlink_metadata(&from).map_err(|_| Error::msg("It is no longer there."))?;
+    // Regular files and folders only; links are never followed or moved.
+    if !(md.is_file() || md.is_dir()) || md.file_type().is_symlink() {
+        return Err(Error::msg("Not a regular file or folder."));
     }
     if let Some(parent) = from.parent() {
         inside(root_canon, parent)?;
@@ -142,7 +143,7 @@ fn move_one(root: &Path, root_canon: &Path, from_rel: &str, to_rel: &str) -> Res
         return Ok(());
     }
     if fs::symlink_metadata(&to).is_ok() {
-        return Err(Error::msg("A file with the new name already exists; skipped."));
+        return Err(Error::msg("Something with the new name already exists; skipped."));
     }
     fs::rename(&from, &to)?;
     Ok(())
@@ -177,13 +178,15 @@ pub fn apply(root: &Path, ops: &[PlanOp], store: &Store, batch: &str, remove_emp
     let root_str = root.to_string_lossy().into_owned();
     let mut done = 0;
     let mut failed = Vec::new();
+    // In the given order: files first, then season folders, then the show folder.
     for op in ops.iter().filter(|o| o.status == "ok") {
-        let id = store.journal_begin(batch, &root_str, &op.from, &op.to)?;
-        match move_one(root, &root_canon, &op.from, &op.to) {
+        let target = if op.step_to.is_empty() { &op.to } else { &op.step_to };
+        let id = store.journal_begin(batch, &root_str, &op.from, target)?;
+        match move_one(root, &root_canon, &op.from, target) {
             Ok(()) => {
                 store.journal_set_state(id, "done")?;
                 done += 1;
-                if remove_empty {
+                if remove_empty && op.kind != "folder" {
                     remove_empty_parents(root, &op.from);
                 }
             }
@@ -253,6 +256,8 @@ mod tests {
             episodes: vec![],
             verified: true,
             score: None,
+            step_to: to.into(),
+            title: None,
         }
     }
 
@@ -308,6 +313,27 @@ mod tests {
         assert_eq!(fs::read(r.join("Show/Season 1/a.en.srt")).unwrap(), b"subs");
         // Undoing twice does nothing.
         assert_eq!(undo(&store, "b1").unwrap().restored, 0);
+        fs::remove_dir_all(&r).unwrap();
+    }
+
+    #[test]
+    fn folders_are_renamed_after_their_files_and_undo_reverses_it() {
+        let r = temp_root("dirs");
+        fs::create_dir_all(r.join("Bluey/Season 1")).unwrap();
+        fs::write(r.join("Bluey/Season 1/a.mkv"), b"v").unwrap();
+        fs::write(r.join("Bluey/poster.jpg"), b"p").unwrap();
+        let store = Store::in_memory().unwrap();
+        let mut folder = op("Bluey/Season 1", "Bluey/Season 01");
+        folder.kind = "folder";
+        let mut show = op("Bluey", "Bluey (2018)");
+        show.kind = "folder";
+        let file = PlanOp { step_to: "Bluey/Season 1/Bluey - S01E01.mkv".into(), ..op("Bluey/Season 1/a.mkv", "Bluey (2018)/Season 01/Bluey - S01E01.mkv") };
+        let rep = apply(&r, &[file, folder, show], &store, "b", true).unwrap();
+        assert_eq!(rep.done, 3, "{:?}", rep.failed);
+        assert_eq!(fs::read(r.join("Bluey (2018)/Season 01/Bluey - S01E01.mkv")).unwrap(), b"v");
+        assert_eq!(fs::read(r.join("Bluey (2018)/poster.jpg")).unwrap(), b"p", "other files move with the folder");
+        assert_eq!(undo(&store, "b").unwrap().restored, 3);
+        assert_eq!(fs::read(r.join("Bluey/Season 1/a.mkv")).unwrap(), b"v");
         fs::remove_dir_all(&r).unwrap();
     }
 
