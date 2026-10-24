@@ -1,26 +1,14 @@
 
-added 72 packages in 8s
+added 72 packages in 7s
 [1m[92m    Updating[0m crates.io index
-[1m[92m   Compiling[0m generic-array v0.14.7
-[1m[92m   Compiling[0m typenum v1.20.1
-[1m[92m   Compiling[0m cpufeatures v0.2.17
 [1m[92m   Compiling[0m media-hub v0.8.0 (D:\a\media-hub\media-hub\src-tauri)
-[1m[92m   Compiling[0m block-buffer v0.10.4
-[1m[92m   Compiling[0m crypto-common v0.1.7
-[1m[92m   Compiling[0m digest v0.10.7
-[1m[92m   Compiling[0m sha2 v0.10.9
-[1m[92m   Compiling[0m tauri-codegen v2.7.4
-[1m[92m   Compiling[0m tauri-macros v2.7.4
-[1m[92m   Compiling[0m tauri v2.12.5
-[1m[92m   Compiling[0m tauri-plugin-fs v2.7.1
-[1m[92m   Compiling[0m tauri-plugin-dialog v2.8.3
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 46s
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 36s
 [1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-a886905d2d89dc6e.exe)
 
 running 86 tests
 test config::tests::key_validation ... ok
-test config::tests::adds_scheme_and_keeps_port ... ok
 test config::tests::rejects_bad_input ... ok
+test config::tests::adds_scheme_and_keeps_port ... ok
 test config::tests::strips_trailing_slash_query_and_fragment ... ok
 test detect::tests::chapters_with_names_are_used ... ok
 test detect::tests::windows_and_snapping ... ok
@@ -105,7 +93,7 @@ test subs::tests::same_release_beats_other_release ... ok
 test subs::tests::wrong_episode_is_zero ... ok
 test fingerprint::tests::unrelated_audio_has_no_match ... ok
 
-test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.03s
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.34s
 
 [1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-b2e8d1c48261690e.exe)
 
@@ -117,7 +105,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 running 0 tests
 
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
         Info Looking up installed tauri packages to check mismatched versions...
      Running beforeBuildCommand `npm run build`
@@ -138,16 +126,9 @@ computing gzip size...
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 4.10s[39m
-[1m[92m   Compiling[0m generic-array v0.14.7
-[1m[92m   Compiling[0m typenum v1.20.1
+[32m✓ built in 4.39s[39m
 [1m[92m   Compiling[0m media-hub v0.8.0 (D:\a\media-hub\media-hub\src-tauri)
-[1m[92m   Compiling[0m cpufeatures v0.2.17
-[1m[92m   Compiling[0m crypto-common v0.1.7
-[1m[92m   Compiling[0m block-buffer v0.10.4
-[1m[92m   Compiling[0m digest v0.10.7
-[1m[92m   Compiling[0m sha2 v0.10.9
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 4m 41s
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 4m 37s
        Built application at: D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe
         Info Patching D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe with bundle type information: nsis
         Info Verifying NSIS package
