@@ -1,6 +1,6 @@
 use crate::config::{self, Settings};
 use crate::error::{Error, Result};
-use crate::jellyfin::Client;
+use crate::jellyfin::{Client, Writer};
 use crate::planner::PlanOp;
 use crate::secrets;
 use crate::store::Store;
@@ -88,6 +88,15 @@ impl AppState {
             *k = secrets::load()?;
         }
         Ok(k.clone())
+    }
+
+    /// The only way to get something that can change Jellyfin. Refuses while changes are switched off.
+    pub fn writer(&self) -> Result<Writer> {
+        if self.settings()?.read_only {
+            return Err(Error::msg("Changes to Jellyfin are switched off. Turn them on in Settings first."));
+        }
+        let client = self.client()?.ok_or_else(|| Error::msg("Connect to your server first."))?;
+        Ok(client.into_writer())
     }
 
     /// A client for the saved server, or None when the app is not connected yet.

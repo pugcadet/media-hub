@@ -4,6 +4,7 @@ mod error;
 mod fsops;
 mod images;
 mod jellyfin;
+mod meta_cmds;
 mod naming;
 mod picks;
 mod planner;
@@ -39,6 +40,15 @@ pub fn run() {
             rename_cmds::apply_plan,
             rename_cmds::rename_history,
             rename_cmds::undo_rename,
+            meta_cmds::item_details,
+            meta_cmds::save_metadata,
+            meta_cmds::identify_search,
+            meta_cmds::identify_apply,
+            meta_cmds::remote_images,
+            meta_cmds::set_image,
+            meta_cmds::undo_change,
+            meta_cmds::refresh_item,
+            meta_cmds::set_read_only,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Media Hub");

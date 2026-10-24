@@ -37,6 +37,24 @@ pub struct JournalEntry {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct Change {
+    pub id: i64,
+    pub at: i64,
+    pub action: String,
+    pub target: String,
+    pub undone: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChangeFull {
+    pub action: String,
+    pub target: String,
+    pub old_value: String,
+    pub undone: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BatchInfo {
     pub batch: String,
     pub at: i64,
@@ -324,6 +342,63 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Records a change made in Jellyfin (metadata or picture). `old_value` is what undo restores.
+    pub fn journal_add(&self, action: &str, target: &str, old_value: &str, new_value: &str) -> Result<i64> {
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.conn.execute(
+            "INSERT INTO undo_journal(at, action, target, old_value, new_value, batch, state)
+             VALUES (?1, ?2, ?3, ?4, ?5, '', 'done')",
+            params![at.to_string(), action, target, old_value, new_value],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Jellyfin changes for one item (pictures use "itemid|Kind|index" as target).
+    pub fn changes_for(&self, item_id: &str, limit: i64) -> Result<Vec<Change>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, CAST(at AS INTEGER), action, target, undone FROM undo_journal
+             WHERE action IN ('item_update','identify','image') AND (target = ?1 OR target LIKE ?1 || '|%')
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![item_id, limit.clamp(1, 100)], |r| {
+            Ok(Change {
+                id: r.get(0)?,
+                at: r.get(1)?,
+                action: r.get(2)?,
+                target: r.get(3)?,
+                undone: r.get::<_, i64>(4)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn change(&self, id: i64) -> Result<ChangeFull> {
+        Ok(self.conn.query_row(
+            "SELECT action, target, old_value, undone FROM undo_journal WHERE id=?1",
+            params![id],
+            |r| {
+                Ok(ChangeFull {
+                    action: r.get(0)?,
+                    target: r.get(1)?,
+                    old_value: r.get(2)?,
+                    undone: r.get::<_, i64>(3)? != 0,
+                })
+            },
+        )?)
+    }
+
+    /// Keeps the library list in step after an edit, without a full sync.
+    pub fn patch_item(&self, id: &str, name: &str, year: Option<i32>, rating: Option<f64>, genres: &[String], overview: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE items SET name=?2, year=?3, rating=?4, genres=?5, overview=?6 WHERE id=?1",
+            params![id, name, year, rating, genres.join(GENRE_SEP), overview],
+        )?;
+        Ok(())
+    }
+
     pub fn journal_batches(&self, limit: i64) -> Result<Vec<BatchInfo>> {
         let mut stmt = self.conn.prepare(
             "SELECT batch, MAX(CAST(at AS INTEGER)), COUNT(*), SUM(undone), MIN(new_value)
@@ -345,6 +420,22 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changes_are_listed_per_item() {
+        let s = Store::in_memory().unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        s.journal_add("item_update", id, "{}", "{}").unwrap();
+        s.journal_add("image", &format!("{id}|Primary|0"), "", "url").unwrap();
+        s.journal_add("item_update", "ffffffffffffffffffffffffffffffff", "{}", "{}").unwrap();
+        let c = s.changes_for(id, 10).unwrap();
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].action, "image");
+        s.journal_mark_undone(c[0].id).unwrap();
+        assert!(s.change(c[0].id).unwrap().undone);
+        // Jellyfin changes never show up in the rename history.
+        assert!(s.journal_batches(10).unwrap().is_empty());
+    }
 
     #[test]
     fn journal_records_batches() {

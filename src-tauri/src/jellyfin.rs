@@ -1,8 +1,8 @@
-//! Read-only Jellyfin client.
+//! Jellyfin client.
 //!
-//! This type only knows how to send GET requests. There is no function here that can
-//! change anything on the server, which is how "read-only" is guaranteed in module 1.
-//! Later modules that write get their own, separate, clearly named client.
+//! `Client` only reads (GET, plus the remote search POST, which changes nothing).
+//! `Writer` is the only type that can change anything, and the app only creates one when
+//! the user has switched changes on in Settings (see `AppState::writer`).
 
 use crate::error::{Error, Result};
 use serde::{de::DeserializeOwned, Deserialize};
@@ -167,11 +167,8 @@ impl Client {
         })
     }
 
-    async fn get(&self, path: &str, query: &[(&str, String)]) -> Result<reqwest::Response> {
-        let resp = self
-            .http
-            .get(format!("{}{}", self.base, path))
-            .query(query)
+    async fn send(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let resp = req
             .header("Authorization", &self.auth)
             .send()
             .await
@@ -179,12 +176,20 @@ impl Client {
         match resp.status().as_u16() {
             200..=299 => Ok(resp),
             401 | 403 => Err(Error::Unauthorized),
+            404 => Err(Error::msg("Jellyfin does not know this item (it may have been removed).")),
             s => Err(Error::msg(format!("The server answered with status {s}."))),
         }
     }
 
-    async fn get_json<T: DeserializeOwned>(&self, path: &str, query: &[(&str, String)]) -> Result<T> {
-        let resp = self.get(path, query).await?;
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base, path)
+    }
+
+    async fn get(&self, path: &str, query: &[(&str, String)]) -> Result<reqwest::Response> {
+        self.send(self.http.get(self.url(path)).query(query)).await
+    }
+
+    async fn read_json<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
         let bytes = resp
             .bytes()
             .await
@@ -194,6 +199,10 @@ impl Client {
         }
         serde_json::from_slice(&bytes)
             .map_err(|_| Error::msg("The server answered, but not like a Jellyfin server."))
+    }
+
+    async fn get_json<T: DeserializeOwned>(&self, path: &str, query: &[(&str, String)]) -> Result<T> {
+        Self::read_json(self.get(path, query).await?).await
     }
 
     /// Does not need the key; proves that something answers at this address.
@@ -232,17 +241,7 @@ impl Client {
         Ok(page.items)
     }
 
-    /// Returns (bytes, content-type) of one picture. Only allow-listed picture kinds.
-    pub async fn image(&self, id: &str, kind: &str, max_width: u32) -> Result<(Vec<u8>, String)> {
-        if !valid_item_id(id) {
-            return Err(Error::msg("bad id"));
-        }
-        let kind = image_kind(kind).ok_or_else(|| Error::msg("bad image kind"))?;
-        let q = vec![
-            ("maxWidth", max_width.clamp(64, 1920).to_string()),
-            ("quality", "85".to_string()),
-        ];
-        let resp = self.get(&format!("/Items/{id}/Images/{kind}"), &q).await?;
+    async fn image_bytes(resp: reqwest::Response) -> Result<(Vec<u8>, String)> {
         let ct = resp
             .headers()
             .get("content-type")
@@ -261,6 +260,292 @@ impl Client {
         }
         Ok((bytes.to_vec(), ct))
     }
+
+    fn image_path(id: &str, kind: &str, index: u32) -> Result<String> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let kind = image_kind(kind).ok_or_else(|| Error::msg("bad image kind"))?;
+        Ok(if index == 0 {
+            format!("/Items/{id}/Images/{kind}")
+        } else {
+            format!("/Items/{id}/Images/{kind}/{index}")
+        })
+    }
+
+    /// Returns (bytes, content-type) of one picture, scaled down. Only allow-listed picture kinds.
+    pub async fn image(&self, id: &str, kind: &str, index: u32, max_width: u32) -> Result<(Vec<u8>, String)> {
+        let q = vec![
+            ("maxWidth", max_width.clamp(64, 1920).to_string()),
+            ("quality", "85".to_string()),
+        ];
+        let resp = self.get(&Self::image_path(id, kind, index)?, &q).await?;
+        Self::image_bytes(resp).await
+    }
+
+    /// The full original picture, for a backup before it is replaced. None if there is none.
+    pub async fn image_original(&self, id: &str, kind: &str, index: u32) -> Result<Option<(Vec<u8>, String)>> {
+        let req = self.http.get(self.url(&Self::image_path(id, kind, index)?));
+        match self.send(req).await {
+            Ok(resp) => Ok(Some(Self::image_bytes(resp).await?)),
+            Err(Error::Msg(m)) if m.starts_with("Jellyfin does not know") => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The complete item as Jellyfin stores it. Kept as raw JSON so that saving it back
+    /// never drops fields this app does not know about.
+    pub async fn item_json(&self, id: &str) -> Result<serde_json::Value> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        self.get_json(&format!("/Items/{id}"), &[]).await
+    }
+
+    pub async fn seasons(&self, series_id: &str) -> Result<Vec<serde_json::Value>> {
+        if !valid_item_id(series_id) {
+            return Err(Error::msg("bad id"));
+        }
+        let v: serde_json::Value = self.get_json(&format!("/Shows/{series_id}/Seasons"), &[]).await?;
+        Ok(v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default())
+    }
+
+    pub async fn image_list(&self, id: &str) -> Result<Vec<serde_json::Value>> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        self.get_json(&format!("/Items/{id}/Images"), &[]).await
+    }
+
+    pub async fn remote_images(&self, id: &str, kind: &str) -> Result<Vec<serde_json::Value>> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let kind = image_kind(kind).ok_or_else(|| Error::msg("bad image kind"))?;
+        let q = vec![
+            ("type", kind.to_string()),
+            ("includeAllLanguages", "true".to_string()),
+            ("limit", "60".to_string()),
+        ];
+        let v: serde_json::Value = self.get_json(&format!("/Items/{id}/RemoteImages"), &q).await?;
+        Ok(v.get("Images").and_then(|i| i.as_array()).cloned().unwrap_or_default())
+    }
+
+    /// Asks Jellyfin's metadata providers (TMDB, TVDB, ...) for matches. Uses POST,
+    /// but only searches: nothing on the server changes.
+    pub async fn remote_search(&self, kind: &str, name: &str, year: Option<i32>, ids: &HashMap<String, String>) -> Result<Vec<serde_json::Value>> {
+        let kind = match kind {
+            "series" => "Series",
+            "movie" => "Movie",
+            _ => return Err(Error::msg("bad kind")),
+        };
+        let body = serde_json::json!({
+            "SearchInfo": { "Name": name, "Year": year, "ProviderIds": ids },
+            "IncludeDisabledProviders": false
+        });
+        let req = self.http.post(self.url(&format!("/Items/RemoteSearch/{kind}"))).json(&body);
+        Self::read_json(self.send(req).await?).await
+    }
+
+    /// Turns this read-only client into one that may change things. Only `AppState::writer`
+    /// calls this, and only when the user has switched changes on.
+    pub fn into_writer(self) -> Writer {
+        Writer { c: self }
+    }
+}
+
+/// The only type that can change anything in Jellyfin.
+pub struct Writer {
+    c: Client,
+}
+
+impl Writer {
+    async fn post(&self, path: &str, query: &[(&str, String)], body: Option<&serde_json::Value>) -> Result<()> {
+        let mut req = self.c.http.post(self.c.url(path)).query(query);
+        req = match body {
+            Some(b) => req.json(b),
+            None => req.header("Content-Length", "0"),
+        };
+        self.c.send(req).await.map(|_| ())
+    }
+
+    pub fn reader(&self) -> &Client {
+        &self.c
+    }
+
+    /// Saves the complete item. `item` must be the full JSON from `item_json` with edits applied.
+    pub async fn update_item(&self, id: &str, item: &serde_json::Value) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        self.post(&format!("/Items/{id}"), &[], Some(item)).await
+    }
+
+    pub async fn apply_remote(&self, id: &str, result: &serde_json::Value, replace_images: bool) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let q = vec![("replaceAllImages", replace_images.to_string())];
+        self.post(&format!("/Items/RemoteSearch/Apply/{id}"), &q, Some(result)).await
+    }
+
+    pub async fn download_remote_image(&self, id: &str, kind: &str, url: &str) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let kind = image_kind(kind).ok_or_else(|| Error::msg("bad image kind"))?;
+        let q = vec![("type", kind.to_string()), ("imageUrl", url.to_string())];
+        self.post(&format!("/Items/{id}/RemoteImages/Download"), &q, None).await
+    }
+
+    /// Uploads a picture (used to put a backup back). Jellyfin expects the bytes base64-encoded.
+    pub async fn upload_image(&self, id: &str, kind: &str, index: u32, bytes: &[u8], content_type: &str) -> Result<()> {
+        use base64::Engine;
+        let path = Client::image_path(id, kind, index)?;
+        let body = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let req = self
+            .c
+            .http
+            .post(self.c.url(&path))
+            .header("Content-Type", content_type)
+            .body(body);
+        self.c.send(req).await.map(|_| ())
+    }
+
+    pub async fn delete_image(&self, id: &str, kind: &str, index: u32) -> Result<()> {
+        let path = Client::image_path(id, kind, index)?;
+        let req = self.c.http.delete(self.c.url(&path));
+        self.c.send(req).await.map(|_| ())
+    }
+
+    pub async fn refresh(&self, id: &str, replace_all: bool) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let q = vec![
+            ("metadataRefreshMode", "FullRefresh".to_string()),
+            ("imageRefreshMode", "FullRefresh".to_string()),
+            ("replaceAllMetadata", replace_all.to_string()),
+            ("replaceAllImages", "false".to_string()),
+        ];
+        self.post(&format!("/Items/{id}/Refresh"), &q, None).await
+    }
+}
+
+/// For fields that can be "leave as is" (missing), "clear" (null) or "set" (value).
+fn double<'de, D, T>(d: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    use serde::Deserialize as _;
+    Option::<T>::deserialize(d).map(Some)
+}
+
+/// Edits the user can make on the metadata screen. `None` means "leave as is".
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemEdits {
+    pub name: Option<String>,
+    pub original_title: Option<String>,
+    pub sort_name: Option<String>,
+    #[serde(default, deserialize_with = "double")]
+    pub production_year: Option<Option<i32>>,
+    pub overview: Option<String>,
+    pub genres: Option<Vec<String>>,
+    pub tags: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "double")]
+    pub community_rating: Option<Option<f64>>,
+    pub official_rating: Option<String>,
+    pub provider_ids: Option<HashMap<String, String>>,
+    pub lock_data: Option<bool>,
+}
+
+/// Applies edits to the full item JSON, touching only the edited keys.
+pub fn apply_edits(item: &mut serde_json::Value, e: &ItemEdits) -> Result<()> {
+    use serde_json::{json, Value};
+    let obj = item
+        .as_object_mut()
+        .ok_or_else(|| Error::msg("Unexpected item format from Jellyfin."))?;
+    let clean = |s: &str| s.trim().to_string();
+    if let Some(v) = &e.name {
+        if v.trim().is_empty() {
+            return Err(Error::msg("The name cannot be empty."));
+        }
+        obj.insert("Name".into(), json!(clean(v)));
+    }
+    if let Some(v) = &e.original_title {
+        obj.insert("OriginalTitle".into(), json!(clean(v)));
+    }
+    if let Some(v) = &e.sort_name {
+        // Jellyfin keeps the user's sort title in ForcedSortName.
+        obj.insert("ForcedSortName".into(), json!(clean(v)));
+    }
+    if let Some(v) = &e.production_year {
+        if let Some(y) = v {
+            if !(1870..=2100).contains(y) {
+                return Err(Error::msg("That year looks wrong."));
+            }
+        }
+        obj.insert("ProductionYear".into(), json!(v));
+    }
+    if let Some(v) = &e.overview {
+        obj.insert("Overview".into(), json!(v.trim()));
+    }
+    let list = |v: &Vec<String>| -> Value {
+        let mut out: Vec<String> = Vec::new();
+        for s in v.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if !out.iter().any(|o| o.eq_ignore_ascii_case(s)) {
+                out.push(s.to_string());
+            }
+        }
+        json!(out)
+    };
+    if let Some(v) = &e.genres {
+        obj.insert("Genres".into(), list(v));
+    }
+    if let Some(v) = &e.tags {
+        obj.insert("Tags".into(), list(v));
+    }
+    if let Some(v) = &e.community_rating {
+        if let Some(r) = v {
+            if !(0.0..=10.0).contains(r) {
+                return Err(Error::msg("Ratings go from 0 to 10."));
+            }
+        }
+        obj.insert("CommunityRating".into(), json!(v));
+    }
+    if let Some(v) = &e.official_rating {
+        obj.insert("OfficialRating".into(), json!(clean(v)));
+    }
+    if let Some(ids) = &e.provider_ids {
+        let mut map = obj
+            .get("ProviderIds")
+            .and_then(|p| p.as_object())
+            .cloned()
+            .unwrap_or_default();
+        for (k, v) in ids {
+            let key = match k.to_lowercase().as_str() {
+                "tmdb" => "Tmdb",
+                "tvdb" => "Tvdb",
+                "imdb" => "Imdb",
+                _ => return Err(Error::msg(format!("Unknown id type {k}."))),
+            };
+            let val = v.trim();
+            if val.is_empty() {
+                map.remove(key);
+            } else if val.chars().all(|c| c.is_ascii_alphanumeric()) {
+                map.insert(key.into(), json!(val));
+            } else {
+                return Err(Error::msg(format!("The {key} id may only contain letters and digits.")));
+            }
+        }
+        obj.insert("ProviderIds".into(), Value::Object(map));
+    }
+    if let Some(v) = e.lock_data {
+        obj.insert("LockData".into(), json!(v));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -293,6 +578,55 @@ mod tests {
         assert!(!items[1].has_poster);
         assert_eq!(items[1].sort_name, "inception");
         assert!(items[1].genres.is_empty());
+    }
+
+    #[test]
+    fn edits_touch_only_what_changed() {
+        let mut item = serde_json::json!({
+            "Name": "Old", "Overview": "x", "Genres": ["Kids"], "People": [{"Name": "Someone"}],
+            "ProviderIds": {"Tmdb": "1", "Tvdb": "2"}, "Unknown": {"keep": true}
+        });
+        let mut ids = HashMap::new();
+        ids.insert("tvdb".to_string(), "".to_string());
+        ids.insert("imdb".to_string(), "tt0133093".to_string());
+        let e = ItemEdits {
+            name: Some(" New ".into()),
+            genres: Some(vec!["Kids".into(), " kids ".into(), "Animation".into(), "".into()]),
+            production_year: Some(Some(2018)),
+            provider_ids: Some(ids),
+            ..Default::default()
+        };
+        apply_edits(&mut item, &e).unwrap();
+        assert_eq!(item["Name"], "New");
+        assert_eq!(item["Genres"], serde_json::json!(["Kids", "Animation"]));
+        assert_eq!(item["ProductionYear"], 2018);
+        assert_eq!(item["ProviderIds"], serde_json::json!({"Tmdb": "1", "Imdb": "tt0133093"}));
+        assert_eq!(item["People"][0]["Name"], "Someone");
+        assert_eq!(item["Unknown"]["keep"], true);
+        assert_eq!(item["Overview"], "x");
+    }
+
+    #[test]
+    fn missing_null_and_value_are_different() {
+        let e: ItemEdits = serde_json::from_str(r#"{"productionYear": null}"#).unwrap();
+        assert_eq!(e.production_year, Some(None));
+        let e: ItemEdits = serde_json::from_str(r#"{"productionYear": 2001}"#).unwrap();
+        assert_eq!(e.production_year, Some(Some(2001)));
+        let e: ItemEdits = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(e.production_year, None);
+    }
+
+    #[test]
+    fn bad_edits_are_refused() {
+        let mut item = serde_json::json!({"Name": "A"});
+        assert!(apply_edits(&mut item, &ItemEdits { name: Some("  ".into()), ..Default::default() }).is_err());
+        assert!(apply_edits(&mut item, &ItemEdits { community_rating: Some(Some(11.0)), ..Default::default() }).is_err());
+        let mut ids = HashMap::new();
+        ids.insert("tmdb".to_string(), "1/../2".to_string());
+        assert!(apply_edits(&mut item, &ItemEdits { provider_ids: Some(ids), ..Default::default() }).is_err());
+        let mut bad = HashMap::new();
+        bad.insert("other".to_string(), "1".to_string());
+        assert!(apply_edits(&mut item, &ItemEdits { provider_ids: Some(bad), ..Default::default() }).is_err());
     }
 
     #[test]
