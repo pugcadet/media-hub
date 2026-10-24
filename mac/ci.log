@@ -7,7 +7,7 @@ added 71 packages in 1s
 [1m[92m      Adding[0m tauri-plugin-dialog v2.8.3
 [1m[92m      Adding[0m tauri-plugin-fs v2.7.1
 [1m[92m   Compiling[0m media-hub v0.1.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 12.36s
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 9.02s
 [1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-1007d4f17cdb77b5)
 
 running 56 tests
@@ -20,12 +20,12 @@ test images::tests::reads_width ... ok
 test images::tests::remote_hosts_are_allow_listed ... ok
 test jellyfin::tests::bad_edits_are_refused ... ok
 test jellyfin::tests::edits_touch_only_what_changed ... ok
-test jellyfin::tests::episode_titles_cover_double_episodes ... ok
 test fsops::tests::scan_skips_hidden_and_nas_folders ... ok
 test jellyfin::tests::id_and_image_kind_checks ... ok
+test jellyfin::tests::episode_titles_cover_double_episodes ... ok
 test jellyfin::tests::missing_null_and_value_are_different ... ok
-test naming::tests::bad_templates_are_rejected ... ok
 test jellyfin::tests::parses_a_jellyfin_page ... ok
+test naming::tests::bad_templates_are_rejected ... ok
 test jellyfin::tests::client_rejects_odd_keys ... ok
 test fsops::tests::case_only_rename_works ... ok
 test naming::tests::sanitizing ... ok
@@ -38,30 +38,30 @@ test picks::tests::handles_small_and_empty_lists ... ok
 test picks::tests::no_duplicates ... ok
 test picks::tests::same_day_same_picks_even_if_input_order_changes ... ok
 test naming::tests::titles_after_marker ... ok
-test planner::tests::bad_patterns_report_an_error ... ok
 test naming::tests::names_with_years_and_ids ... ok
+test planner::tests::bad_patterns_report_an_error ... ok
 test planner::tests::already_correct_files_are_unchanged ... ok
 test naming::tests::resolution_is_not_an_episode ... ok
-test naming::tests::episode_formats ... ok
 test planner::tests::movie_id_tags_can_be_kept ... ok
 test planner::tests::existing_target_conflicts_but_case_only_change_does_not ... ok
-test planner::tests::movies_get_their_own_folder ... ok
+test naming::tests::episode_formats ... ok
 test planner::tests::titles_from_the_server_win_over_file_names ... ok
+test planner::tests::movies_get_their_own_folder ... ok
 test planner::tests::find_replace_changes_only_the_file_name ... ok
-test planner::tests::two_files_for_one_name_conflict ... ok
 test planner::tests::unreadable_names_are_left_alone ... ok
+test planner::tests::two_files_for_one_name_conflict ... ok
 test planner::tests::renames_tv_files_into_standard_layout ... ok
 test store::tests::changes_are_listed_per_item ... ok
-test store::tests::journal_records_batches ... ok
+test store::tests::empty_answer_keeps_old_list ... ok
 test sub_cmds::tests::forced_subtitles_do_not_count_as_having_the_language ... ok
+test store::tests::journal_records_batches ... ok
+test store::tests::search_is_literal_and_filters_kind ... ok
 test sub_cmds::tests::language_lists_are_checked ... ok
 test sub_cmds::tests::reads_streams_and_file_name ... ok
-test store::tests::empty_answer_keeps_old_list ... ok
 test subs::tests::hash_match_wins ... ok
 test subs::tests::language_codes ... ok
-test subs::tests::parses_jellyfin_json ... ok
-test store::tests::search_is_literal_and_filters_kind ... ok
 test store::tests::sync_replaces_and_removes_old_items ... ok
+test subs::tests::parses_jellyfin_json ... ok
 test store::tests::unknown_sort_falls_back_and_candidates_need_poster ... ok
 test subs::tests::wrong_episode_is_zero ... ok
 test subs::tests::machine_translation_is_penalised ... ok
@@ -90,15 +90,15 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 [36mvite v5.4.21 [32mbuilding for production...[36m[39m
 transforming...
-[32m✓[39m 41 modules transformed.
+[32m✓[39m 42 modules transformed.
 rendering chunks...
 computing gzip size...
 [2mdist/[22m[32mindex.html                 [39m[1m[2m  0.39 kB[22m[1m[22m[2m │ gzip:  0.27 kB[22m
-[2mdist/[22m[2massets/[22m[35mindex-DRzdz_oB.css  [39m[1m[2m  8.79 kB[22m[1m[22m[2m │ gzip:  2.51 kB[22m
-[2mdist/[22m[2massets/[22m[36mindex-gieO5p9h.js   [39m[1m[2m179.46 kB[22m[1m[22m[2m │ gzip: 56.41 kB[22m
-[32m✓ built in 434ms[39m
+[2mdist/[22m[2massets/[22m[35mindex-B3vvGiUk.css  [39m[1m[2m  9.22 kB[22m[1m[22m[2m │ gzip:  2.63 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-hIZ-GRUp.js   [39m[1m[2m186.63 kB[22m[1m[22m[2m │ gzip: 58.34 kB[22m
+[32m✓ built in 385ms[39m
 [1m[92m   Compiling[0m media-hub v0.1.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 1m 46s
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 1m 37s
        Built application at: /Users/runner/work/media-hub/media-hub/src-tauri/target/release/media-hub
     Bundling Media Hub.app (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app)
     Bundling Media Hub_0.1.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.1.0_aarch64.dmg)
