@@ -246,6 +246,16 @@ export interface Suggestion {
   problem: string | null;
 }
 
+export interface PlayInfo {
+  token: string;
+  url: string;
+  title: string;
+  duration: number;
+  start: number;
+  subtitles: { index: number; language: string; title: string; url: string; default: boolean }[];
+  segments: { Type: string; StartTicks: number; EndTicks: number }[];
+}
+
 export type Sort = "name" | "rating" | "year" | "added";
 export type Kind = "movie" | "series" | null;
 
@@ -290,6 +300,8 @@ export const api = {
     invoke<void>("save_segments", { itemId, intro, credits, clear }),
   ffmpegInfo: () => invoke<{ path: string | null; version: string | null }>("ffmpeg_info"),
   pickFfmpeg: () => invoke<string | null>("pick_ffmpeg"),
+  playStart: (id: string, start: number) => invoke<PlayInfo>("play_start", { id, start }),
+  playStop: (token: string) => invoke<void>("play_stop", { token }),
   undo: (batch: string) => invoke<{ restored: number; skipped: string[] }>("undo_rename", { batch }),
 };
 

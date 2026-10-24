@@ -11,6 +11,7 @@ mod meta_cmds;
 mod naming;
 mod picks;
 mod planner;
+mod player;
 mod rename_cmds;
 mod secrets;
 mod seg_cmds;
@@ -26,6 +27,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .register_asynchronous_uri_scheme_protocol("hubimg", |ctx, request, responder| {
             images::handle(ctx.app_handle().clone(), request, responder);
+        })
+        .register_asynchronous_uri_scheme_protocol("hubmedia", |ctx, request, responder| {
+            player::handle(ctx.app_handle().clone(), request, responder);
         })
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
@@ -66,6 +70,8 @@ pub fn run() {
             seg_cmds::save_segments,
             seg_cmds::ffmpeg_info,
             seg_cmds::pick_ffmpeg,
+            player::play_start,
+            player::play_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Media Hub");

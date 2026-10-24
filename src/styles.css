@@ -178,3 +178,24 @@ button.link.x { margin-left: 6px; color: var(--muted); }
 .seg-times { display: flex; gap: 6px; align-items: center; }
 input.time { width: 64px; height: 30px; padding: 0 6px; text-align: center; }
 @media (max-width: 1100px) { .seg-row { grid-template-columns: 1fr; } }
+
+/* ---- player */
+.player { position: fixed; inset: 0; background: #000; z-index: 50; display: flex; align-items: center; justify-content: center; }
+.player video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.player video::cue { background: rgba(0,0,0,.6); font-size: 1.4em; }
+.player .p-top, .player .p-bottom { position: absolute; left: 0; right: 0; padding: 14px 20px; transition: opacity .25s; }
+.player .p-top { top: 0; display: flex; gap: 14px; align-items: center; background: linear-gradient(rgba(0,0,0,.7), transparent); }
+.player .p-bottom { bottom: 0; background: linear-gradient(transparent, rgba(0,0,0,.8)); display: flex; flex-direction: column; gap: 8px; }
+.player.hide { cursor: none; } .player.hide .p-top, .player.hide .p-bottom { opacity: 0; pointer-events: none; }
+.player button { background: rgba(20,22,26,.6); border-color: rgba(255,255,255,.2); }
+.player button.primary { background: var(--accent); }
+.p-title { font-weight: 600; }
+.p-row { display: flex; gap: 10px; align-items: center; }
+.p-row select { height: 32px; background: rgba(20,22,26,.8); }
+.p-bar { position: relative; height: 18px; display: flex; align-items: center; }
+.p-bar input[type=range] { width: 100%; height: 18px; padding: 0; border: 0; background: transparent; accent-color: var(--accent); position: relative; }
+.p-mark { position: absolute; top: 6px; height: 6px; border-radius: 3px; opacity: .7; }
+.p-mark.intro { background: var(--accent); } .p-mark.outro { background: #e8b04a; } .p-mark.recap { background: #8aa4ff; }
+.p-vol { width: 90px; padding: 0; border: 0; background: transparent; accent-color: var(--accent); }
+.p-skip { position: absolute; right: 28px; bottom: 110px; height: 42px; padding: 0 20px; font-size: 15px; }
+.p-error { position: absolute; top: 40%; left: 50%; transform: translateX(-50%); background: rgba(20,22,26,.9); padding: 16px 20px; border-radius: 12px; color: var(--danger); max-width: 80%; }

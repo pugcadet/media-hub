@@ -77,6 +77,16 @@ impl AppState {
             .ok_or_else(|| Error::msg("Choose your library folder first."))
     }
 
+    pub fn device_id(&self) -> Result<String> {
+        if let Some(id) = self.settings()?.device_id {
+            return Ok(id);
+        }
+        let id = crate::player::token()?;
+        let saved = id.clone();
+        self.update_settings(move |s| s.device_id = Some(saved))?;
+        Ok(id)
+    }
+
     pub fn set_key(&self, key: Option<String>) -> Result<()> {
         *lock(&self.key)? = key;
         Ok(())

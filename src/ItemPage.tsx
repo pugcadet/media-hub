@@ -3,6 +3,7 @@ import { api, Details, errorText, imageUrl, ImageKind, ItemEdits, JfItem, remote
 import Nav from "./Nav";
 import { EpisodesTab, SubtitlesTab } from "./Subtitles";
 import { IntrosTab } from "./Intros";
+import Player from "./Player";
 import type { View } from "./App";
 
 type Tab = "details" | "art" | "identify" | "seasons" | "subs" | "episodes" | "intros";
@@ -86,6 +87,7 @@ export default function ItemPage({ id, onBack, onOpen, onNav, subLangs }: { id: 
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const [stamp, setStamp] = useState(""); // cache-buster after picture changes
+  const [playing, setPlaying] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -166,6 +168,9 @@ export default function ItemPage({ id, onBack, onOpen, onNav, subLangs }: { id: 
               {item.ProductionYear ? ` · ${item.ProductionYear}` : ""}
               {item.OfficialRating ? ` · ${item.OfficialRating}` : ""}
             </div>
+            {(item.Type === "Movie" || item.Type === "Episode") && (
+              <div><button className="primary" onClick={() => setPlaying(true)}>▶ Play</button></div>
+            )}
             <div className="ratings">
               {item.CommunityRating != null && <span className="chip static">★ {item.CommunityRating.toFixed(1)} community</span>}
               {item.CriticRating != null && <span className="chip static">{item.CriticRating}% critics</span>}
@@ -295,6 +300,7 @@ export default function ItemPage({ id, onBack, onOpen, onNav, subLangs }: { id: 
           </section>
         )}
       </main>
+      {playing && <Player id={id} onClose={() => setPlaying(false)} />}
     </div>
   );
 }

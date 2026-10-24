@@ -418,6 +418,52 @@ fn valid_segment_id(id: &str) -> bool {
 }
 
 impl Client {
+    /// Asks Jellyfin how to play an item on this computer. POST, but it changes nothing stored.
+    pub async fn playback_info(&self, id: &str, device_id: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let req = self
+            .http
+            .post(self.url(&format!("/Items/{id}/PlaybackInfo")))
+            .query(&[("deviceId", device_id)])
+            .json(body);
+        Self::read_json(self.send(req).await?).await
+    }
+
+    /// Fetches a part of a playback stream (playlist, video piece or subtitle file).
+    /// Only paths under /videos/ are allowed, so a stream token can't be used for anything else.
+    pub async fn raw_get(&self, path_query: &str) -> Result<(Vec<u8>, String)> {
+        let path = path_query.split('?').next().unwrap_or("");
+        if !path.to_lowercase().starts_with("/videos/") || path.contains("..") || path_query.contains("://") {
+            return Err(Error::msg("bad stream path"));
+        }
+        let resp = self.send(self.http.get(self.url(path_query))).await?;
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| Error::Network(e.without_url().to_string()))?;
+        if bytes.len() > 200 * 1024 * 1024 {
+            return Err(Error::msg("stream piece too large"));
+        }
+        Ok((bytes.to_vec(), ct))
+    }
+
+    /// Tells Jellyfin to stop converting for a finished playback. Changes nothing stored.
+    pub async fn stop_encoding(&self, device_id: &str, play_session_id: &str) -> Result<()> {
+        let req = self
+            .http
+            .delete(self.url("/Videos/ActiveEncodings"))
+            .query(&[("deviceId", device_id), ("playSessionId", play_session_id)]);
+        self.send(req).await.map(|_| ())
+    }
+
     pub async fn segment_api(&self) -> Result<Option<SegmentApi>> {
         let spec: serde_json::Value = self.get_json("/api-docs/openapi.json", &[]).await?;
         Ok(parse_segment_api(&spec))
