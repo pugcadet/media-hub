@@ -87,6 +87,7 @@ pub fn run() {
             seg_cmds::pick_ffmpeg,
             player::play_start,
             player::play_stop,
+            player::play_progress,
             downloads::ytdlp_info,
             downloads::ytdlp_install,
             downloads::pick_download_folder,

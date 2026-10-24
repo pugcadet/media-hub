@@ -83,7 +83,7 @@ export default function ItemPage({ id, onBack, onOpen, onNav, subLangs, status }
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const [stamp, setStamp] = useState("");
-  const [playing, setPlaying] = useState(false);
+  const [playId, setPlayId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -145,7 +145,7 @@ export default function ItemPage({ id, onBack, onOpen, onNav, subLangs, status }
         <button onClick={onBack}>← Back</button>
         <span className="muted small crumbs">{item.SeriesName ? `${item.SeriesName} · ` : ""}{item.Type}</span>
         <div className="spacer" />
-        {playable && <button className="primary" onClick={() => setPlaying(true)}>▶ Play</button>}
+        {playable && <button className="primary" onClick={() => setPlayId(id)}>▶ {item.UserData?.PlaybackPositionTicks ? "Resume" : "Play"}</button>}
         {d.canEdit && (
           <button disabled={!!busy} onClick={() => void run("Refreshing…", () => api.refreshItem(id, false), "Jellyfin is refreshing this item from the internet. Reload in a moment.")}>Refresh from internet</button>
         )}
@@ -258,7 +258,7 @@ export default function ItemPage({ id, onBack, onOpen, onNav, subLangs, status }
           )}
         </section>
       </div>
-      {playing && <Player id={id} status={status} onClose={() => setPlaying(false)} />}
+      {playId && <Player key={playId} id={playId} status={status} onClose={() => { setPlayId(null); void load(); }} onNext={(n) => setPlayId(n)} />}
     </div>
   );
 }

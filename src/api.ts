@@ -315,6 +315,8 @@ export interface PlayInfo {
   start: number;
   subtitles: { index: number; language: string; title: string; url: string; default: boolean }[];
   segments: { Type: string; StartTicks: number; EndTicks: number }[];
+  resume: number;
+  next: { id: string; label: string } | null;
 }
 
 export interface DlRequest {
@@ -426,6 +428,7 @@ export const api = {
   pickFfmpeg: () => invoke<string | null>("pick_ffmpeg"),
   playStart: (id: string, start: number, audioIndex: number | null = null) => invoke<PlayInfo>("play_start", { id, start, audioIndex }),
   playStop: (token: string) => invoke<void>("play_stop", { token }),
+  playProgress: (token: string, position: number, finished: boolean) => invoke<void>("play_progress", { token, position, finished }),
   ytdlpInfo: () => invoke<{ path: string | null; version: string | null; managed: boolean; folder: string | null }>("ytdlp_info"),
   ytdlpInstall: () => invoke<string>("ytdlp_install"),
   pickDownloadFolder: () => invoke<string | null>("pick_download_folder"),

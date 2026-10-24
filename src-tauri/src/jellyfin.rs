@@ -608,6 +608,47 @@ impl Client {
         Ok((bytes.to_vec(), ct))
     }
 
+    /// The episode after `episode_id` in its show (None at the end).
+    pub async fn next_episode(&self, series_id: &str, episode_id: &str) -> Result<Option<serde_json::Value>> {
+        if !valid_item_id(series_id) || !valid_item_id(episode_id) {
+            return Err(Error::msg("bad id"));
+        }
+        let q = self.with_user(vec![("StartItemId", episode_id.to_string()), ("Limit", "2".to_string())]);
+        let v: serde_json::Value = self.get_json(&format!("/Shows/{series_id}/Episodes"), &q).await?;
+        Ok(v.get("Items").and_then(|i| i.as_array()).and_then(|a| a.get(1)).cloned())
+    }
+
+    /// Play data for the chosen user (resume point). This is the one kind of write the
+    /// read-only Client does, and only when "sync watched" is switched on.
+    pub async fn save_position(&self, item_id: &str, seconds: f64) -> Result<()> {
+        let user = self.user.clone().ok_or_else(|| Error::msg("no user"))?;
+        if !valid_item_id(item_id) {
+            return Err(Error::msg("bad id"));
+        }
+        let body = serde_json::json!({ "PlaybackPositionTicks": (seconds * TICKS_PER_SECOND) as i64 });
+        let req = self.http.post(self.url(&format!("/UserItems/{item_id}/UserData"))).query(&[("userId", user.as_str())]).json(&body);
+        if self.send(req).await.is_ok() {
+            return Ok(());
+        }
+        // Jellyfin before 10.9
+        let req = self.http.post(self.url(&format!("/Users/{user}/Items/{item_id}/UserData"))).json(&body);
+        self.send(req).await.map(|_| ())
+    }
+
+    /// Marks an item as watched for the chosen user (only with "sync watched" on).
+    pub async fn mark_played(&self, item_id: &str) -> Result<()> {
+        let user = self.user.clone().ok_or_else(|| Error::msg("no user"))?;
+        if !valid_item_id(item_id) {
+            return Err(Error::msg("bad id"));
+        }
+        let req = self.http.post(self.url(&format!("/UserPlayedItems/{item_id}"))).query(&[("userId", user.as_str())]).header("Content-Length", "0");
+        if self.send(req).await.is_ok() {
+            return Ok(());
+        }
+        let req = self.http.post(self.url(&format!("/Users/{user}/PlayedItems/{item_id}"))).header("Content-Length", "0");
+        self.send(req).await.map(|_| ())
+    }
+
     /// Tells Jellyfin to stop converting for a finished playback. Changes nothing stored.
     pub async fn stop_encoding(&self, device_id: &str, play_session_id: &str) -> Result<()> {
         let req = self

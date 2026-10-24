@@ -21,6 +21,7 @@ struct Session {
     subs: HashMap<i64, String>,
     device_id: String,
     play_session_id: String,
+    item_id: String,
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, Session>> {
@@ -144,6 +145,17 @@ pub struct PlayInfo {
     start: f64,
     subtitles: Vec<SubTrack>,
     segments: Vec<Value>,
+    /// Where you stopped last time (seconds), if anywhere.
+    resume: f64,
+    /// The next episode to play after this one.
+    next: Option<NextEpisode>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NextEpisode {
+    id: String,
+    label: String,
 }
 
 fn media_base() -> &'static str {
@@ -233,10 +245,21 @@ pub async fn play_start(state: State<'_, AppState>, id: String, start: f64, audi
         })
         .collect();
     let segments = c.segments(&id).await.unwrap_or_default();
+    let resume = item.pointer("/UserData/PlaybackPositionTicks").and_then(Value::as_f64).unwrap_or(0.0) / TICKS_PER_SECOND;
+    let next = match (item.get("Type").and_then(Value::as_str), item.get("SeriesId").and_then(Value::as_str)) {
+        (Some("Episode"), Some(series)) => c.next_episode(&series.replace('-', ""), &id).await.ok().flatten().map(|e| {
+            let label = match (e.get("ParentIndexNumber").and_then(Value::as_i64), e.get("IndexNumber").and_then(Value::as_i64)) {
+                (Some(s), Some(n)) => format!("S{s:02}E{n:02} · {}", e.get("Name").and_then(Value::as_str).unwrap_or("")),
+                _ => e.get("Name").and_then(Value::as_str).unwrap_or("Next episode").to_string(),
+            };
+            NextEpisode { id: e.get("Id").and_then(Value::as_str).unwrap_or("").replace('-', ""), label }
+        }),
+        _ => None,
+    };
     sessions()
         .lock()
         .map_err(|_| Error::msg("internal error"))?
-        .insert(tok.clone(), Session { dir, subs, device_id, play_session_id });
+        .insert(tok.clone(), Session { dir, subs, device_id, play_session_id, item_id: id.clone() });
 
     let name = item.get("Name").and_then(Value::as_str).unwrap_or("").to_string();
     let (title, subtitle) = match item.get("SeriesName").and_then(Value::as_str) {
@@ -265,7 +288,29 @@ pub async fn play_start(state: State<'_, AppState>, id: String, start: f64, audi
         start,
         subtitles: tracks,
         segments,
+        resume,
+        next: next.filter(|n| valid_item_id(&n.id)),
     })
+}
+
+/// Saves where you are (and, at the end, that you watched it) in Jellyfin for your user,
+/// so Infuse and other apps continue at the same spot. Off when "sync watched" is off.
+#[tauri::command]
+pub async fn play_progress(state: State<'_, AppState>, token: String, position: f64, finished: bool) -> Result<()> {
+    if !state.settings()?.sync_watched {
+        return Ok(());
+    }
+    let item = {
+        let map = sessions().lock().map_err(|_| Error::msg("internal error"))?;
+        map.get(&token).map(|s| s.item_id.clone())
+    };
+    let Some(item) = item else { return Ok(()) };
+    let c = state.reader().await?;
+    if finished {
+        c.mark_played(&item).await
+    } else {
+        c.save_position(&item, position.max(0.0)).await
+    }
 }
 
 /// Ends the stream so Jellyfin stops converting.

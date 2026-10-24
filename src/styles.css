@@ -384,3 +384,7 @@ details ol { padding-left: 20px; }
 .applybar { display: flex; align-items: center; gap: 16px; border-top: 1px solid var(--line); padding-top: 14px; flex-wrap: wrap; }
 .done-card { border-color: var(--accent); }
 details.history summary { padding: 4px 0 10px; }
+.p-resume { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; gap: 10px; background: rgba(20,22,26,.92); padding: 20px; border-radius: 14px; border: 1px solid var(--line); }
+.p-resume button { height: 44px; min-width: 260px; }
+.p-upnext { position: absolute; right: 28px; bottom: 132px; width: min(340px, calc(100% - 56px)); background: rgba(20,22,26,.95); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+.p-vol { width: 90px; }

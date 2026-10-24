@@ -18,7 +18,7 @@ interface Session {
   n: number;
 }
 
-export default function Player({ id, onClose, status }: { id: string; onClose: () => void; status?: Status }) {
+export default function Player({ id, onClose, status, onNext }: { id: string; onClose: () => void; status?: Status; onNext?: (id: string) => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const [session, setSession] = useState<Session>({ start: 0, audio: null, n: 0 });
   const [info, setInfo] = useState<PlayInfo | null>(null);
@@ -36,6 +36,17 @@ export default function Player({ id, onClose, status }: { id: string; onClose: (
   const idle = useRef<number | undefined>(undefined);
   const audioGraph = useRef<{ ctx: AudioContext; src: MediaElementAudioSourceNode; comp: DynamicsCompressorNode; gain: GainNode } | null>(null);
   const appliedOffset = useRef(0);
+  const tokenRef = useRef<string | null>(null);
+  const [askResume, setAskResume] = useState<number | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [volume, setVolume] = useState(1);
+  const [upNextDismissed, setUpNextDismissed] = useState(false);
+  const toastTimer = useRef<number | undefined>(undefined);
+  const say = (t: string) => {
+    setToast(t);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 1400);
+  };
 
   // Start (or restart, e.g. after choosing another audio track) the stream.
   useEffect(() => {
@@ -45,14 +56,21 @@ export default function Player({ id, onClose, status }: { id: string; onClose: (
     const urls: string[] = [];
     setError(null);
     api
-      .playStart(id, session.start, session.audio)
+      .playStart(id, 0, session.audio)
       .then(async (p) => {
         token = p.token;
+        tokenRef.current = p.token;
         if (cancelled) return;
         setInfo(p);
         const v = video.current!;
+        // First start: offer to continue where you stopped (Infuse-style).
+        let startAt = session.start;
+        if (session.n === 0 && p.resume > 30 && p.resume < p.duration * 0.95) {
+          setAskResume(p.resume);
+          startAt = 0;
+        }
         if (Hls.isSupported()) {
-          hls = new Hls({ enableWorker: false, backBufferLength: 60 });
+          hls = new Hls({ enableWorker: false, backBufferLength: 60, startPosition: startAt > 0 ? startAt : -1 });
           hls.on(Hls.Events.ERROR, (_e, data) => {
             if (data.fatal) setError(`Playback stopped (${data.details}). The file may need converting that the server can't do quickly.`);
           });
@@ -60,8 +78,9 @@ export default function Player({ id, onClose, status }: { id: string; onClose: (
           hls.attachMedia(v);
         } else {
           v.src = p.url;
+          if (startAt > 0) v.currentTime = startAt;
         }
-        v.play().catch(() => undefined);
+        if (!(session.n === 0 && p.resume > 30 && p.resume < p.duration * 0.95)) v.play().catch(() => undefined);
         const loaded: Record<number, string> = {};
         for (const t of p.subtitles) {
           try {
@@ -86,9 +105,22 @@ export default function Player({ id, onClose, status }: { id: string; onClose: (
       cancelled = true;
       hls?.destroy();
       urls.forEach((u) => URL.revokeObjectURL(u));
-      if (token) void api.playStop(token).catch(() => undefined);
+      if (token) {
+        const pos = video.current?.currentTime ?? 0;
+        const t = token;
+        void api.playProgress(t, pos, false).catch(() => undefined).finally(() => void api.playStop(t).catch(() => undefined));
+      }
     };
   }, [id, session]);
+
+  // Tell Jellyfin where we are every 30 seconds while playing.
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      const v = video.current;
+      if (v && !v.paused && tokenRef.current) void api.playProgress(tokenRef.current, v.currentTime, false).catch(() => undefined);
+    }, 30000);
+    return () => window.clearInterval(t);
+  }, []);
 
   useEffect(() => () => void getCurrentWindow().setFullscreen(false).catch(() => undefined), []);
 
@@ -185,16 +217,54 @@ export default function Player({ id, onClose, status }: { id: string; onClose: (
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "SELECT") return;
       wake();
-      if (e.key === " " || e.key === "k") { e.preventDefault(); toggle(); }
-      else if (e.key === "ArrowRight") seek(time + 10);
-      else if (e.key === "ArrowLeft") seek(time - 10);
-      else if (e.key === "f") void fullscreen();
-      else if (e.key === "s" && current) seek(current.end);
+      const k = e.key.toLowerCase();
+      if (e.key === " " || k === "k") { e.preventDefault(); toggle(); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); seek(time + (e.shiftKey ? 30 : 10)); say(e.shiftKey ? "+30 s" : "+10 s"); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); seek(time - (e.shiftKey ? 30 : 10)); say(e.shiftKey ? "−30 s" : "−10 s"); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); changeVolume(0.1); }
+      else if (e.key === "ArrowDown") { e.preventDefault(); changeVolume(-0.1); }
+      else if (k === "m") { const v = video.current; if (v) { v.muted = !v.muted; say(v.muted ? "Muted" : "Sound on"); } }
+      else if (k === "c") cycleSubtitles();
+      else if (k === "n" && info?.next) playNext();
+      else if (k === "f") void fullscreen();
+      else if (k === "s" && current) seek(current.end);
       else if (e.key === "Escape") { if (panel !== "none") setPanel("none"); else onClose(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  function changeVolume(d: number) {
+    const v = video.current;
+    if (!v) return;
+    const nv = Math.round(Math.max(0, Math.min(1, v.volume + d)) * 100) / 100;
+    v.volume = nv;
+    v.muted = false;
+    setVolume(nv);
+    say(`Volume ${Math.round(nv * 100)}%`);
+  }
+
+  /** C: Off → each subtitle → Off. With none at all, open the panel and look online. */
+  function cycleSubtitles() {
+    const tracks = (info?.subtitles ?? []).filter((t) => subUrls[t.index]);
+    if (!tracks.length) {
+      setPanel("subs");
+      say("No subtitles yet · searching online");
+      if (online === null) void searchOnline();
+      return;
+    }
+    const order = [-1, ...tracks.map((t) => t.index)];
+    const next = order[(order.indexOf(sub) + 1) % order.length];
+    setSub(next);
+    say(next === -1 ? "Subtitles off" : `Subtitles: ${tracks.find((t) => t.index === next)?.title ?? "on"}`);
+  }
+
+  function playNext() {
+    if (!info?.next || !onNext) return;
+    const t = tokenRef.current;
+    if (t) void api.playProgress(t, 0, true).catch(() => undefined);
+    onNext(info.next.id);
+  }
 
   async function searchOnline() {
     setOnline(null);
@@ -228,6 +298,8 @@ export default function Player({ id, onClose, status }: { id: string; onClose: (
     }
   }
 
+  const outro = marks.find((m) => m.kind === "Outro");
+  const upNext = !!info?.next && !!onNext && duration > 0 && (outro ? time >= outro.start : time >= duration - 30);
   const pct = (t: number) => `${duration ? (t / duration) * 100 : 0}%`;
   const skipLabel = current?.kind === "Intro" ? "Skip intro" : current?.kind === "Recap" ? "Skip recap" : "Skip credits";
   const subTitle = sub >= 0 ? info?.subtitles.find((t) => t.index === sub)?.title ?? "On" : "Off";
@@ -241,7 +313,11 @@ export default function Player({ id, onClose, status }: { id: string; onClose: (
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
-        onEnded={onClose}
+        onEnded={() => {
+          if (tokenRef.current) void api.playProgress(tokenRef.current, 0, true).catch(() => undefined);
+          if (info?.next && onNext) playNext();
+          else onClose();
+        }}
         crossOrigin="anonymous"
       >
         {Object.entries(subUrls).map(([idx, u]) => <track key={`${session.n}-${idx}`} kind="subtitles" src={u} label={idx} />)}
@@ -258,7 +334,23 @@ export default function Player({ id, onClose, status }: { id: string; onClose: (
       </div>
 
       {error && <div className="p-error">{error}</div>}
-      {current && <button className="p-skip" onClick={() => seek(current.end)}>{skipLabel}</button>}
+      {toast && <div className="p-toast">{toast}</div>}
+      {askResume !== null && (
+        <div className="p-resume" onClick={(e) => e.stopPropagation()}>
+          <button className="primary" autoFocus onClick={() => { const r = askResume; setAskResume(null); seek(r); void video.current?.play(); }}>Resume from {fmt(askResume)}</button>
+          <button onClick={() => { setAskResume(null); seek(0); void video.current?.play(); }}>Start from the beginning</button>
+        </div>
+      )}
+      {upNext && !upNextDismissed ? (
+        <div className="p-upnext" onClick={(e) => e.stopPropagation()}>
+          <div className="small muted">Up next</div>
+          <div className="strong">{info?.next?.label}</div>
+          <div className="row">
+            <button className="primary" onClick={playNext}>Play now</button>
+            <button onClick={() => setUpNextDismissed(true)}>Keep watching</button>
+          </div>
+        </div>
+      ) : current && <button className="p-skip" onClick={() => seek(current.end)}>{skipLabel}</button>}
 
       {panel === "subs" && (
         <div className="p-panel" onClick={(e) => e.stopPropagation()}>
@@ -325,6 +417,9 @@ export default function Player({ id, onClose, status }: { id: string; onClose: (
           <button className="p-chip" onClick={() => seek(time + 10)} aria-label="Forward 10 seconds">+10</button>
           <span className="mono small p-time">{fmt(time)} / {fmt(duration)}</span>
           <div className="spacer" />
+          <input className="p-vol" type="range" min={0} max={1} step={0.05} value={volume} aria-label="Volume"
+            onChange={(e) => { const nv = Number(e.target.value); setVolume(nv); if (video.current) { video.current.volume = nv; video.current.muted = false; } }} />
+          {info?.next && onNext && <button className="p-chip" onClick={playNext} title="Next episode (N)">Next ▸</button>}
           <button className={`p-chip ${leveling ? "on" : ""}`} onClick={() => setLeveling((l) => !l)}>Volume leveling {leveling ? "on" : "off"}</button>
           <button className={`p-chip ${panel === "audio" ? "on" : ""}`} onClick={() => setPanel(panel === "audio" ? "none" : "audio")}>Audio: {audioTitle}</button>
           <button className={`p-chip ${sub >= 0 || panel === "subs" ? "on" : ""}`} onClick={() => setPanel(panel === "subs" ? "none" : "subs")}>Subtitles: {subTitle}</button>
