@@ -14,7 +14,7 @@ added 74 packages in 2s
     [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 [1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 12.67s
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 11.89s
 [1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-233f2c53c6391718)
 
 running 97 tests
@@ -25,15 +25,15 @@ test config::tests::adds_scheme_and_keeps_port ... ok
 test detect::tests::chapters_with_names_are_used ... ok
 test detect::tests::windows_and_snapping ... ok
 test downloads::tests::audio_mode ... ok
+test downloads::tests::builds_safe_arguments ... ok
 test downloads::tests::plain_error_text ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
-test downloads::tests::builds_safe_arguments ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
 test downloads::tests::search_targets_and_results ... ok
-test downloads::tests::summarizes_playlists ... ok
-test fingerprint::tests::fft_matches_a_plain_dft ... ok
 test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
 test downloads::tests::reads_progress_and_checksums ... ok
+test downloads::tests::summarizes_playlists ... ok
+test fingerprint::tests::fft_matches_a_plain_dft ... ok
 test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
 test fingerprint::tests::silence_does_not_match ... ok
 test fsops::tests::apply_then_undo_restores_everything ... ok
@@ -116,7 +116,7 @@ test fingerprint::tests::survives_noise_like_a_different_encode ... ok
 test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 97 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.46s
+test result: ok. 97 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.27s
 
 [1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-3ad08a9e7a458ec5)
 
@@ -166,8 +166,8 @@ computing gzip size...
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-ext-400-normal-Bc8Ftmh3.woff2  [39m[1m[2m  7.34 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-400-normal-BMzJvInZ.woff2          [39m[1m[2m  7.84 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-700-normal-Dw_fZAg2.woff2          [39m[1m[2m  7.85 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-DvRl3Mj-.woff2          [39m[1m[2m  7.87 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-500-normal-B1OEZity.woff2          [39m[1m[2m  7.87 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-DvRl3Mj-.woff2          [39m[1m[2m  7.87 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-dm74KBQw.woff2         [39m[1m[2m  8.19 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-700-normal-DYOwVNan.woff2         [39m[1m[2m  8.28 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-400-normal-CMDvPJRp.woff2         [39m[1m[2m  8.29 kB[22m[1m[22m
@@ -177,8 +177,8 @@ computing gzip size...
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-400-normal-Dvx59UGC.woff           [39m[1m[2m 10.03 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-It4mZcQk.woff           [39m[1m[2m 10.06 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-ext-400-normal-fXTG6kC5.woff   [39m[1m[2m 10.13 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-600-normal-u5Pl7hTU.woff          [39m[1m[2m 11.25 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-EtoS1VaI.woff          [39m[1m[2m 11.25 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-600-normal-u5Pl7hTU.woff          [39m[1m[2m 11.25 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-400-normal-C-X6QNXX.woff          [39m[1m[2m 11.32 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-700-normal-eVCcYqtJ.woff          [39m[1m[2m 11.35 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-500-normal-BYYD-dBL.woff2             [39m[1m[2m 14.04 kB[22m[1m[22m
@@ -191,14 +191,14 @@ computing gzip size...
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-700-normal-DGRFkw-m.woff              [39m[1m[2m 18.41 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-400-normal-V6pRDFza.woff2      [39m[1m[2m 21.17 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-400-normal-6-qcROiO.woff       [39m[1m[2m 27.50 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[35mindex-BeYvMV1P.css                                  [39m[1m[2m 66.30 kB[22m[1m[22m[2m │ gzip:  28.48 kB[22m
-[2mdist/[22m[2massets/[22m[36mindex-bJMqeW5G.js                                   [39m[1m[33m870.62 kB[39m[22m[2m │ gzip: 270.04 kB[22m
+[2mdist/[22m[2massets/[22m[35mindex-Bxtn41DS.css                                  [39m[1m[2m 66.77 kB[22m[1m[22m[2m │ gzip:  28.55 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-DVJaPjXn.js                                   [39m[1m[33m873.77 kB[39m[22m[2m │ gzip: 271.05 kB[22m
 [33m
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 1.04s[39m
+[32m✓ built in 1.53s[39m
 [1m[92m   Compiling[0m media-hub v0.9.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
 [1m[33mwarning[0m[1m: method `candidate_ids` is never used[0m
    [1m[94m--> [0msrc/store.rs:376:12
@@ -212,7 +212,7 @@ computing gzip size...
     [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 [1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 1m 45s
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 1m 47s
        Built application at: /Users/runner/work/media-hub/media-hub/src-tauri/target/release/media-hub
     Bundling Media Hub.app (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app)
      Signing with identity "-"
@@ -226,6 +226,6 @@ Signing /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/m
     Bundling Media Hub_0.9.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.9.0_aarch64.dmg)
      Running bundle_dmg.sh
     Finished 2 bundles at:
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app (11.99 MiB)
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.9.0_aarch64.dmg (5.77 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app (12.00 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.9.0_aarch64.dmg (5.78 MiB)
 
