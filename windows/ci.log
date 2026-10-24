@@ -31,10 +31,10 @@ added 72 packages in 8s
    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 [1m[93mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 31s
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 33s
 [1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-3f56ccff47ec733e.exe)
 
-running 79 tests
+running 85 tests
 test config::tests::key_validation ... ok
 test config::tests::rejects_bad_input ... ok
 test config::tests::adds_scheme_and_keeps_port ... ok
@@ -97,6 +97,12 @@ test player::tests::playlists_stay_inside_the_session ... ok
 test player::tests::splits_folder_and_file ... ok
 test seg_cmds::tests::reads_jellyfin_segments ... ok
 test seg_cmds::tests::span_checks ... ok
+test storage::tests::containers ... ok
+test storage::tests::hevc_arguments_copy_everything_but_video ... ok
+test storage::tests::loudness_gain_respects_peaks ... ok
+test storage::tests::reads_ebur128_summary ... ok
+test storage::tests::reads_ffprobe_output ... ok
+test storage::tests::undo_puts_the_original_back ... ok
 test store::tests::changes_are_listed_per_item ... ok
 test store::tests::empty_answer_keeps_old_list ... ok
 test store::tests::journal_records_batches ... ok
@@ -115,7 +121,7 @@ test subs::tests::same_release_beats_other_release ... ok
 test subs::tests::wrong_episode_is_zero ... ok
 test fingerprint::tests::unrelated_audio_has_no_match ... ok
 
-test result: ok. 79 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.05s
+test result: ok. 85 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.12s
 
 [1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-98224e403ef51445.exe)
 
@@ -148,7 +154,7 @@ computing gzip size...
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 4.04s[39m
+[32m✓ built in 2.98s[39m
 [1m[92m   Compiling[0m generic-array v0.14.7
 [1m[92m   Compiling[0m typenum v1.20.1
 [1m[92m   Compiling[0m media-hub v0.1.0 (D:\a\media-hub\media-hub\src-tauri)
@@ -169,7 +175,7 @@ computing gzip size...
    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 [1m[93mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 4m 39s
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 4m 07s
        Built application at: D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe
         Info Patching D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe with bundle type information: nsis
         Info Verifying NSIS package
@@ -181,5 +187,5 @@ computing gzip size...
         Info Target: x64
      Running makensis to produce D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.1.0_x64-setup.exe
     Finished 1 bundle at:
-        D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.1.0_x64-setup.exe (4.41 MiB)
+        D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.1.0_x64-setup.exe (4.47 MiB)
 
