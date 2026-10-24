@@ -50,6 +50,10 @@ jobs:
         run: |
           set -e
           tag="build-${{ github.run_number }}-${{ matrix.label }}"
+          # Keep the Releases page tidy: remove older builds for this platform.
+          gh release list --limit 100 --json tagName -q '.[].tagName' \
+            | grep -E '^build-[0-9]+-${{ matrix.label }}$' \
+            | while read -r old; do gh release delete "$old" --yes --cleanup-tag || true; done
           gh release create "$tag" ${{ matrix.glob }} \
             --prerelease \
             --title "Media Hub ${{ matrix.label }} build ${{ github.run_number }}" \

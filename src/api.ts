@@ -333,6 +333,7 @@ export const api = {
     invoke<void>("identify_apply", { id, result, replaceImages }),
   remoteImages: (id: string, kind: ImageKind) => invoke<RemoteImage[]>("remote_images", { id, kind }),
   setImage: (id: string, kind: ImageKind, url: string) => invoke<void>("set_image", { id, kind, url }),
+  uploadImageFile: (id: string, kind: ImageKind) => invoke<boolean>("upload_image_file", { id, kind }),
   undoChange: (changeId: number) => invoke<void>("undo_change", { changeId }),
   refreshItem: (id: string, replaceAll: boolean) => invoke<void>("refresh_item", { id, replaceAll }),
   setReadOnly: (value: boolean) => invoke<void>("set_read_only", { value }),

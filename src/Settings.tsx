@@ -84,7 +84,7 @@ export default function Settings({ status, onChanged, onNav }: { status: Status;
 
         <ToolsSettings />
 
-        <p className="muted small">Media Hub 0.5 · your API key is kept in this computer's secure storage.</p>
+        <p className="muted small">Media Hub 0.8 · your API key is kept in this computer's secure storage.</p>
       </main>
     </div>
   );

@@ -65,7 +65,7 @@ fn remote_client() -> &'static reqwest::Client {
                     attempt.follow()
                 }
             }))
-            .user_agent("MediaHub/0.1")
+            .user_agent("MediaHub/0.8")
             .build()
             .expect("http client")
     })

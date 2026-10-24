@@ -236,6 +236,11 @@ export default function ItemPage({ id, onBack, onOpen, onNav, subLangs }: { id: 
             busy={!!busy}
             has={hasImage}
             stamp={stamp}
+            onUpload={(k) =>
+              void run("Saving picture…", async () => {
+                if (await api.uploadImageFile(id, k)) setStamp(String(Date.now()));
+              }, "Picture saved.")
+            }
             onPick={(k, url) =>
               void run("Saving picture…", async () => {
                 await api.setImage(id, k, url);
@@ -306,9 +311,10 @@ export default function ItemPage({ id, onBack, onOpen, onNav, subLangs }: { id: 
   );
 }
 
-function ArtTab({ id, canEdit, busy, has, stamp, onPick }: {
+function ArtTab({ id, canEdit, busy, has, stamp, onPick, onUpload }: {
   id: string; canEdit: boolean; busy: boolean; has: (k: ImageKind) => boolean; stamp: string;
   onPick: (k: ImageKind, url: string) => void;
+  onUpload: (k: ImageKind) => void;
 }) {
   const [kind, setKind] = useState<ImageKind>("Primary");
   const [candidates, setCandidates] = useState<RemoteImage[] | null>(null);
@@ -340,6 +346,7 @@ function ArtTab({ id, canEdit, busy, has, stamp, onPick }: {
           <div className={`art current ${wide ? "wide" : ""}`}>
             {has(kind) ? <img src={imageUrl(id, kind, 500, 0, stamp)} alt="" /> : <div className="noart">None</div>}
           </div>
+          <button className="link small" disabled={!canEdit || busy} onClick={() => onUpload(kind)}>Use a picture from this computer…</button>
         </div>
       </div>
       <div className="toolbar">

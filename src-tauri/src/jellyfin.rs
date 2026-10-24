@@ -157,7 +157,7 @@ impl Client {
             .timeout(Duration::from_secs(30))
             // Never follow a redirect: the key must only ever go to the address the user typed.
             .redirect(reqwest::redirect::Policy::none())
-            .user_agent("MediaHub/0.1")
+            .user_agent("MediaHub/0.8")
             .build()
             .map_err(|e| Error::msg(e.to_string()))?;
         Ok(Client {

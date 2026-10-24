@@ -58,6 +58,7 @@ pub fn run() {
             meta_cmds::identify_apply,
             meta_cmds::remote_images,
             meta_cmds::set_image,
+            meta_cmds::upload_image_file,
             meta_cmds::undo_change,
             meta_cmds::refresh_item,
             meta_cmds::set_read_only,

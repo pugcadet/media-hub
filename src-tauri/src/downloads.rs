@@ -106,7 +106,7 @@ pub fn checksum_for(sums: &str, name: &str) -> Option<String> {
 #[tauri::command]
 pub async fn ytdlp_install(state: State<'_, AppState>) -> Result<String> {
     let http = reqwest::Client::builder()
-        .user_agent("MediaHub/0.6")
+        .user_agent("MediaHub/0.8")
         .timeout(std::time::Duration::from_secs(300))
         .build()
         .map_err(|e| Error::msg(e.to_string()))?;

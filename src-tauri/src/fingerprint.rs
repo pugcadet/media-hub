@@ -74,6 +74,7 @@ impl Fingerprint {
     pub fn len(&self) -> usize {
         self.bits.len()
     }
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.bits.is_empty()
     }

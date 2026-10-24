@@ -150,17 +150,9 @@ fn ext_for(content_type: &str) -> &'static str {
     }
 }
 
-#[tauri::command]
-pub async fn set_image(state: State<'_, AppState>, id: String, kind: String, url: String) -> Result<()> {
-    check_id(&id)?;
-    let kind = image_kind(&kind).ok_or_else(|| Error::msg("bad image kind"))?;
-    if crate::images::allowed_remote(&url).is_none() {
-        return Err(Error::msg("That picture does not come from a known image site."));
-    }
-    let w = state.writer()?;
-
-    // Keep a copy of the current picture so the change can be undone.
-    let backup = match w.reader().image_original(&id, kind, 0).await? {
+/// Keeps a copy of the current picture so a change can be undone. Returns "path|type", or "" if there was none.
+async fn backup_current(state: &AppState, w: &crate::jellyfin::Writer, id: &str, kind: &str) -> Result<String> {
+    Ok(match w.reader().image_original(id, kind, 0).await? {
         Some((bytes, ct)) => {
             let dir = state.dir.join("backups");
             std::fs::create_dir_all(&dir)?;
@@ -170,7 +162,64 @@ pub async fn set_image(state: State<'_, AppState>, id: String, kind: String, url
             format!("{}|{}", path.to_string_lossy(), ct)
         }
         None => String::new(),
-    };
+    })
+}
+
+/// Recognises a picture by its first bytes (never trusts the file name).
+pub fn sniff_image(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if b.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("image/png")
+    } else if b.len() > 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// Uses a picture file from this computer (for shows that exist nowhere online).
+#[tauri::command]
+pub async fn upload_image_file(app: tauri::AppHandle, state: State<'_, AppState>, id: String, kind: String) -> Result<bool> {
+    use tauri_plugin_dialog::DialogExt;
+    check_id(&id)?;
+    let kind = image_kind(&kind).ok_or_else(|| Error::msg("bad image kind"))?;
+    let w = state.writer()?;
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().add_filter("Pictures", &["jpg", "jpeg", "png", "webp"]).blocking_pick_file()
+    })
+    .await
+    .map_err(|e| Error::msg(e.to_string()))?;
+    let Some(fp) = picked else { return Ok(false) };
+    let path = fp.into_path().map_err(|_| Error::msg("That file cannot be used."))?;
+    let meta = std::fs::metadata(&path)?;
+    if meta.len() > 20 * 1024 * 1024 {
+        return Err(Error::msg("That picture is larger than 20 MB."));
+    }
+    let bytes = std::fs::read(&path)?;
+    let ct = sniff_image(&bytes).ok_or_else(|| Error::msg("Use a JPEG, PNG or WebP picture."))?;
+    let backup = backup_current(&state, &w, &id, kind).await?;
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+    let entry = state
+        .store()?
+        .journal_add("image", &format!("{id}|{kind}|0"), &backup, &format!("upload:{name}"))?;
+    if let Err(e) = w.upload_image(&id, kind, 0, &bytes, ct).await {
+        state.store()?.journal_delete(entry)?;
+        return Err(e);
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn set_image(state: State<'_, AppState>, id: String, kind: String, url: String) -> Result<()> {
+    check_id(&id)?;
+    let kind = image_kind(&kind).ok_or_else(|| Error::msg("bad image kind"))?;
+    if crate::images::allowed_remote(&url).is_none() {
+        return Err(Error::msg("That picture does not come from a known image site."));
+    }
+    let w = state.writer()?;
+
+    let backup = backup_current(&state, &w, &id, kind).await?;
     let entry = state
         .store()?
         .journal_add("image", &format!("{id}|{kind}|0"), &backup, &url)?;
@@ -239,4 +288,17 @@ pub async fn refresh_item(state: State<'_, AppState>, id: String, replace_all: b
 #[tauri::command]
 pub fn set_read_only(state: State<'_, AppState>, value: bool) -> Result<()> {
     state.update_settings(|s| s.read_only = value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognises_pictures_by_content() {
+        assert_eq!(sniff_image(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0]), Some("image/jpeg"));
+        assert_eq!(sniff_image(b"\x89PNG\r\n\x1a\n...."), Some("image/png"));
+        assert_eq!(sniff_image(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+        assert_eq!(sniff_image(b"<svg onload=alert(1)>"), None);
+    }
 }
