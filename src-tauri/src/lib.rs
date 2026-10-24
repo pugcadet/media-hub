@@ -17,6 +17,7 @@ mod rename_cmds;
 mod secrets;
 mod seg_cmds;
 mod state;
+mod storage;
 mod store;
 mod sub_cmds;
 mod subs;
@@ -79,6 +80,13 @@ pub fn run() {
             downloads::dl_probe,
             downloads::dl_start,
             downloads::dl_cancel,
+            storage::storage_scan,
+            storage::hevc_encoders,
+            storage::storage_start,
+            storage::storage_cancel,
+            storage::storage_history,
+            storage::trash_info,
+            storage::trash_empty,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Media Hub");

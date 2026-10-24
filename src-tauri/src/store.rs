@@ -375,6 +375,23 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    pub fn changes_by_action(&self, action: &str, limit: i64) -> Result<Vec<Change>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, CAST(at AS INTEGER), action, target, undone FROM undo_journal
+             WHERE action = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![action, limit.clamp(1, 200)], |r| {
+            Ok(Change {
+                id: r.get(0)?,
+                at: r.get(1)?,
+                action: r.get(2)?,
+                target: r.get(3)?,
+                undone: r.get::<_, i64>(4)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn change(&self, id: i64) -> Result<ChangeFull> {
         Ok(self.conn.query_row(
             "SELECT action, target, old_value, undone FROM undo_journal WHERE id=?1",

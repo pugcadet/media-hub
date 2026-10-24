@@ -187,6 +187,12 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
     if ch.undone {
         return Err(Error::msg("This change was already undone."));
     }
+    if ch.action == "storage" {
+        // A local file swap: no Jellyfin change involved.
+        crate::storage::undo_swap(&ch.old_value)?;
+        state.store()?.journal_mark_undone(change_id)?;
+        return Ok(());
+    }
     let w = state.writer()?;
     match ch.action.as_str() {
         "item_update" | "identify" => {
