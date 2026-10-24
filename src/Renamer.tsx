@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, Batch, errorText, FindReplace, Item, PlanOp, PlanResult, Status } from "./api";
 import Nav from "./Nav";
+import { askConfirm } from "./confirm";
 import type { View } from "./App";
 
 type Mode = "tv" | "movie";
@@ -169,8 +170,9 @@ export default function Renamer({ status, onChanged, onNav }: { status: Status; 
 
   async function apply() {
     if (!plan || plan.ok === 0) return;
-    const ok = window.confirm(
-      `Rename ${plan.ok} file${plan.ok === 1 ? "" : "s"}?\n\nNothing is deleted or overwritten, and you can undo this from the history below.`,
+    const ok = await askConfirm(
+      `Rename ${plan.ok} file${plan.ok === 1 ? "" : "s"}? Nothing is deleted or overwritten, and you can undo this from the history below.`,
+      { okLabel: "Rename" },
     );
     if (!ok) return;
     setBusy("Renaming…");
@@ -194,7 +196,7 @@ export default function Renamer({ status, onChanged, onNav }: { status: Status; 
   }
 
   async function undo(b: Batch) {
-    if (!window.confirm(`Put ${b.files - b.undone} file(s) back to their old names?`)) return;
+    if (!(await askConfirm(`Put ${b.files - b.undone} file(s) back to their old names?`, { okLabel: "Undo" }))) return;
     setBusy("Undoing…");
     try {
       const rep = await api.undo(b.batch);

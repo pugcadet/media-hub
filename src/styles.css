@@ -206,3 +206,14 @@ input.time { width: 64px; height: 30px; padding: 0 6px; text-align: center; }
 .progress { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; }
 .progress span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
 .progress span.failed { background: var(--danger); } .progress span.cancelled { background: var(--muted); }
+
+/* ---- confirm dialog */
+.confirm-layer { z-index: 100; }
+.confirm { max-width: 460px; width: 100%; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.confirm-text { margin: 0; line-height: 1.5; }
+.confirm label { display: flex; flex-direction: column; gap: 6px; }
+button.danger { background: var(--danger); color: #1a0d0c; border: 0; font-weight: 700; }
+
+/* ---- storage */
+.filerow { cursor: pointer; align-items: center; }
+.filerow input[type=checkbox] { height: auto; }

@@ -76,7 +76,7 @@ export type ImageKind = "Primary" | "Backdrop" | "Logo" | "Thumb" | "Banner";
 export interface Change {
   id: number;
   at: number;
-  action: "item_update" | "identify" | "image" | "subtitle" | "segment";
+  action: "item_update" | "identify" | "image" | "subtitle" | "segment" | "storage";
   target: string;
   undone: boolean;
 }
@@ -280,6 +280,33 @@ export interface Probe {
   entryCount: number;
 }
 
+export interface MediaInfo {
+  duration: number;
+  size: number;
+  bitrate: number;
+  videoCodec: string;
+  width: number;
+  height: number;
+  hdr: boolean;
+  audioCodec: string;
+  audioChannels: number;
+  audioStreams: number;
+}
+
+export interface FileRow {
+  rel: string;
+  info: MediaInfo | null;
+  problem: string | null;
+}
+
+export interface StorageJob {
+  rel: string;
+  mode: "hevc" | "loudness";
+  encoder: string | null;
+  quality: number | null;
+  targetLufs: number | null;
+}
+
 export type Sort = "name" | "rating" | "year" | "added";
 export type Kind = "movie" | "series" | null;
 
@@ -332,6 +359,13 @@ export const api = {
   dlProbe: (url: string) => invoke<Probe>("dl_probe", { url }),
   dlStart: (req: DlRequest) => invoke<number>("dl_start", { req }),
   dlCancel: (id: number) => invoke<void>("dl_cancel", { id }),
+  storageScan: (folder: string) => invoke<FileRow[]>("storage_scan", { folder }),
+  hevcEncoders: () => invoke<string[]>("hevc_encoders"),
+  storageStart: (req: StorageJob) => invoke<number>("storage_start", { req }),
+  storageCancel: (id: number) => invoke<void>("storage_cancel", { id }),
+  storageHistory: () => invoke<Change[]>("storage_history"),
+  trashInfo: () => invoke<{ files: number; bytes: number }>("trash_info"),
+  trashEmpty: (confirm: string) => invoke<void>("trash_empty", { confirm }),
   undo: (batch: string) => invoke<{ restored: number; skipped: string[] }>("undo_rename", { batch }),
 };
 

@@ -4,6 +4,7 @@ import Nav from "./Nav";
 import { EpisodesTab, SubtitlesTab } from "./Subtitles";
 import { IntrosTab } from "./Intros";
 import Player from "./Player";
+import { askConfirm } from "./confirm";
 import type { View } from "./App";
 
 type Tab = "details" | "art" | "identify" | "seasons" | "subs" | "episodes" | "intros";
@@ -424,7 +425,7 @@ function IdentifyTab({ item, kind, canEdit, busy, onApply }: {
               </div>
               {r.Overview && <p className="small">{r.Overview.slice(0, 280)}{r.Overview.length > 280 ? "…" : ""}</p>}
               <button disabled={!canEdit || busy} onClick={() => {
-                if (window.confirm(`Use “${r.Name}” for this item? You can undo this afterwards.`)) onApply(r, replaceImages);
+                void askConfirm(`Use “${r.Name}” for this item? You can undo this afterwards.`, { okLabel: "Use it" }).then((ok) => ok && onApply(r, replaceImages));
               }}>This is it</button>
             </div>
           </div>

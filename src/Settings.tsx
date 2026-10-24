@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, errorText, Status } from "./api";
 import Nav from "./Nav";
+import { askConfirm } from "./confirm";
 import { SubLangSettings } from "./Subtitles";
 import { ToolsSettings } from "./Intros";
 import type { View } from "./App";
@@ -9,9 +10,10 @@ export default function Settings({ status, onChanged, onNav }: { status: Status;
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
 
   async function toggleChanges(allow: boolean) {
-    if (allow && !window.confirm(
-      "Allow Media Hub to change metadata and pictures in Jellyfin?\n\nEvery change is saved first, so you can undo it from the item's page. Your video files are not touched by this setting.",
-    )) return;
+    if (allow && !(await askConfirm(
+      "Allow Media Hub to change metadata, pictures, subtitles and skip markers in Jellyfin? Every change is saved first, so you can undo it from the item's page. Your video files are not touched by this setting.",
+      { okLabel: "Allow changes" },
+    ))) return;
     try {
       await api.setReadOnly(!allow);
       onChanged();
@@ -30,7 +32,7 @@ export default function Settings({ status, onChanged, onNav }: { status: Status;
   }
 
   async function disconnect() {
-    if (!window.confirm("Disconnect from this server? The saved key and the local list are removed from this computer. Your server is not touched.")) return;
+    if (!(await askConfirm("Disconnect from this server? The saved key and the local list are removed from this computer. Your server is not touched.", { okLabel: "Disconnect" }))) return;
     try {
       await api.disconnect();
       onChanged();
