@@ -63,6 +63,7 @@ file share. Infuse keeps reading everything from Jellyfin, so whatever you fix h
 - `src-tauri/src/` – Rust core. Pure logic is unit tested (`cargo test --manifest-path src-tauri/Cargo.toml`):
   `naming.rs`, `planner.rs` (renamer), `fingerprint.rs`, `detect.rs` (intros), `subs.rs` (scores),
   `picks.rs`, `storage.rs`, `downloads.rs`, `player.rs`.
+  `downloads.rs` (the Goblin module) is shared with the standalone [Goblin](https://github.com/pugcadet/goblin) app: keep both copies identical.
   `jellyfin.rs` holds the read-only `Client` and the separate `Writer`, which only exists when changes are allowed.
 - `src/` – the window (React + TypeScript).
 - `.github/workflows/build.yml` – builds and tests on Mac and Windows, then publishes the installers.

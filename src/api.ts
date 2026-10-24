@@ -360,6 +360,8 @@ export const api = {
   dlProbe: (url: string) => invoke<Probe>("dl_probe", { url }),
   dlStart: (req: DlRequest) => invoke<number>("dl_start", { req }),
   dlCancel: (id: number) => invoke<void>("dl_cancel", { id }),
+  /** Shows a downloaded file (or with null, the download folder) in Finder / Explorer. */
+  dlReveal: (path: string | null) => invoke<void>("dl_reveal", { path }),
   storageScan: (folder: string) => invoke<FileRow[]>("storage_scan", { folder }),
   hevcEncoders: () => invoke<string[]>("hevc_encoders"),
   storageStart: (req: StorageJob) => invoke<number>("storage_start", { req }),

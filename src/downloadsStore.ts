@@ -10,14 +10,20 @@ export interface Job {
   speed: string;
   eta: string;
   text: string;
+  /** Playlists: "3/12". */
+  item: string;
+  /** Files saved so far (full paths). */
+  files: string[];
 }
 
+// Same events as the standalone Goblin app (downloads.rs is shared).
 interface DlEvent {
   id: number;
-  kind: "progress" | "status" | "done" | "failed" | "cancelled";
+  kind: "progress" | "status" | "title" | "file" | "done" | "failed" | "cancelled";
   percent: number | null;
   speed: string | null;
   eta: string | null;
+  item: string | null;
   text: string | null;
 }
 
@@ -39,15 +45,21 @@ function ensureListening() {
       switch (e.kind) {
         case "progress":
           // A playlist restarts at 0% for each video; keep the bar moving forward per item.
-          return { ...j, percent: e.percent ?? j.percent, speed: e.speed ?? "", eta: e.eta ?? "" };
+          return { ...j, percent: e.percent ?? j.percent, speed: e.speed ?? "", eta: e.eta ?? "", item: e.item ?? j.item };
         case "status":
           return { ...j, text: e.text ?? j.text };
+        case "title":
+          return { ...j, text: e.text ?? j.text };
+        case "file":
+          return e.text ? { ...j, files: [...j.files, e.text] } : j;
         case "done":
-          return { ...j, state: "done", percent: 100, eta: "", speed: "", text: "Finished" };
+          return { ...j, state: "done", percent: 100, eta: "", speed: "", text: e.text ?? "Finished" };
         case "failed":
           return { ...j, state: "failed", text: e.text ?? "Failed" };
         case "cancelled":
           return { ...j, state: "cancelled", text: "Cancelled" };
+        default:
+          return j;
       }
     });
   });
@@ -55,7 +67,7 @@ function ensureListening() {
 
 export function addJob(id: number, title: string) {
   ensureListening();
-  jobs = [{ id, title, state: "running", percent: 0, speed: "", eta: "", text: "Starting…" }, ...jobs];
+  jobs = [{ id, title, state: "running", percent: 0, speed: "", eta: "", text: "Starting…", item: "", files: [] }, ...jobs];
   notify();
 }
 

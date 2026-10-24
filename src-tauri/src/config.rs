@@ -22,6 +22,8 @@ pub struct Settings {
     pub device_id: Option<String>,
     /// Where the downloader saves files.
     pub download_dir: Option<String>,
+    /// Browser the downloader may borrow YouTube sign-in cookies from ("firefox", ...). None = off.
+    pub cookies_browser: Option<String>,
     /// While true, the app only reads from Jellyfin. Later modules check this
     /// flag before they change anything. It starts on and stays on by default.
     pub read_only: bool,
@@ -38,6 +40,7 @@ impl Default for Settings {
             path_map: None,
             device_id: None,
             download_dir: None,
+            cookies_browser: None,
             read_only: true,
         }
     }

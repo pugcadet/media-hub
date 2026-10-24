@@ -223,10 +223,15 @@ export default function Downloads({ onNav }: { onNav: (v: View) => void }) {
                   <div>{j.title}</div>
                   <div className="progress"><span style={{ width: `${Math.max(2, Math.min(100, j.percent))}%` }} className={j.state} /></div>
                   <div className="muted small mono">
-                    {j.state === "running" ? `${j.percent.toFixed(0)}% ${j.speed} ${j.eta ? `· ${j.eta} left` : ""} · ` : ""}{j.text}
+                    {j.state === "running" ? `${j.item ? `Item ${j.item} · ` : ""}${j.percent.toFixed(0)}% ${j.speed} ${j.eta ? `· ${j.eta} left` : ""} · ` : ""}{j.text}
                   </div>
                 </div>
                 {j.state === "running" && <button onClick={() => void api.dlCancel(j.id)}>Cancel</button>}
+                {j.state === "done" && j.files.length > 0 && (
+                  <button onClick={() => void api.dlReveal(j.files[j.files.length - 1]).catch((e) => setMessage({ text: errorText(e), error: true }))}>
+                    Show in {navigator.userAgent.includes("Mac") ? "Finder" : "Explorer"}
+                  </button>
+                )}
               </div>
             ))}
           </section>

@@ -81,6 +81,9 @@ pub fn run() {
             downloads::dl_probe,
             downloads::dl_start,
             downloads::dl_cancel,
+            downloads::dl_search,
+            downloads::dl_reveal,
+            downloads::dl_set_cookies,
             storage::storage_scan,
             storage::hevc_encoders,
             storage::storage_start,
@@ -89,6 +92,12 @@ pub fn run() {
             storage::trash_info,
             storage::trash_empty,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Media Hub");
+        .build(tauri::generate_context!())
+        .expect("error while running Media Hub")
+        .run(|_app, event| {
+            // Quitting stops every download (and the ffmpeg it started).
+            if let tauri::RunEvent::Exit = event {
+                downloads::kill_all();
+            }
+        });
 }
