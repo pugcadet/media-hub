@@ -42,6 +42,7 @@ export default function App() {
         onBack={() => setItemStack((s) => s.slice(0, -1))}
         onOpen={(id) => setItemStack((s) => [...s, id])}
         onNav={nav}
+        subLangs={status.subLangs}
       />
     );
   if (view === "renamer") return <Renamer status={status} onChanged={refresh} onNav={nav} />;

@@ -5,6 +5,7 @@ export interface Status {
   serverUrl: string | null;
   serverName: string | null;
   libraryRoot: string | null;
+  subLangs: string[];
   readOnly: boolean;
   movies: number;
   series: number;
@@ -75,7 +76,7 @@ export type ImageKind = "Primary" | "Backdrop" | "Logo" | "Thumb" | "Banner";
 export interface Change {
   id: number;
   at: number;
-  action: "item_update" | "identify" | "image";
+  action: "item_update" | "identify" | "image" | "subtitle";
   target: string;
   undone: boolean;
 }
@@ -103,6 +104,10 @@ export interface JfItem {
   IndexNumber?: number;
   SeriesId?: string;
   SeriesName?: string;
+}
+
+export interface JfChild extends JfItem {
+  MediaStreams?: { Type: string; Language?: string; IsForced?: boolean }[];
 }
 
 export interface JfImage {
@@ -156,6 +161,56 @@ export interface ItemEdits {
   lockData?: boolean;
 }
 
+export interface Culture {
+  DisplayName: string;
+  Name: string;
+  ThreeLetterISOLanguageName: string;
+  ThreeLetterISOLanguageNames?: string[];
+}
+
+export interface SubStream {
+  index: number;
+  language: string;
+  title: string;
+  external: boolean;
+  forced: boolean;
+  path: string;
+}
+
+export interface SubInfo {
+  Id?: string;
+  Name?: string;
+  ProviderName?: string;
+  Format?: string;
+  Author?: string;
+  Comment?: string;
+  DownloadCount?: number;
+  CommunityRating?: number;
+  IsHashMatch?: boolean;
+  HearingImpaired?: boolean;
+  Forced?: boolean;
+  MachineTranslated?: boolean;
+  AiTranslated?: boolean;
+}
+
+export interface ScoredSub {
+  sub: SubInfo;
+  score: number;
+  reasons: string[];
+}
+
+export interface SubOptions {
+  file: string;
+  current: SubStream[];
+  results: ScoredSub[];
+}
+
+export interface AutoResult {
+  outcome: "has" | "downloaded" | "low" | "none";
+  score: number | null;
+  name: string | null;
+}
+
 export type Sort = "name" | "rating" | "year" | "added";
 export type Kind = "movie" | "series" | null;
 
@@ -185,6 +240,14 @@ export const api = {
   undoChange: (changeId: number) => invoke<void>("undo_change", { changeId }),
   refreshItem: (id: string, replaceAll: boolean) => invoke<void>("refresh_item", { id, replaceAll }),
   setReadOnly: (value: boolean) => invoke<void>("set_read_only", { value }),
+  languages: () => invoke<Culture[]>("languages"),
+  setSubLangs: (langs: string[]) => invoke<void>("set_sub_langs", { langs }),
+  children: (id: string) => invoke<JfChild[]>("item_children", { id }),
+  subtitleOptions: (id: string, lang: string) => invoke<SubOptions>("subtitle_options", { id, lang }),
+  subtitleDownload: (id: string, subtitleId: string, lang: string, codes: string[]) =>
+    invoke<void>("subtitle_download", { id, subtitleId, lang, codes }),
+  subtitleAuto: (id: string, lang: string, codes: string[], minScore: number) =>
+    invoke<AutoResult>("subtitle_auto", { id, lang, codes, minScore }),
   undo: (batch: string) => invoke<{ restored: number; skipped: string[] }>("undo_rename", { batch }),
 };
 
@@ -213,4 +276,27 @@ export function imageUrl(id: string, kind: ImageKind, width: number, index = 0, 
 /** Candidate pictures from TMDB/TVDB/fanart, fetched by the app (only from known image sites). */
 export function remoteImageUrl(url: string): string {
   return `${IMG_BASE}/remote?u=${encodeURIComponent(url)}`;
+}
+
+// Language list from Jellyfin, loaded once.
+let culturesCache: Promise<Culture[]> | null = null;
+export function cultures(): Promise<Culture[]> {
+  if (!culturesCache) {
+    culturesCache = api.languages().catch((e) => {
+      culturesCache = null;
+      throw e;
+    });
+  }
+  return culturesCache;
+}
+
+/** All 3-letter codes Jellyfin may use for a language ("dut" and "nld" for Dutch). */
+export function codesFor(code: string, list: Culture[]): string[] {
+  const c = list.find((x) => x.ThreeLetterISOLanguageName === code || x.ThreeLetterISOLanguageNames?.includes(code));
+  return [...new Set([code, ...(c ? [c.ThreeLetterISOLanguageName, ...(c.ThreeLetterISOLanguageNames ?? [])] : [])])];
+}
+
+export function languageName(code: string, list: Culture[]): string {
+  const c = list.find((x) => x.ThreeLetterISOLanguageName === code || x.ThreeLetterISOLanguageNames?.includes(code));
+  return c ? c.DisplayName : code;
 }

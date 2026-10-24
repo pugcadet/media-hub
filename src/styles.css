@@ -152,3 +152,10 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .match .art { width: 90px; flex: 0 0 90px; }
 .match-text { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; min-width: 0; }
 .match-text p { margin: 0; }
+
+/* ---- subtitles */
+.score { min-width: 34px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; margin-top: 2px; }
+.score.good { background: #1f3b35; color: #8fe0d0; } .score.fair { background: #3a3220; color: #e8b04a; } .score.poor { background: #3a2422; color: var(--danger); }
+.subrow { align-items: center; }
+.form label.wide-label { flex: 0 0 auto; min-width: 140px; }
+button.link.x { margin-left: 6px; color: var(--muted); }

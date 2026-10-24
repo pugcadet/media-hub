@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, errorText, Status } from "./api";
 import Nav from "./Nav";
+import { SubLangSettings } from "./Subtitles";
 import type { View } from "./App";
 
 export default function Settings({ status, onChanged, onNav }: { status: Status; onChanged: () => void; onNav: (v: View) => void }) {
@@ -76,7 +77,9 @@ export default function Settings({ status, onChanged, onNav }: { status: Status;
           <div className="row"><button onClick={() => void chooseRoot()}>{status.libraryRoot ? "Change folder" : "Choose folder"}</button></div>
         </section>
 
-        <p className="muted small">Media Hub 0.3 · your API key is kept in this computer's secure storage.</p>
+        <SubLangSettings subLangs={status.subLangs} onChanged={onChanged} />
+
+        <p className="muted small">Media Hub 0.4 · your API key is kept in this computer's secure storage.</p>
       </main>
     </div>
   );

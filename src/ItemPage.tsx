@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, Details, errorText, imageUrl, ImageKind, ItemEdits, JfItem, remoteImageUrl, RemoteImage, SearchResult } from "./api";
 import Nav from "./Nav";
+import { EpisodesTab, SubtitlesTab } from "./Subtitles";
 import type { View } from "./App";
 
-type Tab = "details" | "art" | "identify" | "seasons";
+type Tab = "details" | "art" | "identify" | "seasons" | "subs" | "episodes";
 const KINDS: { kind: ImageKind; label: string; wide: boolean }[] = [
   { kind: "Primary", label: "Poster", wide: false },
   { kind: "Backdrop", label: "Backdrop", wide: true },
@@ -12,7 +13,7 @@ const KINDS: { kind: ImageKind; label: string; wide: boolean }[] = [
   { kind: "Banner", label: "Banner", wide: true },
 ];
 
-const ACTION_LABEL: Record<string, string> = { item_update: "Edited details", identify: "Identified", image: "Changed picture" };
+const ACTION_LABEL: Record<string, string> = { item_update: "Edited details", identify: "Identified", image: "Changed picture", subtitle: "Downloaded subtitle" };
 
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
@@ -71,7 +72,7 @@ function diff(a: Form, b: Form): ItemEdits {
   return e;
 }
 
-export default function ItemPage({ id, onBack, onOpen, onNav }: { id: string; onBack: () => void; onOpen: (id: string) => void; onNav: (v: View) => void }) {
+export default function ItemPage({ id, onBack, onOpen, onNav, subLangs }: { id: string; onBack: () => void; onOpen: (id: string) => void; onNav: (v: View) => void; subLangs: string[] }) {
   const [d, setD] = useState<Details | null>(null);
   const [tab, setTab] = useState<Tab>("details");
   const [form, setForm] = useState<Form | null>(null);
@@ -128,6 +129,8 @@ export default function ItemPage({ id, onBack, onOpen, onNav }: { id: string; on
     ["art", "Artwork"],
     ...(kind ? ([["identify", "Identify"]] as [Tab, string][]) : []),
     ...(d.seasons.length ? ([["seasons", `Seasons (${d.seasons.length})`]] as [Tab, string][]) : []),
+    ...(isSeason ? ([["episodes", "Episodes"]] as [Tab, string][]) : []),
+    ...(item.Type === "Movie" || item.Type === "Episode" ? ([["subs", "Subtitles"]] as [Tab, string][]) : []),
   ];
 
   return (
@@ -243,6 +246,10 @@ export default function ItemPage({ id, onBack, onOpen, onNav }: { id: string; on
             }
           />
         )}
+
+        {tab === "subs" && <SubtitlesTab id={id} canEdit={d.canEdit} subLangs={subLangs} />}
+
+        {tab === "episodes" && <EpisodesTab id={id} canEdit={d.canEdit} subLangs={subLangs} onOpen={onOpen} />}
 
         {tab === "seasons" && (
           <section className="grid">
