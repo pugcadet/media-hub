@@ -1,0 +1,86 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to publish the installers (Releases) and the build log (ci-logs branch)
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, label: mac, bundles: dmg, glob: "src-tauri/target/release/bundle/dmg/*.dmg" }
+          - { os: windows-latest, label: windows, bundles: nsis, glob: "src-tauri/target/release/bundle/nsis/*.exe" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install JavaScript packages
+        run: npm install --no-audit --no-fund 2>&1 | tee -a ci.log
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee -a ci.log
+
+      - name: Build installer
+        run: npx tauri build --bundles ${{ matrix.bundles }} 2>&1 | tee -a ci.log
+
+      - name: Publish installer
+        run: |
+          set -e
+          tag="build-${{ github.run_number }}-${{ matrix.label }}"
+          gh release create "$tag" ${{ matrix.glob }} \
+            --prerelease \
+            --title "Media Hub ${{ matrix.label }} build ${{ github.run_number }}" \
+            --notes "Built from commit ${{ github.sha }}."
+
+      # Always runs, also after a failure: copies the log (and the lock files, which
+      # pin the exact package versions) to a branch so it can be read and fixed.
+      - name: Save build log
+        if: always()
+        run: |
+          mkdir -p ../ci-logs-work && cd ../ci-logs-work
+          rm -rf repo && mkdir repo && cd repo
+          git init -q -b ci-logs
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin ci-logs || true
+          git checkout -q ci-logs 2>/dev/null || git checkout -q -b ci-logs
+          git reset -q --hard FETCH_HEAD 2>/dev/null || true
+          mkdir -p "${{ matrix.label }}"
+          cp "$GITHUB_WORKSPACE/ci.log" "${{ matrix.label }}/ci.log" || echo "no log produced" > "${{ matrix.label }}/ci.log"
+          echo "job status: ${{ job.status }}  commit: ${{ github.sha }}  run: ${{ github.run_number }}" > "${{ matrix.label }}/status.txt"
+          if [ "${{ matrix.label }}" = "mac" ]; then
+            cp "$GITHUB_WORKSPACE/package-lock.json" . 2>/dev/null || true
+            cp "$GITHUB_WORKSPACE/src-tauri/Cargo.lock" . 2>/dev/null || true
+          fi
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          git add -A
+          git commit -q -m "log: ${{ matrix.label }} run ${{ github.run_number }}" || exit 0
+          for i in 1 2 3 4 5; do
+            git push -q origin ci-logs && exit 0
+            git fetch -q --depth 1 origin ci-logs && git rebase -q FETCH_HEAD || true
+            sleep 3
+          done
+          exit 0
