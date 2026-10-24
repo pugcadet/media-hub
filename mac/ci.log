@@ -1,41 +1,24 @@
 
 added 72 packages in 2s
 [1m[92m    Updating[0m crates.io index
-[1m[92m     Locking[0m 4 packages to highest compatible versions
-[1m[92m      Adding[0m rfd v0.16.1
-[1m[92m      Adding[0m tauri-plugin v2.7.2
-[1m[92m      Adding[0m tauri-plugin-dialog v2.8.3
-[1m[92m      Adding[0m tauri-plugin-fs v2.7.1
-[1m[92m   Compiling[0m media-hub v0.1.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[33mwarning[0m[1m: method `is_empty` is never used[0m
-  [1m[94m--> [0msrc/fingerprint.rs:77:12
-   [1m[94m|[0m
-[1m[94m73[0m [1m[94m|[0m impl Fingerprint {
-   [1m[94m|[0m [1m[94m----------------[0m [1m[94mmethod in this implementation[0m
-[1m[94m...[0m
-[1m[94m77[0m [1m[94m|[0m     pub fn is_empty(&self) -> bool {
-   [1m[94m|[0m            [1m[33m^^^^^^^^[0m
-   [1m[94m|[0m
-   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+[1m[92m   Compiling[0m media-hub v0.8.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 15.17s
+[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-60d02e3dd1f7f069)
 
-[1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 12.04s
-[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-22cbf1cb40a42cf3)
-
-running 85 tests
+running 86 tests
 test config::tests::key_validation ... ok
 test detect::tests::chapters_with_names_are_used ... ok
-test detect::tests::windows_and_snapping ... ok
 test config::tests::rejects_bad_input ... ok
 test config::tests::strips_trailing_slash_query_and_fragment ... ok
 test config::tests::adds_scheme_and_keeps_port ... ok
-test downloads::tests::audio_mode ... ok
+test detect::tests::windows_and_snapping ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
+test downloads::tests::audio_mode ... ok
 test downloads::tests::builds_safe_arguments ... ok
 test downloads::tests::summarizes_playlists ... ok
+test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
 test fingerprint::tests::fft_matches_a_plain_dft ... ok
 test downloads::tests::reads_progress_and_checksums ... ok
-test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
 test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
 test fingerprint::tests::silence_does_not_match ... ok
 test fsops::tests::apply_then_undo_restores_everything ... ok
@@ -54,6 +37,7 @@ test jellyfin::tests::missing_null_and_value_are_different ... ok
 test jellyfin::tests::parses_a_jellyfin_page ... ok
 test media_tools::tests::learns_and_reuses_the_path_map ... ok
 test media_tools::tests::splits_both_separator_styles ... ok
+test meta_cmds::tests::recognises_pictures_by_content ... ok
 test naming::tests::bad_templates_are_rejected ... ok
 test naming::tests::episode_formats ... ok
 test naming::tests::names_with_years_and_ids ... ok
@@ -109,9 +93,9 @@ test fingerprint::tests::survives_noise_like_a_different_encode ... ok
 test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 85 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.24s
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.91s
 
-[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-0165e753c8566179)
+[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-998c40114bdc97d9)
 
 running 0 tests
 
@@ -126,7 +110,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         Info Looking up installed tauri packages to check mismatched versions...
      Running beforeBuildCommand `npm run build`
 
-> media-hub@0.6.0 build
+> media-hub@0.8.0 build
 > tsc && vite build
 
 [36mvite v5.4.21 [32mbuilding for production...[36m[39m
@@ -136,32 +120,20 @@ rendering chunks...
 computing gzip size...
 [2mdist/[22m[32mindex.html                 [39m[1m[2m  0.39 kB[22m[1m[22m[2m │ gzip:   0.27 kB[22m
 [2mdist/[22m[2massets/[22m[35mindex-DVRFIff4.css  [39m[1m[2m 12.86 kB[22m[1m[22m[2m │ gzip:   3.44 kB[22m
-[2mdist/[22m[2massets/[22m[36mindex-BGQdt8MX.js   [39m[1m[33m827.49 kB[39m[22m[2m │ gzip: 257.81 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-Ce7fuMjl.js   [39m[1m[33m827.79 kB[39m[22m[2m │ gzip: 257.88 kB[22m
 [33m
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 1.14s[39m
-[1m[92m   Compiling[0m media-hub v0.1.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[33mwarning[0m[1m: method `is_empty` is never used[0m
-  [1m[94m--> [0msrc/fingerprint.rs:77:12
-   [1m[94m|[0m
-[1m[94m73[0m [1m[94m|[0m impl Fingerprint {
-   [1m[94m|[0m [1m[94m----------------[0m [1m[94mmethod in this implementation[0m
-[1m[94m...[0m
-[1m[94m77[0m [1m[94m|[0m     pub fn is_empty(&self) -> bool {
-   [1m[94m|[0m            [1m[33m^^^^^^^^[0m
-   [1m[94m|[0m
-   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-[1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 1m 40s
+[32m✓ built in 1.34s[39m
+[1m[92m   Compiling[0m media-hub v0.8.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 2m 00s
        Built application at: /Users/runner/work/media-hub/media-hub/src-tauri/target/release/media-hub
     Bundling Media Hub.app (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app)
-    Bundling Media Hub_0.1.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.1.0_aarch64.dmg)
+    Bundling Media Hub_0.8.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.8.0_aarch64.dmg)
      Running bundle_dmg.sh
     Cleaning /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app
     Finished 1 bundle at:
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.1.0_aarch64.dmg (5.13 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.8.0_aarch64.dmg (5.14 MiB)
 
