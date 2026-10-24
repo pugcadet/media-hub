@@ -61,9 +61,9 @@ jobs:
             (cd out && sha256sum MediaHub-windows-setup.exe > SHA256SUMS-windows.txt)
           fi
           # Old per-build pre-releases from earlier versions of this workflow.
-          gh release list --limit 100 --json tagName -q '.[].tagName' \
-            | grep -E '^build-[0-9]+-(mac|windows)$' \
-            | while read -r old; do gh release delete "$old" --yes --cleanup-tag || true; done
+          for old in $(gh release list --limit 100 --json tagName -q '.[].tagName' | grep -E '^build-[0-9]+-(mac|windows)$' || true); do
+            gh release delete "$old" --yes --cleanup-tag || true
+          done
           # One release per version; both computers add their files to it.
           gh release create "$tag" --title "Media Hub $version" --notes "Download MediaHub-macos.dmg (Mac) or MediaHub-windows-setup.exe (Windows). Already installed? Media Hub updates itself: Settings → Updates." 2>/dev/null || true
           gh release upload "$tag" out/* --clobber
