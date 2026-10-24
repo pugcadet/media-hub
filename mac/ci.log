@@ -14,19 +14,19 @@ added 74 packages in 2s
     [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 [1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 12.90s
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 12.16s
 [1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-233f2c53c6391718)
 
-running 98 tests
+running 97 tests
 test config::tests::key_validation ... ok
+test config::tests::rejects_bad_input ... ok
 test config::tests::adds_scheme_and_keeps_port ... ok
 test config::tests::strips_trailing_slash_query_and_fragment ... ok
-test config::tests::rejects_bad_input ... ok
-test detect::tests::chapters_with_names_are_used ... ok
 test detect::tests::windows_and_snapping ... ok
+test detect::tests::chapters_with_names_are_used ... ok
 test downloads::tests::audio_mode ... ok
-test downloads::tests::plain_error_text ... ok
 test downloads::tests::builds_safe_arguments ... ok
+test downloads::tests::plain_error_text ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
 test downloads::tests::search_targets_and_results ... ok
@@ -38,6 +38,7 @@ test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
 test fingerprint::tests::silence_does_not_match ... ok
 test fsops::tests::apply_then_undo_restores_everything ... ok
 test fsops::tests::case_only_rename_works ... ok
+test fsops::tests::folders_are_renamed_after_their_files_and_undo_reverses_it ... ok
 test fsops::tests::scan_skips_hidden_and_nas_folders ... ok
 test fsops::tests::unsafe_paths_are_refused ... ok
 test images::tests::reads_width ... ok
@@ -66,18 +67,16 @@ test picks::tests::different_days_differ ... ok
 test picks::tests::handles_small_and_empty_lists ... ok
 test picks::tests::no_duplicates ... ok
 test picks::tests::same_day_same_picks_even_if_input_order_changes ... ok
-test planner::tests::already_correct_files_are_unchanged ... ok
-test planner::tests::bad_patterns_report_an_error ... ok
-test planner::tests::existing_target_conflicts_but_case_only_change_does_not ... ok
-test planner::tests::find_replace_changes_only_the_file_name ... ok
-test planner::tests::movie_id_tags_can_be_kept ... ok
-test planner::tests::movies_get_their_own_folder ... ok
+test planner::tests::conflicts_and_unreadable_names ... ok
+test planner::tests::detects_shows_and_movies ... ok
+test planner::tests::episodes_can_be_moved_into_season_folders_on_request ... ok
+test planner::tests::find_replace_only_touches_file_names ... ok
+test planner::tests::movies_rename_their_own_folder ... ok
 test planner::tests::online_movie_matches_fix_titles ... ok
-test planner::tests::renames_tv_files_into_standard_layout ... ok
-test planner::tests::titles_from_the_server_win_over_file_names ... ok
-test planner::tests::two_files_for_one_name_conflict ... ok
-test planner::tests::unreadable_names_are_left_alone ... ok
-test planner::tests::year_comes_from_file_names_when_folder_has_none ... ok
+test planner::tests::renames_in_place_including_folders ... ok
+test planner::tests::running_twice_finds_nothing_to_do ... ok
+test planner::tests::titles_from_the_internet_win ... ok
+test planner::tests::year_and_name_come_from_files_and_folder_is_kept_when_unrelated ... ok
 test player::tests::keys_are_removed ... ok
 test player::tests::playlists_stay_inside_the_session ... ok
 test player::tests::splits_folder_and_file ... ok
@@ -117,7 +116,7 @@ test fingerprint::tests::survives_noise_like_a_different_encode ... ok
 test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 98 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.51s
+test result: ok. 97 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.33s
 
 [1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-3ad08a9e7a458ec5)
 
@@ -167,8 +166,8 @@ computing gzip size...
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-ext-400-normal-Bc8Ftmh3.woff2  [39m[1m[2m  7.34 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-400-normal-BMzJvInZ.woff2          [39m[1m[2m  7.84 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-700-normal-Dw_fZAg2.woff2          [39m[1m[2m  7.85 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-500-normal-B1OEZity.woff2          [39m[1m[2m  7.87 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-DvRl3Mj-.woff2          [39m[1m[2m  7.87 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-500-normal-B1OEZity.woff2          [39m[1m[2m  7.87 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-dm74KBQw.woff2         [39m[1m[2m  8.19 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-700-normal-DYOwVNan.woff2         [39m[1m[2m  8.28 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-400-normal-CMDvPJRp.woff2         [39m[1m[2m  8.29 kB[22m[1m[22m
@@ -199,7 +198,7 @@ computing gzip size...
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 1.09s[39m
+[32m✓ built in 1.20s[39m
 [1m[92m   Compiling[0m media-hub v0.9.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
 [1m[33mwarning[0m[1m: method `candidate_ids` is never used[0m
    [1m[94m--> [0msrc/store.rs:376:12
@@ -213,7 +212,7 @@ computing gzip size...
     [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 [1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 1m 46s
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 1m 51s
        Built application at: /Users/runner/work/media-hub/media-hub/src-tauri/target/release/media-hub
     Bundling Media Hub.app (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app)
      Signing with identity "-"
@@ -227,6 +226,6 @@ Signing /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/m
     Bundling Media Hub_0.9.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.9.0_aarch64.dmg)
      Running bundle_dmg.sh
     Finished 2 bundles at:
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app (11.96 MiB)
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.9.0_aarch64.dmg (5.75 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app (11.99 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.9.0_aarch64.dmg (5.77 MiB)
 
