@@ -7,68 +7,94 @@ added 71 packages in 1s
 [1m[92m      Adding[0m tauri-plugin-dialog v2.8.3
 [1m[92m      Adding[0m tauri-plugin-fs v2.7.1
 [1m[92m   Compiling[0m media-hub v0.1.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 9.02s
+[1m[33mwarning[0m[1m: method `is_empty` is never used[0m
+  [1m[94m--> [0msrc/fingerprint.rs:77:12
+   [1m[94m|[0m
+[1m[94m73[0m [1m[94m|[0m impl Fingerprint {
+   [1m[94m|[0m [1m[94m----------------[0m [1m[94mmethod in this implementation[0m
+[1m[94m...[0m
+[1m[94m77[0m [1m[94m|[0m     pub fn is_empty(&self) -> bool {
+   [1m[94m|[0m            [1m[33m^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 10.97s
 [1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-1007d4f17cdb77b5)
 
-running 56 tests
+running 70 tests
 test config::tests::key_validation ... ok
+test detect::tests::chapters_with_names_are_used ... ok
+test detect::tests::windows_and_snapping ... ok
 test config::tests::rejects_bad_input ... ok
-test config::tests::adds_scheme_and_keeps_port ... ok
 test config::tests::strips_trailing_slash_query_and_fragment ... ok
+test config::tests::adds_scheme_and_keeps_port ... ok
+test fingerprint::tests::fft_matches_a_plain_dft ... ok
+test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
+test fingerprint::tests::silence_does_not_match ... ok
+test fsops::tests::apply_then_undo_restores_everything ... ok
+test fsops::tests::case_only_rename_works ... ok
+test fsops::tests::scan_skips_hidden_and_nas_folders ... ok
 test fsops::tests::unsafe_paths_are_refused ... ok
 test images::tests::reads_width ... ok
 test images::tests::remote_hosts_are_allow_listed ... ok
 test jellyfin::tests::bad_edits_are_refused ... ok
+test jellyfin::tests::client_rejects_odd_keys ... ok
 test jellyfin::tests::edits_touch_only_what_changed ... ok
-test fsops::tests::scan_skips_hidden_and_nas_folders ... ok
-test jellyfin::tests::id_and_image_kind_checks ... ok
 test jellyfin::tests::episode_titles_cover_double_episodes ... ok
+test jellyfin::tests::finds_segment_endpoints_in_the_api_description ... ok
+test jellyfin::tests::id_and_image_kind_checks ... ok
 test jellyfin::tests::missing_null_and_value_are_different ... ok
 test jellyfin::tests::parses_a_jellyfin_page ... ok
+test media_tools::tests::learns_and_reuses_the_path_map ... ok
+test media_tools::tests::splits_both_separator_styles ... ok
 test naming::tests::bad_templates_are_rejected ... ok
-test jellyfin::tests::client_rejects_odd_keys ... ok
-test fsops::tests::case_only_rename_works ... ok
+test naming::tests::episode_formats ... ok
+test naming::tests::names_with_years_and_ids ... ok
+test naming::tests::resolution_is_not_an_episode ... ok
 test naming::tests::sanitizing ... ok
-test fsops::tests::apply_then_undo_restores_everything ... ok
-test naming::tests::templates_fill_in_and_skip_optional_parts ... ok
 test naming::tests::seasons_from_folders ... ok
+test naming::tests::templates_fill_in_and_skip_optional_parts ... ok
+test naming::tests::titles_after_marker ... ok
 test picks::tests::date_check ... ok
 test picks::tests::different_days_differ ... ok
 test picks::tests::handles_small_and_empty_lists ... ok
 test picks::tests::no_duplicates ... ok
 test picks::tests::same_day_same_picks_even_if_input_order_changes ... ok
-test naming::tests::titles_after_marker ... ok
-test naming::tests::names_with_years_and_ids ... ok
-test planner::tests::bad_patterns_report_an_error ... ok
 test planner::tests::already_correct_files_are_unchanged ... ok
-test naming::tests::resolution_is_not_an_episode ... ok
-test planner::tests::movie_id_tags_can_be_kept ... ok
+test planner::tests::bad_patterns_report_an_error ... ok
 test planner::tests::existing_target_conflicts_but_case_only_change_does_not ... ok
-test naming::tests::episode_formats ... ok
-test planner::tests::titles_from_the_server_win_over_file_names ... ok
-test planner::tests::movies_get_their_own_folder ... ok
 test planner::tests::find_replace_changes_only_the_file_name ... ok
-test planner::tests::unreadable_names_are_left_alone ... ok
-test planner::tests::two_files_for_one_name_conflict ... ok
+test planner::tests::movie_id_tags_can_be_kept ... ok
+test planner::tests::movies_get_their_own_folder ... ok
 test planner::tests::renames_tv_files_into_standard_layout ... ok
+test planner::tests::titles_from_the_server_win_over_file_names ... ok
+test planner::tests::two_files_for_one_name_conflict ... ok
+test planner::tests::unreadable_names_are_left_alone ... ok
+test seg_cmds::tests::reads_jellyfin_segments ... ok
+test seg_cmds::tests::span_checks ... ok
 test store::tests::changes_are_listed_per_item ... ok
 test store::tests::empty_answer_keeps_old_list ... ok
-test sub_cmds::tests::forced_subtitles_do_not_count_as_having_the_language ... ok
 test store::tests::journal_records_batches ... ok
 test store::tests::search_is_literal_and_filters_kind ... ok
+test store::tests::sync_replaces_and_removes_old_items ... ok
+test store::tests::unknown_sort_falls_back_and_candidates_need_poster ... ok
+test sub_cmds::tests::forced_subtitles_do_not_count_as_having_the_language ... ok
 test sub_cmds::tests::language_lists_are_checked ... ok
 test sub_cmds::tests::reads_streams_and_file_name ... ok
 test subs::tests::hash_match_wins ... ok
 test subs::tests::language_codes ... ok
-test store::tests::sync_replaces_and_removes_old_items ... ok
-test subs::tests::parses_jellyfin_json ... ok
-test store::tests::unknown_sort_falls_back_and_candidates_need_poster ... ok
-test subs::tests::wrong_episode_is_zero ... ok
 test subs::tests::machine_translation_is_penalised ... ok
+test subs::tests::parses_jellyfin_json ... ok
 test subs::tests::ranking_sorts_and_drops_empty_ids ... ok
 test subs::tests::same_release_beats_other_release ... ok
+test subs::tests::wrong_episode_is_zero ... ok
+test fingerprint::tests::unrelated_audio_has_no_match ... ok
+test fingerprint::tests::survives_noise_like_a_different_encode ... ok
+test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
+test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.43s
 
 [1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-689e4e39d2d7dda4)
 
@@ -96,14 +122,26 @@ computing gzip size...
 [2mdist/[22m[32mindex.html                 [39m[1m[2m  0.39 kB[22m[1m[22m[2m │ gzip:  0.27 kB[22m
 [2mdist/[22m[2massets/[22m[35mindex-B3vvGiUk.css  [39m[1m[2m  9.22 kB[22m[1m[22m[2m │ gzip:  2.63 kB[22m
 [2mdist/[22m[2massets/[22m[36mindex-hIZ-GRUp.js   [39m[1m[2m186.63 kB[22m[1m[22m[2m │ gzip: 58.34 kB[22m
-[32m✓ built in 385ms[39m
+[32m✓ built in 389ms[39m
 [1m[92m   Compiling[0m media-hub v0.1.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 1m 37s
+[1m[33mwarning[0m[1m: method `is_empty` is never used[0m
+  [1m[94m--> [0msrc/fingerprint.rs:77:12
+   [1m[94m|[0m
+[1m[94m73[0m [1m[94m|[0m impl Fingerprint {
+   [1m[94m|[0m [1m[94m----------------[0m [1m[94mmethod in this implementation[0m
+[1m[94m...[0m
+[1m[94m77[0m [1m[94m|[0m     pub fn is_empty(&self) -> bool {
+   [1m[94m|[0m            [1m[33m^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 1m 39s
        Built application at: /Users/runner/work/media-hub/media-hub/src-tauri/target/release/media-hub
     Bundling Media Hub.app (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app)
     Bundling Media Hub_0.1.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.1.0_aarch64.dmg)
      Running bundle_dmg.sh
     Cleaning /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app
     Finished 1 bundle at:
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.1.0_aarch64.dmg (4.68 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.1.0_aarch64.dmg (4.78 MiB)
 
