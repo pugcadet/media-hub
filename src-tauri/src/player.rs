@@ -126,10 +126,20 @@ pub struct SubTrack {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AudioTrack {
+    index: i64,
+    title: String,
+    selected: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlayInfo {
     token: String,
     url: String,
     title: String,
+    subtitle: String,
+    audio: Vec<AudioTrack>,
     duration: f64,
     start: f64,
     subtitles: Vec<SubTrack>,
@@ -153,7 +163,7 @@ fn split_dir(path_query: &str) -> (String, String) {
 }
 
 #[tauri::command]
-pub async fn play_start(state: State<'_, AppState>, id: String, start: f64) -> Result<PlayInfo> {
+pub async fn play_start(state: State<'_, AppState>, id: String, start: f64, audio_index: Option<i64>) -> Result<PlayInfo> {
     if !valid_item_id(&id) {
         return Err(Error::msg("bad id"));
     }
@@ -161,7 +171,7 @@ pub async fn play_start(state: State<'_, AppState>, id: String, start: f64) -> R
     let device_id = state.device_id()?;
     let item = c.item_json(&id).await?;
     let start = start.max(0.0);
-    let body = json!({
+    let mut body = json!({
         "DeviceProfile": device_profile(),
         "StartTimeTicks": (start * TICKS_PER_SECOND) as i64,
         "EnableDirectPlay": false,
@@ -172,6 +182,9 @@ pub async fn play_start(state: State<'_, AppState>, id: String, start: f64) -> R
         "AutoOpenLiveStream": true,
         "MaxStreamingBitrate": 120_000_000
     });
+    if let Some(a) = audio_index.filter(|a| (0..200).contains(a)) {
+        body["AudioStreamIndex"] = json!(a);
+    }
     let info = c.playback_info(&id, &device_id, &body).await?;
     let source = info
         .get("MediaSources")
@@ -203,21 +216,51 @@ pub async fn play_start(state: State<'_, AppState>, id: String, start: f64) -> R
             default: s.get("IsDefault").and_then(Value::as_bool).unwrap_or(false),
         });
     }
+    let default_audio = audio_index.or_else(|| source.get("DefaultAudioStreamIndex").and_then(Value::as_i64));
+    let audio: Vec<AudioTrack> = source
+        .get("MediaStreams")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|s| s.get("Type").and_then(Value::as_str) == Some("Audio"))
+        .map(|s| {
+            let index = s.get("Index").and_then(Value::as_i64).unwrap_or(-1);
+            AudioTrack {
+                index,
+                title: s.get("DisplayTitle").and_then(Value::as_str).unwrap_or("Audio").to_string(),
+                selected: Some(index) == default_audio,
+            }
+        })
+        .collect();
     let segments = c.segments(&id).await.unwrap_or_default();
     sessions()
         .lock()
         .map_err(|_| Error::msg("internal error"))?
         .insert(tok.clone(), Session { dir, subs, device_id, play_session_id });
 
-    let title = match (item.get("SeriesName").and_then(Value::as_str), item.get("Name").and_then(Value::as_str)) {
-        (Some(series), Some(name)) => format!("{series} · {name}"),
-        (_, Some(name)) => name.to_string(),
-        _ => String::new(),
+    let name = item.get("Name").and_then(Value::as_str).unwrap_or("").to_string();
+    let (title, subtitle) = match item.get("SeriesName").and_then(Value::as_str) {
+        Some(series) => {
+            let se = item.get("ParentIndexNumber").and_then(Value::as_i64);
+            let ep = item.get("IndexNumber").and_then(Value::as_i64);
+            let mut parts = Vec::new();
+            if let Some(s) = se {
+                parts.push(if s == 0 { "Special".to_string() } else { format!("Season {s}") });
+            }
+            if let Some(e) = ep {
+                parts.push(format!("Episode {e}"));
+            }
+            parts.push(name);
+            (series.to_string(), parts.join(" · "))
+        }
+        None => (name, item.get("ProductionYear").and_then(Value::as_i64).map(|y| y.to_string()).unwrap_or_default()),
     };
     Ok(PlayInfo {
         url: format!("{}/s/{tok}/{master}", media_base()),
         token: tok,
         title,
+        subtitle,
+        audio,
         duration: item.get("RunTimeTicks").and_then(Value::as_f64).unwrap_or(0.0) / TICKS_PER_SECOND,
         start,
         subtitles: tracks,

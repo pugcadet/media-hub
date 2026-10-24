@@ -22,6 +22,7 @@ mod storage;
 mod store;
 mod sub_cmds;
 mod subs;
+mod updater;
 
 use tauri::Manager;
 
@@ -52,6 +53,11 @@ pub fn run() {
             commands::missing_subtitles,
             commands::set_tmdb_key,
             commands::set_title_lang,
+            commands::list_users,
+            commands::set_user,
+            commands::set_sync_watched,
+            updater::check_update,
+            updater::install_update,
             rename_cmds::pick_library_root,
             rename_cmds::list_folders,
             rename_cmds::plan_rename,

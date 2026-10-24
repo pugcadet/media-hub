@@ -20,6 +20,8 @@ pub struct Status {
     sub_langs: Vec<String>,
     title_lang: String,
     has_tmdb: bool,
+    sync_watched: bool,
+    user_id: Option<String>,
     read_only: bool,
     movies: i64,
     series: i64,
@@ -65,6 +67,8 @@ pub fn status(state: State<'_, AppState>) -> Result<Status> {
         sub_langs: s.sub_langs,
         title_lang: s.title_lang,
         has_tmdb: s.has_tmdb,
+        sync_watched: s.sync_watched,
+        user_id: s.user_id.clone(),
         read_only: s.read_only,
         movies: counts.movies,
         series: counts.series,
@@ -327,4 +331,33 @@ pub fn set_title_lang(state: State<'_, AppState>, lang: String) -> Result<()> {
         return Err(Error::msg("bad language"));
     }
     state.update_settings(|s| s.title_lang = lang)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInfo {
+    id: String,
+    name: String,
+    admin: bool,
+}
+
+#[tauri::command]
+pub async fn list_users(state: State<'_, AppState>) -> Result<Vec<UserInfo>> {
+    let users = state.reader().await?.users().await?;
+    Ok(users.into_iter().map(|(id, name, admin)| UserInfo { id, name, admin }).collect())
+}
+
+/// Which Jellyfin user's watched status, resume points and picks the app uses.
+#[tauri::command]
+pub async fn set_user(state: State<'_, AppState>, id: String) -> Result<()> {
+    let users = state.reader().await?.users().await?;
+    if !users.iter().any(|(u, _, _)| *u == id) {
+        return Err(Error::msg("Unknown user."));
+    }
+    state.update_settings(|s| s.user_id = Some(id))
+}
+
+#[tauri::command]
+pub fn set_sync_watched(state: State<'_, AppState>, value: bool) -> Result<()> {
+    state.update_settings(|s| s.sync_watched = value)
 }

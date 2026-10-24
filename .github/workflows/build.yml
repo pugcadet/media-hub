@@ -18,8 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-latest, label: mac, bundles: dmg, glob: "src-tauri/target/release/bundle/dmg/*.dmg" }
-          - { os: windows-latest, label: windows, bundles: nsis, glob: "src-tauri/target/release/bundle/nsis/*.exe" }
+          - { os: macos-latest, label: mac, bundles: "app,dmg" }
+          - { os: windows-latest, label: windows, bundles: nsis }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -46,18 +46,27 @@ jobs:
       - name: Build installer
         run: npx tauri build --bundles ${{ matrix.bundles }} 2>&1 | tee -a ci.log
 
-      - name: Publish installer
+      - name: Publish release
         run: |
           set -e
-          tag="build-${{ github.run_number }}-${{ matrix.label }}"
-          # Keep the Releases page tidy: remove older builds for this platform.
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          tag="v$version"
+          mkdir -p out
+          if [ "${{ matrix.label }}" = "mac" ]; then
+            tar -czf out/MediaHub-macos.app.tar.gz -C src-tauri/target/release/bundle/macos "Media Hub.app"
+            cp src-tauri/target/release/bundle/dmg/*.dmg out/MediaHub-macos.dmg
+            (cd out && shasum -a 256 MediaHub-macos.app.tar.gz MediaHub-macos.dmg > SHA256SUMS-macos.txt)
+          else
+            cp src-tauri/target/release/bundle/nsis/*-setup.exe out/MediaHub-windows-setup.exe
+            (cd out && sha256sum MediaHub-windows-setup.exe > SHA256SUMS-windows.txt)
+          fi
+          # Old per-build pre-releases from earlier versions of this workflow.
           gh release list --limit 100 --json tagName -q '.[].tagName' \
-            | grep -E '^build-[0-9]+-${{ matrix.label }}$' \
+            | grep -E '^build-[0-9]+-(mac|windows)$' \
             | while read -r old; do gh release delete "$old" --yes --cleanup-tag || true; done
-          gh release create "$tag" ${{ matrix.glob }} \
-            --prerelease \
-            --title "Media Hub ${{ matrix.label }} build ${{ github.run_number }}" \
-            --notes "Built from commit ${{ github.sha }}."
+          # One release per version; both computers add their files to it.
+          gh release create "$tag" --title "Media Hub $version" --notes "Download MediaHub-macos.dmg (Mac) or MediaHub-windows-setup.exe (Windows). Already installed? Media Hub updates itself: Settings → Updates." 2>/dev/null || true
+          gh release upload "$tag" out/* --clobber
 
       # Always runs, also after a failure: copies the log (and the lock files, which
       # pin the exact package versions) to a branch so it can be read and fixed.

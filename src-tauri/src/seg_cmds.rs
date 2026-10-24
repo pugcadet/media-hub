@@ -228,7 +228,7 @@ fn valid_span(s: &Span, duration: Option<f64>) -> bool {
     s.start >= 0.0 && s.end > s.start + 0.5 && duration.map(|d| s.end <= d + 1.0).unwrap_or(true)
 }
 
-/// Replaces this item's Intro and/or Outro segments. `None` leaves that kind alone;
+/// Replaces this item's Intro, Outro and/or Recap segments. `None` leaves that kind alone;
 /// a kind listed in `clear` is removed.
 #[tauri::command]
 pub async fn save_segments(
@@ -236,6 +236,7 @@ pub async fn save_segments(
     item_id: String,
     intro: Option<Span>,
     credits: Option<Span>,
+    recap: Option<Span>,
     clear: Vec<String>,
 ) -> Result<()> {
     if !valid_item_id(&item_id) {
@@ -257,8 +258,11 @@ pub async fn save_segments(
     if let Some(s) = credits {
         wanted.push(("Outro".into(), Some(s)));
     }
+    if let Some(s) = recap {
+        wanted.push(("Recap".into(), Some(s)));
+    }
     for k in clear {
-        if (k == "Intro" || k == "Outro") && !wanted.iter().any(|(w, _)| *w == k) {
+        if (k == "Intro" || k == "Outro" || k == "Recap") && !wanted.iter().any(|(w, _)| *w == k) {
             wanted.push((k, None));
         }
     }

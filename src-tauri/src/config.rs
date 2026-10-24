@@ -30,6 +30,8 @@ pub struct Settings {
     pub title_lang: String,
     /// Whether a TMDB key is saved (the key itself is in the key storage).
     pub has_tmdb: bool,
+    /// Send playback position and watched status back to Jellyfin (for the chosen user).
+    pub sync_watched: bool,
     /// While true, the app only reads from Jellyfin. Later modules check this
     /// flag before they change anything. It starts on and stays on by default.
     pub read_only: bool,
@@ -50,6 +52,7 @@ impl Default for Settings {
             cookies_browser: None,
             title_lang: "en-US".into(),
             has_tmdb: false,
+            sync_watched: true,
             read_only: true,
         }
     }

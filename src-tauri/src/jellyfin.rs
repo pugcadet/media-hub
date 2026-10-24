@@ -234,6 +234,22 @@ impl Client {
         q
     }
 
+    /// All Jellyfin users: (id, name, is admin).
+    pub async fn users(&self) -> Result<Vec<(String, String, bool)>> {
+        let users: Vec<serde_json::Value> = self.get_json("/Users", &[]).await?;
+        Ok(users
+            .iter()
+            .filter(|u| u.pointer("/Policy/IsDisabled").and_then(|v| v.as_bool()) != Some(true))
+            .filter_map(|u| {
+                Some((
+                    u.get("Id")?.as_str()?.replace('-', ""),
+                    u.get("Name")?.as_str()?.to_string(),
+                    u.pointer("/Policy/IsAdministrator").and_then(|v| v.as_bool()).unwrap_or(false),
+                ))
+            })
+            .collect())
+    }
+
     /// The first enabled administrator (an API key can act for any user).
     pub async fn pick_user(&self) -> Result<String> {
         let users: Vec<serde_json::Value> = self.get_json("/Users", &[]).await?;
@@ -765,6 +781,8 @@ pub struct ItemEdits {
     pub official_rating: Option<String>,
     pub provider_ids: Option<HashMap<String, String>>,
     pub lock_data: Option<bool>,
+    /// Language Jellyfin uses for this item's titles and summaries ("en", "nl", ...).
+    pub preferred_language: Option<String>,
 }
 
 /// Applies edits to the full item JSON, touching only the edited keys.
@@ -850,6 +868,13 @@ pub fn apply_edits(item: &mut serde_json::Value, e: &ItemEdits) -> Result<()> {
     }
     if let Some(v) = e.lock_data {
         obj.insert("LockData".into(), json!(v));
+    }
+    if let Some(v) = &e.preferred_language {
+        let v = v.trim();
+        if v.len() > 10 || !v.chars().all(|c| c.is_ascii_alphabetic() || c == '-') {
+            return Err(Error::msg("bad language"));
+        }
+        obj.insert("PreferredMetadataLanguage".into(), json!(v));
     }
     Ok(())
 }

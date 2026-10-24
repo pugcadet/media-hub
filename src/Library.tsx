@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errorText, Item, Kind, localDate, Sort, Status } from "./api";
+import { api, Attention, errorText, imageUrl, Item, Kind, Library as Lib, localDate, Pick, Sort, Status } from "./api";
 import Poster from "./Poster";
-import Nav from "./Nav";
-import type { View } from "./App";
+import type { Route } from "./App";
 
 const PAGE = 120;
 
@@ -15,18 +14,46 @@ function ago(ts: number | null): string {
   return `${Math.round(mins / 60 / 24)} d ago`;
 }
 
-export default function Library({ status, onChanged, onNav, onOpen }: { status: Status; onChanged: () => void; onNav: (v: View) => void; onOpen: (id: string) => void }) {
+const FLAG_TITLE: Record<string, string> = { unmatched: "Unmatched titles", noposter: "Titles without a poster", unwatched: "Not watched yet" };
+
+interface Props {
+  status: Status;
+  libraries: Lib[];
+  attention: Attention | null;
+  route: Route;
+  onRoute: (r: Route) => void;
+  onChanged: () => void;
+  onOpen: (id: string) => void;
+}
+
+function PickCard({ p, onOpen }: { p: Pick; onOpen: (id: string) => void }) {
+  return (
+    <button className="pick-card" onClick={() => onOpen(p.id)}>
+      <img src={imageUrl(p.artId, "Backdrop", 640)} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} />
+      <div className="pick-shade" />
+      <div className="pick-text">
+        <div className="pick-why">{p.why}</div>
+        <div className="pick-title">{p.title}</div>
+        <div className="pick-meta">{p.meta}</div>
+      </div>
+    </button>
+  );
+}
+
+export default function Library({ status, libraries, attention, route, onRoute, onChanged, onOpen }: Props) {
+  const lib = libraries.find((l) => l.id === route.library) ?? null;
   const [kind, setKind] = useState<Kind>(null);
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
   const [sort, setSort] = useState<Sort>("name");
   const [items, setItems] = useState<Item[]>([]);
   const [more, setMore] = useState(false);
-  const [picks, setPicks] = useState<Item[]>([]);
+  const [picks, setPicks] = useState<Pick[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const loading = useRef(false);
+  const flag = route.flag ?? null;
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query), 200);
@@ -38,7 +65,7 @@ export default function Library({ status, onChanged, onNav, onOpen }: { status: 
       if (loading.current) return;
       loading.current = true;
       try {
-        const rows = await api.list(kind, debounced, sort, offset, PAGE);
+        const rows = await api.list(kind, debounced, sort, offset, PAGE, route.library ?? null, flag);
         setItems((prev) => (offset === 0 ? rows : [...prev, ...rows]));
         setMore(rows.length === PAGE);
       } catch (e) {
@@ -47,23 +74,19 @@ export default function Library({ status, onChanged, onNav, onOpen }: { status: 
         loading.current = false;
       }
     },
-    [kind, debounced, sort],
+    [kind, debounced, sort, route.library, flag],
   );
 
   const total = status.movies + status.series;
-  const lastSync = status.lastSync;
-
-  // Reload from the top when a filter changes or after a sync.
   useEffect(() => {
     loading.current = false;
     void loadPage(0);
-  }, [loadPage, total, lastSync]);
+  }, [loadPage, total, status.lastSync]);
 
   useEffect(() => {
     api.picks(localDate()).then(setPicks).catch(() => setPicks([]));
-  }, [total, lastSync]);
+  }, [status.lastSync]);
 
-  // Infinite scroll
   useEffect(() => {
     const el = sentinel.current;
     if (!el || !more) return;
@@ -74,7 +97,6 @@ export default function Library({ status, onChanged, onNav, onOpen }: { status: 
     return () => io.disconnect();
   }, [more, items.length, loadPage]);
 
-  // First run: pull the library automatically.
   const autoSynced = useRef(false);
   const sync = useCallback(async () => {
     setSyncing(true);
@@ -90,79 +112,87 @@ export default function Library({ status, onChanged, onNav, onOpen }: { status: 
   }, [onChanged]);
 
   useEffect(() => {
-    if (!autoSynced.current && status.lastSync === null) {
+    // First run, or the library list predates library support: fetch everything once.
+    if (!autoSynced.current && (status.lastSync === null || (libraries.length === 0 && total > 0))) {
       autoSynced.current = true;
       void sync();
     }
-  }, [status.lastSync, sync]);
+  }, [status.lastSync, libraries.length, total, sync]);
 
-  const chip = (label: string, value: Kind) => (
-    <button className={`chip ${kind === value ? "on" : ""}`} onClick={() => setKind(value)}>{label}</button>
-  );
+  const title = flag ? FLAG_TITLE[flag] ?? "Library" : lib?.name ?? "Library";
+  const mixed = !lib || lib.kind === "mixed";
+  const showPicks = !flag && !debounced && picks.length > 0 && (!route.library || route.library === libraries[0]?.id);
 
   return (
-    <div className="app">
-      <header>
-        <div className="brand"><span className="logo" />Media Hub</div>
-        <Nav current="library" onNav={onNav} />
-        <input
-          className="search"
-          type="search"
-          placeholder="Search your library"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <div className="spacer" />
-        <span className="muted small">
-          {status.serverName} · {syncing ? "syncing…" : `updated ${ago(status.lastSync)}`}
-        </span>
-        <button onClick={() => void sync()} disabled={syncing}>{syncing ? "Syncing…" : "Sync"}</button>
-      </header>
+    <div className="pg">
+      <div className="pg-head">
+        <h1>{title}</h1>
+        <div className="pg-actions">
+          <label className="searchbox">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+            <input aria-label="Search library" placeholder="Search titles, files, IDs" value={query} onChange={(e) => setQuery(e.target.value)} />
+          </label>
+          <button className="primary" onClick={() => void sync()} disabled={syncing}>{syncing ? "Scanning…" : "Scan library"}</button>
+        </div>
+      </div>
+      <div className="muted small sync-line">{status.serverName} · {syncing ? "updating…" : `updated ${ago(status.lastSync)}`}</div>
 
-      <main>
-        {message && <p className="error" role="alert">{message}</p>}
+      {message && <p className="error" role="alert">{message}</p>}
 
-        {picks.length > 0 && !debounced && kind === null && (
-          <section>
-            <h2>Picks of the day</h2>
-            <div className="picks">
-              {picks.map((p) => <Poster key={p.id} item={p} onOpen={(i) => onOpen(i.id)} width={360} />)}
-            </div>
-          </section>
-        )}
-
-        <section>
-          <div className="toolbar">
-            <div className="chips">
-              {chip(`All ${total}`, null)}
-              {chip(`Movies ${status.movies}`, "movie")}
-              {chip(`Shows ${status.series}`, "series")}
-            </div>
-            <label className="sort">
-              Sort
-              <select value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
-                <option value="name">Name</option>
-                <option value="rating">Rating</option>
-                <option value="year">Year</option>
-                <option value="added">Recently added</option>
-              </select>
-            </label>
-          </div>
-
-          {items.length === 0 && !syncing && (
-            <p className="muted">{total === 0 ? "Nothing here yet. Press Sync." : "No matches."}</p>
-          )}
-          <div className="grid">
-            {items.map((i) => <Poster key={i.id} item={i} onOpen={(i) => onOpen(i.id)} />)}
-          </div>
-          <div ref={sentinel} style={{ height: 1 }} />
+      {showPicks && (
+        <section className="section">
+          <div className="section-head"><h2>Picks of the day</h2><span className="muted small">Refreshes at midnight</span></div>
+          <div className="picks-row">{picks.map((p) => <PickCard key={p.id} p={p} onOpen={onOpen} />)}</div>
         </section>
-      </main>
+      )}
 
-      <footer className="muted small">
-        Read-only mode{status.readOnly ? " is on" : " is off"} · Pictures and details come from your Jellyfin server.
-      </footer>
+      {!flag && attention && (attention.unmatched > 0 || attention.noPoster > 0 || (attention.noSubtitles ?? 0) > 0) && (
+        <section className="attention">
+          <span className="muted small">Needs attention</span>
+          {attention.unmatched > 0 && (
+            <button className="att amber" onClick={() => onRoute({ view: "library", flag: "unmatched" })}>{attention.unmatched} unmatched titles</button>
+          )}
+          {attention.noPoster > 0 && (
+            <button className="att" onClick={() => onRoute({ view: "library", flag: "noposter" })}>{attention.noPoster} without a poster</button>
+          )}
+          {(attention.noSubtitles ?? 0) > 0 && (
+            <button className="att" onClick={() => onRoute({ view: "subtitles" })}>{attention.noSubtitles} videos without subtitles</button>
+          )}
+          <button className="att" onClick={() => onRoute({ view: "intros" })}>Check intros and credits</button>
+        </section>
+      )}
+      {flag && (
+        <p className="muted small">
+          <button className="link" onClick={() => onRoute({ view: "library" })}>← Back to the whole library</button>
+        </p>
+      )}
 
+      <div className="toolbar">
+        <div className="chips">
+          {mixed && (
+            <>
+              <button className={`chip ${kind === null ? "on" : ""}`} onClick={() => setKind(null)}>All</button>
+              <button className={`chip ${kind === "series" ? "on" : ""}`} onClick={() => setKind("series")}>Shows</button>
+              <button className={`chip ${kind === "movie" ? "on" : ""}`} onClick={() => setKind("movie")}>Movies</button>
+            </>
+          )}
+        </div>
+        <label className="sort">
+          Sort
+          <select value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
+            <option value="name">Name</option>
+            <option value="added">Recently added</option>
+            <option value="rating">Rating</option>
+            <option value="year">Year</option>
+          </select>
+        </label>
+      </div>
+
+      {items.length === 0 && !syncing && <p className="muted">{total === 0 ? "Nothing here yet. Press Scan library." : "Nothing matches."}</p>}
+      <div className="grid">
+        {items.map((i) => <Poster key={i.id} item={i} onOpen={(x) => onOpen(x.id)} />)}
+      </div>
+      <div ref={sentinel} style={{ height: 1 }} />
     </div>
   );
 }

@@ -6,6 +6,10 @@ export interface Status {
   serverName: string | null;
   libraryRoot: string | null;
   subLangs: string[];
+  titleLang: string;
+  hasTmdb: boolean;
+  syncWatched: boolean;
+  userId: string | null;
   readOnly: boolean;
   movies: number;
   series: number;
@@ -22,6 +26,43 @@ export interface Item {
   genres: string[];
   overview: string;
   hasPoster: boolean;
+  library: string;
+  matched: boolean;
+  seasons: number | null;
+  episodes: number | null;
+  runtime: number | null;
+  played: boolean;
+}
+
+export interface Library {
+  id: string;
+  name: string;
+  kind: string;
+  count: number;
+}
+
+export interface Attention {
+  unmatched: number;
+  noPoster: number;
+  noSubtitles: number | null;
+}
+
+export interface Pick {
+  id: string;
+  artId: string;
+  title: string;
+  why: string;
+  meta: string;
+}
+
+export interface Candidate {
+  source: "tmdb" | "tvmaze" | "jellyfin";
+  id: string;
+  name: string;
+  year: number | null;
+  poster: string | null;
+  score: number;
+  ids: Record<string, string>;
 }
 
 export interface PlanOp {
@@ -33,6 +74,7 @@ export interface PlanOp {
   season: number | null;
   episodes: number[];
   verified: boolean;
+  score: number | null;
 }
 
 export interface PlanResult {
@@ -44,6 +86,10 @@ export interface PlanResult {
   unparsed: number;
   titlesFound: number;
   warning: string | null;
+  guess: string;
+  candidates: Candidate[];
+  chosen: Candidate | null;
+  matchedMovies: number;
 }
 
 export interface FindReplace {
@@ -59,8 +105,9 @@ export interface PlanArgs {
   show: string | null;
   year: number | null;
   findReplace: FindReplace[];
-  seriesId: string | null;
   recursive: boolean;
+  source: "auto" | "jellyfin" | "tmdb" | "tvmaze" | "none";
+  matchId: string | null;
 }
 
 export interface Batch {
@@ -102,12 +149,19 @@ export interface JfItem {
   ImageTags?: Record<string, string>;
   BackdropImageTags?: string[];
   IndexNumber?: number;
+  ParentIndexNumber?: number;
+  RunTimeTicks?: number;
+  Path?: string;
+  ChildCount?: number;
+  PreferredMetadataLanguage?: string;
+  UserData?: { Played?: boolean; PlaybackPositionTicks?: number };
   SeriesId?: string;
   SeriesName?: string;
 }
 
 export interface JfChild extends JfItem {
   MediaStreams?: { Type: string; Language?: string; IsForced?: boolean }[];
+  SeriesId?: string;
 }
 
 export interface JfImage {
@@ -159,6 +213,7 @@ export interface ItemEdits {
   officialRating?: string;
   providerIds?: Record<string, string>;
   lockData?: boolean;
+  preferredLanguage?: string;
 }
 
 export interface Culture {
@@ -250,6 +305,8 @@ export interface PlayInfo {
   token: string;
   url: string;
   title: string;
+  subtitle: string;
+  audio: { index: number; title: string; selected: boolean }[];
   duration: number;
   start: number;
   subtitles: { index: number; language: string; title: string; url: string; default: boolean }[];
@@ -316,14 +373,25 @@ export const api = {
     invoke<{ serverName: string; version: string }>("connect", { url, apiKey }),
   disconnect: () => invoke<void>("disconnect"),
   sync: () => invoke<{ movies: number; series: number }>("sync_library"),
-  list: (kind: Kind, query: string, sort: Sort, offset: number, limit: number) =>
-    invoke<Item[]>("list_items", { kind, query, sort, offset, limit }),
-  picks: (date: string) => invoke<Item[]>("todays_picks", { date }),
+  list: (kind: Kind, query: string, sort: Sort, offset: number, limit: number, library: string | null = null, flag: string | null = null) =>
+    invoke<Item[]>("list_items", { kind, library, flag, query, sort, offset, limit }),
+  picks: (date: string) => invoke<Pick[]>("todays_picks", { date }),
+  libraries: () => invoke<Library[]>("libraries"),
+  attention: () => invoke<Attention>("attention"),
+  missingSubtitles: (start: number, limit: number) =>
+    invoke<{ Items: JfChild[]; TotalRecordCount: number }>("missing_subtitles", { start, limit }),
+  setTmdbKey: (key: string) => invoke<void>("set_tmdb_key", { key }),
+  setTitleLang: (lang: string) => invoke<void>("set_title_lang", { lang }),
+  listUsers: () => invoke<{ id: string; name: string; admin: boolean }[]>("list_users"),
+  setUser: (id: string) => invoke<void>("set_user", { id }),
+  setSyncWatched: (value: boolean) => invoke<void>("set_sync_watched", { value }),
+  checkUpdate: () => invoke<{ current: string; latest: string | null; available: boolean; notes: string }>("check_update"),
+  installUpdate: () => invoke<void>("install_update"),
   pickRoot: () => invoke<string | null>("pick_library_root"),
   folders: (folder: string) => invoke<{ name: string }[]>("list_folders", { folder }),
   plan: (args: PlanArgs) => invoke<PlanResult>("plan_rename", { args }),
-  apply: (planId: string, removeEmpty: boolean) =>
-    invoke<{ batch: string; done: number; failed: string[] }>("apply_plan", { planId, removeEmpty }),
+  apply: (planId: string, removeEmpty: boolean, selected: string[] | null = null) =>
+    invoke<{ batch: string; done: number; failed: string[] }>("apply_plan", { planId, removeEmpty, selected }),
   history: () => invoke<Batch[]>("rename_history"),
   details: (id: string) => invoke<Details>("item_details", { id }),
   saveMetadata: (id: string, edits: ItemEdits) => invoke<void>("save_metadata", { id, edits }),
@@ -348,11 +416,11 @@ export const api = {
   segmentsOverview: (seasonId: string) => invoke<SegOverview>("segments_overview", { seasonId }),
   detectSeason: (seasonId: string, introMax: number, creditsMax: number) =>
     invoke<Suggestion[]>("detect_season", { seasonId, introMax, creditsMax }),
-  saveSegments: (itemId: string, intro: Span | null, credits: Span | null, clear: string[]) =>
-    invoke<void>("save_segments", { itemId, intro, credits, clear }),
+  saveSegments: (itemId: string, intro: Span | null, credits: Span | null, recap: Span | null, clear: string[]) =>
+    invoke<void>("save_segments", { itemId, intro, credits, recap, clear }),
   ffmpegInfo: () => invoke<{ path: string | null; version: string | null }>("ffmpeg_info"),
   pickFfmpeg: () => invoke<string | null>("pick_ffmpeg"),
-  playStart: (id: string, start: number) => invoke<PlayInfo>("play_start", { id, start }),
+  playStart: (id: string, start: number, audioIndex: number | null = null) => invoke<PlayInfo>("play_start", { id, start, audioIndex }),
   playStop: (token: string) => invoke<void>("play_stop", { token }),
   ytdlpInfo: () => invoke<{ path: string | null; version: string | null; managed: boolean; folder: string | null }>("ytdlp_info"),
   ytdlpInstall: () => invoke<string>("ytdlp_install"),
