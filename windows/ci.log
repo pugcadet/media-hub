@@ -1,11 +1,23 @@
 
-added 72 packages in 8s
+added 72 packages in 12s
 [1m[92m    Updating[0m crates.io index
 [1m[92m   Compiling[0m media-hub v0.8.0 (D:\a\media-hub\media-hub\src-tauri)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 29s
+[1m[93mwarning[0m[1m[97m: method `candidate_ids` is never used[0m
+   [1m[96m--> [0msrc\store.rs:376:12
+    [1m[96m|[0m
+[1m[96m210[0m [1m[96m|[0m impl Store {
+    [1m[96m|[0m [1m[96m----------[0m [1m[96mmethod in this implementation[0m
+[1m[96m...[0m
+[1m[96m376[0m [1m[96m|[0m     pub fn candidate_ids(&self, kind: &str) -> Result<Vec<String>> {
+    [1m[96m|[0m            [1m[93m^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m: `media-hub` (lib) generated 1 warning
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 3m 05s
 [1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-a886905d2d89dc6e.exe)
 
-running 89 tests
+running 95 tests
 test config::tests::key_validation ... ok
 test config::tests::rejects_bad_input ... ok
 test config::tests::adds_scheme_and_keeps_port ... ok
@@ -63,15 +75,21 @@ test planner::tests::existing_target_conflicts_but_case_only_change_does_not ...
 test planner::tests::find_replace_changes_only_the_file_name ... ok
 test planner::tests::movie_id_tags_can_be_kept ... ok
 test planner::tests::movies_get_their_own_folder ... ok
+test planner::tests::online_movie_matches_fix_titles ... ok
 test planner::tests::renames_tv_files_into_standard_layout ... ok
 test planner::tests::titles_from_the_server_win_over_file_names ... ok
 test planner::tests::two_files_for_one_name_conflict ... ok
 test planner::tests::unreadable_names_are_left_alone ... ok
+test planner::tests::year_comes_from_file_names_when_folder_has_none ... ok
 test player::tests::keys_are_removed ... ok
 test player::tests::playlists_stay_inside_the_session ... ok
 test player::tests::splits_folder_and_file ... ok
 test seg_cmds::tests::reads_jellyfin_segments ... ok
 test seg_cmds::tests::span_checks ... ok
+test sources::tests::language_is_sanitised ... ok
+test sources::tests::ranking_puts_best_first ... ok
+test sources::tests::titles_compare_sensibly ... ok
+test sources::tests::year_breaks_ties ... ok
 test storage::tests::containers ... ok
 test storage::tests::hevc_arguments_copy_everything_but_video ... ok
 test storage::tests::loudness_gain_respects_peaks ... ok
@@ -96,7 +114,7 @@ test subs::tests::same_release_beats_other_release ... ok
 test subs::tests::wrong_episode_is_zero ... ok
 test fingerprint::tests::unrelated_audio_has_no_match ... ok
 
-test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.63s
+test result: ok. 95 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.15s
 
 [1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-b2e8d1c48261690e.exe)
 
@@ -129,9 +147,21 @@ computing gzip size...
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 4.38s[39m
+[32m✓ built in 3.88s[39m
 [1m[92m   Compiling[0m media-hub v0.8.0 (D:\a\media-hub\media-hub\src-tauri)
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 4m 35s
+[1m[93mwarning[0m[1m[97m: method `candidate_ids` is never used[0m
+   [1m[96m--> [0msrc\store.rs:376:12
+    [1m[96m|[0m
+[1m[96m210[0m [1m[96m|[0m impl Store {
+    [1m[96m|[0m [1m[96m----------[0m [1m[96mmethod in this implementation[0m
+[1m[96m...[0m
+[1m[96m376[0m [1m[96m|[0m     pub fn candidate_ids(&self, kind: &str) -> Result<Vec<String>> {
+    [1m[96m|[0m            [1m[93m^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m: `media-hub` (lib) generated 1 warning
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 4m 37s
        Built application at: D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe
         Info Patching D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe with bundle type information: nsis
         Info Verifying NSIS package
@@ -143,5 +173,5 @@ computing gzip size...
         Info Target: x64
      Running makensis to produce D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.8.0_x64-setup.exe
     Finished 1 bundle at:
-        D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.8.0_x64-setup.exe (4.51 MiB)
+        D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.8.0_x64-setup.exe (4.64 MiB)
 
