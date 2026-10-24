@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod detect;
+mod downloads;
 mod error;
 mod fingerprint;
 mod fsops;
@@ -72,6 +73,12 @@ pub fn run() {
             seg_cmds::pick_ffmpeg,
             player::play_start,
             player::play_stop,
+            downloads::ytdlp_info,
+            downloads::ytdlp_install,
+            downloads::pick_download_folder,
+            downloads::dl_probe,
+            downloads::dl_start,
+            downloads::dl_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Media Hub");

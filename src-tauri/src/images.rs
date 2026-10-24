@@ -18,6 +18,7 @@ const REMOTE_HOSTS: &[&str] = &[
     "assets.fanart.tv",
     "m.media-amazon.com",
     "static.tvmaze.com",
+    "i.ytimg.com",
 ];
 const MAX_REMOTE_BYTES: usize = 15 * 1024 * 1024;
 

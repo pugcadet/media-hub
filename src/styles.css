@@ -199,3 +199,10 @@ input.time { width: 64px; height: 30px; padding: 0 6px; text-align: center; }
 .p-vol { width: 90px; padding: 0; border: 0; background: transparent; accent-color: var(--accent); }
 .p-skip { position: absolute; right: 28px; bottom: 110px; height: 42px; padding: 0 20px; font-size: 15px; }
 .p-error { position: absolute; top: 40%; left: 50%; transform: translateX(-50%); background: rgba(20,22,26,.9); padding: 16px 20px; border-radius: 12px; color: var(--danger); max-width: 80%; }
+
+/* ---- downloads */
+.job { align-items: flex-start; }
+.job-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.progress { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; }
+.progress span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.progress span.failed { background: var(--danger); } .progress span.cancelled { background: var(--muted); }

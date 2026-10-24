@@ -24,6 +24,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native"] }
 regex = "1"
 base64 = "0.22"
 getrandom = "0.2"
+sha2 = "0.10"
 tauri-plugin-dialog = "2"
 
 [profile.release]

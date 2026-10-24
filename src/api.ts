@@ -256,6 +256,30 @@ export interface PlayInfo {
   segments: { Type: string; StartTicks: number; EndTicks: number }[];
 }
 
+export interface DlRequest {
+  url: string;
+  kind: "video" | "audio";
+  maxHeight: number;
+  format: string;
+  subtitles: boolean;
+  subLangs: string[];
+  sponsorblock: boolean;
+  playlist: boolean;
+  naming: "title" | "channel" | "series";
+  seriesName: string | null;
+  season: number | null;
+}
+
+export interface Probe {
+  title: string;
+  channel: string;
+  duration: number | null;
+  thumbnail: string | null;
+  isPlaylist: boolean;
+  entries: string[];
+  entryCount: number;
+}
+
 export type Sort = "name" | "rating" | "year" | "added";
 export type Kind = "movie" | "series" | null;
 
@@ -302,6 +326,12 @@ export const api = {
   pickFfmpeg: () => invoke<string | null>("pick_ffmpeg"),
   playStart: (id: string, start: number) => invoke<PlayInfo>("play_start", { id, start }),
   playStop: (token: string) => invoke<void>("play_stop", { token }),
+  ytdlpInfo: () => invoke<{ path: string | null; version: string | null; managed: boolean; folder: string | null }>("ytdlp_info"),
+  ytdlpInstall: () => invoke<string>("ytdlp_install"),
+  pickDownloadFolder: () => invoke<string | null>("pick_download_folder"),
+  dlProbe: (url: string) => invoke<Probe>("dl_probe", { url }),
+  dlStart: (req: DlRequest) => invoke<number>("dl_start", { req }),
+  dlCancel: (id: number) => invoke<void>("dl_cancel", { id }),
   undo: (batch: string) => invoke<{ restored: number; skipped: string[] }>("undo_rename", { batch }),
 };
 

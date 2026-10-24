@@ -4,9 +4,10 @@ import Connect from "./Connect";
 import Library from "./Library";
 import Renamer from "./Renamer";
 import Settings from "./Settings";
+import Downloads from "./Downloads";
 import ItemPage from "./ItemPage";
 
-export type View = "library" | "renamer" | "settings";
+export type View = "library" | "renamer" | "downloads" | "settings";
 
 export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -46,6 +47,7 @@ export default function App() {
       />
     );
   if (view === "renamer") return <Renamer status={status} onChanged={refresh} onNav={nav} />;
+  if (view === "downloads") return <Downloads onNav={nav} />;
   if (view === "settings") return <Settings status={status} onChanged={refresh} onNav={nav} />;
   return <Library status={status} onChanged={refresh} onNav={nav} onOpen={(id) => setItemStack([id])} />;
 }

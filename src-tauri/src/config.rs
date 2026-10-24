@@ -20,6 +20,8 @@ pub struct Settings {
     pub path_map: Option<crate::media_tools::PathMap>,
     /// Random id Jellyfin uses to tell this computer's streams apart.
     pub device_id: Option<String>,
+    /// Where the downloader saves files.
+    pub download_dir: Option<String>,
     /// While true, the app only reads from Jellyfin. Later modules check this
     /// flag before they change anything. It starts on and stays on by default.
     pub read_only: bool,
@@ -35,6 +37,7 @@ impl Default for Settings {
             ffmpeg_path: None,
             path_map: None,
             device_id: None,
+            download_dir: None,
             read_only: true,
         }
     }
