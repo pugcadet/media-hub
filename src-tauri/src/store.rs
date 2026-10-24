@@ -312,6 +312,13 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Every title with a poster, for the daily picks.
+    pub fn pick_rows(&self) -> Result<Vec<ItemRow>> {
+        let mut stmt = self.conn.prepare(&format!("SELECT {COLS} FROM items WHERE has_poster=1"))?;
+        let rows = stmt.query_map([], row_to_item)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn clear(&mut self) -> Result<()> {
         self.conn.execute_batch("DELETE FROM items; DELETE FROM meta; DELETE FROM libraries;")?;
         Ok(())
@@ -464,7 +471,7 @@ impl Store {
     pub fn changes_for(&self, item_id: &str, limit: i64) -> Result<Vec<Change>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, CAST(at AS INTEGER), action, target, undone FROM undo_journal
-             WHERE action IN ('item_update','identify','image','subtitle','segment') AND (target = ?1 OR target LIKE ?1 || '|%')
+             WHERE action IN ('item_update','identify','image','image_removed','collection','subtitle','segment') AND (target = ?1 OR target LIKE ?1 || '|%')
              ORDER BY id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![item_id, limit.clamp(1, 100)], |r| {
@@ -518,6 +525,34 @@ impl Store {
             params![id, name, year, rating, genres.join(GENRE_SEP), overview],
         )?;
         Ok(())
+    }
+
+    /// Keeps the "matched" and "has a poster" marks in step after a change made in this app.
+    pub fn patch_flags(&self, id: &str, matched: bool, has_poster: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE items SET matched=?2, has_poster=?3 WHERE id=?1",
+            params![id, matched as i64, has_poster as i64],
+        )?;
+        Ok(())
+    }
+
+    /// (id, name, year, Jellyfin path, matched) of every movie or show, for the naming check.
+    pub fn with_paths(&self, kind: &str) -> Result<Vec<(String, String, Option<i32>, String, bool)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, year, path, matched FROM items WHERE kind=?1 AND path <> '' ORDER BY name COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map(params![kind], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, i64>(4)? != 0))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn path_of(&self, id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT path FROM items WHERE id=?1", params![id], |r| r.get::<_, String>(0))
+            .optional()?
+            .filter(|p| !p.is_empty()))
     }
 
     pub fn journal_batches(&self, limit: i64) -> Result<Vec<BatchInfo>> {

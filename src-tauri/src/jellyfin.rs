@@ -180,6 +180,8 @@ pub fn image_kind(k: &str) -> Option<&'static str> {
         "Logo" => Some("Logo"),
         "Thumb" => Some("Thumb"),
         "Banner" => Some("Banner"),
+        "Art" => Some("Art"),
+        "Disc" => Some("Disc"),
         _ => None,
     }
 }
@@ -478,7 +480,7 @@ impl Client {
         let q = vec![
             ("type", kind.to_string()),
             ("includeAllLanguages", "true".to_string()),
-            ("limit", "60".to_string()),
+            ("limit", "300".to_string()),
         ];
         let v: serde_json::Value = self.get_json(&format!("/Items/{id}/RemoteImages"), &q).await?;
         Ok(v.get("Images").and_then(|i| i.as_array()).cloned().unwrap_or_default())
@@ -781,6 +783,20 @@ impl Writer {
         self.c.send(req).await.map(|_| ())
     }
 
+    /// A light refresh: Jellyfin looks at the files again (finds new subtitles), keeps all details.
+    pub async fn refresh_light(&self, id: &str) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let q = vec![
+            ("metadataRefreshMode", "Default".to_string()),
+            ("imageRefreshMode", "Default".to_string()),
+            ("replaceAllMetadata", "false".to_string()),
+            ("replaceAllImages", "false".to_string()),
+        ];
+        self.post(&format!("/Items/{id}/Refresh"), &q, None).await
+    }
+
     pub async fn refresh(&self, id: &str, replace_all: bool) -> Result<()> {
         if !valid_item_id(id) {
             return Err(Error::msg("bad id"));
@@ -792,6 +808,145 @@ impl Writer {
             ("replaceAllImages", "false".to_string()),
         ];
         self.post(&format!("/Items/{id}/Refresh"), &q, None).await
+    }
+}
+
+
+/// Fields the home page, collections and "more like this" lists need.
+const LIST_FIELDS: &str = "ProductionYear,PremiereDate,RunTimeTicks,ChildCount,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,CommunityRating,Genres,ProviderIds,DateCreated";
+
+fn ids_param(ids: &[String]) -> Result<String> {
+    if ids.is_empty() || ids.len() > 500 || !ids.iter().all(|i| valid_item_id(i)) {
+        return Err(Error::msg("bad ids"));
+    }
+    Ok(ids.join(","))
+}
+
+impl Client {
+    fn items_of(v: serde_json::Value) -> Vec<serde_json::Value> {
+        v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default()
+    }
+
+    /// Asks Jellyfin to look for new and renamed files. Changes no metadata.
+    pub async fn library_scan(&self) -> Result<()> {
+        let req = self.http.post(self.url("/Library/Refresh")).header("Content-Length", "0");
+        self.send(req).await.map(|_| ())
+    }
+
+    pub async fn collections(&self) -> Result<Vec<serde_json::Value>> {
+        let q = vec![
+            ("IncludeItemTypes", "BoxSet".to_string()),
+            ("Recursive", "true".to_string()),
+            ("SortBy", "SortName".to_string()),
+            ("Fields", format!("{LIST_FIELDS},Overview")),
+        ];
+        Ok(Self::items_of(self.get_json("/Items", &self.with_user(q)).await?))
+    }
+
+    pub async fn collection_items(&self, id: &str) -> Result<Vec<serde_json::Value>> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let q = vec![("ParentId", id.to_string()), ("Fields", LIST_FIELDS.to_string()), ("SortBy", "ProductionYear,SortName".to_string())];
+        Ok(Self::items_of(self.get_json("/Items", &self.with_user(q)).await?))
+    }
+
+    /// Newest movies and episodes.
+    pub async fn recently_added(&self, limit: u32) -> Result<Vec<serde_json::Value>> {
+        let q = vec![
+            ("IncludeItemTypes", "Movie,Episode".to_string()),
+            ("Recursive", "true".to_string()),
+            ("SortBy", "DateCreated".to_string()),
+            ("SortOrder", "Descending".to_string()),
+            ("Fields", LIST_FIELDS.to_string()),
+            ("Limit", limit.min(100).to_string()),
+        ];
+        Ok(Self::items_of(self.get_json("/Items", &self.with_user(q)).await?))
+    }
+
+    pub async fn similar(&self, id: &str, limit: u32) -> Result<Vec<serde_json::Value>> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let q = vec![("limit", limit.min(40).to_string()), ("fields", LIST_FIELDS.to_string())];
+        Ok(Self::items_of(self.get_json(&format!("/Items/{id}/Similar"), &self.with_user(q)).await?))
+    }
+
+    /// Movies and shows a person appears in.
+    pub async fn person_items(&self, person_id: &str) -> Result<Vec<serde_json::Value>> {
+        if !valid_item_id(person_id) {
+            return Err(Error::msg("bad id"));
+        }
+        let q = vec![
+            ("PersonIds", person_id.to_string()),
+            ("IncludeItemTypes", "Movie,Series".to_string()),
+            ("Recursive", "true".to_string()),
+            ("SortBy", "ProductionYear".to_string()),
+            ("SortOrder", "Descending".to_string()),
+            ("Fields", LIST_FIELDS.to_string()),
+            ("Limit", "60".to_string()),
+        ];
+        Ok(Self::items_of(self.get_json("/Items", &self.with_user(q)).await?))
+    }
+}
+
+impl Writer {
+    async fn post_json(&self, path: &str, query: &[(&str, String)]) -> Result<serde_json::Value> {
+        let req = self.c.http.post(self.c.url(path)).query(query).header("Content-Length", "0");
+        let resp = self.c.send(req).await?;
+        Client::read_json(resp).await
+    }
+
+    /// Moves a picture to another position (backdrop 3 becomes backdrop 0, the main one).
+    pub async fn move_image(&self, id: &str, kind: &str, index: u32, new_index: u32) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let kind = image_kind(kind).ok_or_else(|| Error::msg("bad image kind"))?;
+        if index == new_index {
+            return Ok(());
+        }
+        self.post(&format!("/Items/{id}/Images/{kind}/{index}/Index"), &[("newIndex", new_index.to_string())], None).await
+    }
+
+    /// Makes a new collection and returns its id.
+    pub async fn collection_create(&self, name: &str, ids: &[String]) -> Result<String> {
+        let name = name.trim();
+        if name.is_empty() || name.len() > 200 {
+            return Err(Error::msg("Give the collection a name."));
+        }
+        let mut q = vec![("name", name.to_string())];
+        if !ids.is_empty() {
+            q.push(("ids", ids_param(ids)?));
+        }
+        let v = self.post_json("/Collections", &q).await?;
+        v.get("Id").and_then(|i| i.as_str()).filter(|i| valid_item_id(i)).map(String::from).ok_or_else(|| Error::msg("Jellyfin did not return the new collection."))
+    }
+
+    pub async fn collection_add(&self, id: &str, ids: &[String]) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        self.post(&format!("/Collections/{id}/Items"), &[("ids", ids_param(ids)?)], None).await
+    }
+
+    pub async fn collection_remove(&self, id: &str, ids: &[String]) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let req = self.c.http.delete(self.c.url(&format!("/Collections/{id}/Items"))).query(&[("ids", ids_param(ids)?)]);
+        self.c.send(req).await.map(|_| ())
+    }
+
+    /// Removes a collection (only the collection; the movies and shows in it stay).
+    /// Checks first that the id really is a collection.
+    pub async fn collection_delete(&self, id: &str) -> Result<()> {
+        let item = self.c.item_json(id).await?;
+        if item.get("Type").and_then(|t| t.as_str()) != Some("BoxSet") {
+            return Err(Error::msg("That is not a collection."));
+        }
+        let req = self.c.http.delete(self.c.url(&format!("/Items/{id}")));
+        self.c.send(req).await.map(|_| ())
     }
 }
 

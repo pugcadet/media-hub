@@ -1,3 +1,4 @@
+mod collections;
 mod commands;
 mod config;
 mod detect;
@@ -7,9 +8,11 @@ mod fingerprint;
 mod fsops;
 mod images;
 mod jellyfin;
+mod local;
 mod media_tools;
 mod meta_cmds;
 mod naming;
+mod naming_check;
 mod picks;
 mod planner;
 mod player;
@@ -74,6 +77,25 @@ pub fn run() {
             meta_cmds::undo_change,
             meta_cmds::refresh_item,
             meta_cmds::set_read_only,
+            meta_cmds::main_backdrop,
+            meta_cmds::remove_image,
+            meta_cmds::fill_missing_art,
+            collections::home_feed,
+            collections::collections_list,
+            collections::collection_items,
+            collections::similar_items,
+            collections::person_items,
+            collections::collection_create,
+            collections::collection_add,
+            collections::collection_remove,
+            collections::sync_picks_collection,
+            local::reveal_item,
+            local::reveal_rel,
+            local::item_folder,
+            local::library_scan,
+            naming_check::naming_check,
+            naming_check::naming_check_last,
+            naming_check::naming_check_cancel,
             sub_cmds::languages,
             sub_cmds::set_sub_langs,
             sub_cmds::item_children,
@@ -88,6 +110,7 @@ pub fn run() {
             player::play_start,
             player::play_stop,
             player::play_progress,
+            player::play_subtitles,
             downloads::ytdlp_info,
             downloads::ytdlp_install,
             downloads::pick_download_folder,

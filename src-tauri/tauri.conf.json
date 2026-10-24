@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob: hubimg: http://hubimg.localhost; media-src 'self' blob: hubmedia: http://hubmedia.localhost; connect-src ipc: http://ipc.localhost hubmedia: http://hubmedia.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob: hubimg: http://hubimg.localhost hubmedia: http://hubmedia.localhost; media-src 'self' blob: hubmedia: http://hubmedia.localhost; connect-src ipc: http://ipc.localhost hubmedia: http://hubmedia.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {

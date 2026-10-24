@@ -64,7 +64,24 @@ fn sync_row(state: &AppState, id: &str, item: &Value) -> Result<()> {
         .map(|a| a.iter().filter_map(|g| g.as_str().map(String::from)).collect())
         .unwrap_or_default();
     let overview = item.get("Overview").and_then(Value::as_str).unwrap_or("");
-    state.store()?.patch_item(id, name, year, rating, &genres, overview)
+    let store = state.store()?;
+    store.patch_item(id, name, year, rating, &genres, overview)?;
+    let matched = item
+        .get("ProviderIds")
+        .and_then(Value::as_object)
+        .map(|p| ["Tmdb", "Tvdb", "Imdb"].iter().any(|k| p.get(*k).and_then(Value::as_str).map(|v| !v.is_empty()).unwrap_or(false)))
+        .unwrap_or(false);
+    let has_poster = item.get("ImageTags").and_then(|t| t.get("Primary")).is_some();
+    store.patch_flags(id, matched, has_poster)
+}
+
+/// Reads the item again and updates the local list (so it leaves "unmatched" or "no poster").
+async fn resync(state: &AppState, id: &str) {
+    if let Ok(c) = state.reader().await {
+        if let Ok(item) = c.item_json(id).await {
+            let _ = sync_row(state, id, &item);
+        }
+    }
 }
 
 #[tauri::command]
@@ -132,7 +149,24 @@ pub async fn identify_apply(state: State<'_, AppState>, id: String, result: Valu
         state.store()?.journal_delete(entry)?;
         return Err(e);
     }
+    // Jellyfin fetches the new details in the background; wait until the ids show up.
+    for _ in 0..10 {
+        tokio_sleep(1500).await;
+        if let Ok(item) = w.reader().item_json(&id).await {
+            let linked = item.get("ProviderIds").and_then(Value::as_object).map(|p| !p.is_empty()).unwrap_or(false);
+            let _ = sync_row(&state, &id, &item);
+            if linked {
+                break;
+            }
+        }
+    }
     Ok(())
+}
+
+async fn tokio_sleep(ms: u64) {
+    tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_millis(ms)))
+        .await
+        .ok();
 }
 
 #[tauri::command]
@@ -219,6 +253,23 @@ pub async fn set_image(state: State<'_, AppState>, id: String, kind: String, url
     }
     let w = state.writer().await?;
 
+    if kind == "Backdrop" {
+        // A show can have many backdrops. Jellyfin adds a downloaded one at the end, so it is
+        // moved to the front to become the main one. Undo removes it again; nothing is replaced.
+        let before = backdrop_count(&w, &id).await;
+        let entry = state.store()?.journal_add("image", &format!("{id}|{kind}|0"), "", &url)?;
+        if let Err(e) = w.download_remote_image(&id, kind, &url).await {
+            state.store()?.journal_delete(entry)?;
+            return Err(e);
+        }
+        let after = backdrop_count(&w, &id).await;
+        if after > before && before > 0 {
+            w.move_image(&id, kind, after - 1, 0).await?;
+        }
+        resync(&state, &id).await;
+        return Ok(());
+    }
+
     let backup = backup_current(&state, &w, &id, kind).await?;
     let entry = state
         .store()?
@@ -227,7 +278,123 @@ pub async fn set_image(state: State<'_, AppState>, id: String, kind: String, url
         state.store()?.journal_delete(entry)?;
         return Err(e);
     }
+    resync(&state, &id).await;
     Ok(())
+}
+
+async fn backdrop_count(w: &crate::jellyfin::Writer, id: &str) -> u32 {
+    w.reader()
+        .image_list(id)
+        .await
+        .map(|l| l.iter().filter(|i| i.get("ImageType").and_then(Value::as_str) == Some("Backdrop")).count() as u32)
+        .unwrap_or(0)
+}
+
+/// Makes another backdrop the main one (moves it to the front). Nothing is removed.
+#[tauri::command]
+pub async fn main_backdrop(state: State<'_, AppState>, id: String, index: u32) -> Result<()> {
+    check_id(&id)?;
+    if index > 50 {
+        return Err(Error::msg("bad index"));
+    }
+    state.writer().await?.move_image(&id, "Backdrop", index, 0).await
+}
+
+/// Removes one picture. A copy is kept so it can be put back with Undo.
+#[tauri::command]
+pub async fn remove_image(state: State<'_, AppState>, id: String, kind: String, index: u32) -> Result<()> {
+    check_id(&id)?;
+    let kind = image_kind(&kind).ok_or_else(|| Error::msg("bad image kind"))?;
+    if index > 50 {
+        return Err(Error::msg("bad index"));
+    }
+    let w = state.writer().await?;
+    let Some((bytes, ct)) = w.reader().image_original(&id, kind, index).await? else {
+        return Err(Error::msg("That picture is already gone."));
+    };
+    let dir = state.dir.join("backups");
+    std::fs::create_dir_all(&dir)?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let path = dir.join(format!("{id}-{kind}-{index}-{stamp}.{}", ext_for(&ct)));
+    std::fs::write(&path, bytes)?;
+    let entry = state.store()?.journal_add(
+        "image_removed",
+        &format!("{id}|{kind}|{index}"),
+        &format!("{}|{}", path.to_string_lossy(), ct),
+        "",
+    )?;
+    if let Err(e) = w.delete_image(&id, kind, index).await {
+        state.store()?.journal_delete(entry)?;
+        return Err(e);
+    }
+    resync(&state, &id).await;
+    Ok(())
+}
+
+/// Fills in missing pictures of the given kinds with the best-rated option online.
+/// Returns the kinds that were added.
+#[tauri::command]
+pub async fn fill_missing_art(state: State<'_, AppState>, id: String, kinds: Vec<String>, lang: Option<String>) -> Result<Vec<String>> {
+    check_id(&id)?;
+    let w = state.writer().await?;
+    let have: Vec<String> = w
+        .reader()
+        .image_list(&id)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|i| i.get("ImageType").and_then(Value::as_str).map(String::from))
+        .collect();
+    let lang = lang.unwrap_or_else(|| "en".into());
+    let mut added = Vec::new();
+    for k in kinds.iter().take(8) {
+        let Some(kind) = image_kind(k) else { continue };
+        if have.iter().any(|h| h == kind) {
+            continue;
+        }
+        let options = w.reader().remote_images(&id, kind).await.unwrap_or_default();
+        let Some(url) = best_image(&options, kind, &lang) else { continue };
+        if crate::images::allowed_remote(&url).is_none() {
+            continue;
+        }
+        let entry = state.store()?.journal_add("image", &format!("{id}|{kind}|0"), "", &url)?;
+        match w.download_remote_image(&id, kind, &url).await {
+            Ok(()) => added.push(kind.to_string()),
+            Err(_) => state.store()?.journal_delete(entry)?,
+        }
+    }
+    if !added.is_empty() {
+        resync(&state, &id).await;
+    }
+    Ok(added)
+}
+
+/// Best picture: your language (or no text for backdrops), then rating, votes and size.
+pub fn best_image(options: &[Value], kind: &str, lang: &str) -> Option<String> {
+    let lang2: String = lang.chars().take(2).collect::<String>().to_lowercase();
+    let score = |o: &Value| -> f64 {
+        let l = o.get("Language").and_then(Value::as_str).unwrap_or("").to_lowercase();
+        let lang_score = if kind == "Backdrop" {
+            if l.is_empty() { 3.0 } else if l == lang2 { 2.0 } else { 0.0 }
+        } else if l == lang2 {
+            3.0
+        } else if l == "en" {
+            2.0
+        } else if l.is_empty() {
+            1.0
+        } else {
+            0.0
+        };
+        let rating = o.get("CommunityRating").and_then(Value::as_f64).unwrap_or(0.0);
+        let votes = o.get("VoteCount").and_then(Value::as_f64).unwrap_or(0.0);
+        let width = o.get("Width").and_then(Value::as_f64).unwrap_or(0.0);
+        lang_score * 100.0 + rating * 5.0 + votes.min(50.0) * 0.2 + (width / 1000.0).min(4.0)
+    };
+    options
+        .iter()
+        .filter(|o| o.get("Url").and_then(Value::as_str).is_some())
+        .max_by(|a, b| score(a).partial_cmp(&score(b)).unwrap_or(std::cmp::Ordering::Equal))
+        .and_then(|o| o.get("Url").and_then(Value::as_str).map(String::from))
 }
 
 #[tauri::command]
@@ -265,6 +432,20 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
                 w.upload_image(id, kind, index, &bytes, ct).await?;
             }
         }
+        "image_removed" => {
+            let mut parts = ch.target.split('|');
+            let (Some(id), Some(kind)) = (parts.next(), parts.next()) else {
+                return Err(Error::msg("bad journal entry"));
+            };
+            check_id(id)?;
+            let (path, ct) = ch.old_value.rsplit_once('|').ok_or_else(|| Error::msg("bad journal entry"))?;
+            let bytes = std::fs::read(path).map_err(|_| Error::msg("The backup picture is missing."))?;
+            // Index 0 replaces the main picture; for backdrops Jellyfin adds it back at the end.
+            w.upload_image(id, kind, 0, &bytes, ct).await?;
+        }
+        "collection" => {
+            crate::collections::undo(&w, &ch.target, &ch.old_value, &ch.new_value).await?;
+        }
         "segment" => {
             check_id(&ch.target)?;
             crate::seg_cmds::undo_segments(&w, &ch.target, &ch.old_value).await?;
@@ -293,6 +474,20 @@ pub fn set_read_only(state: State<'_, AppState>, value: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn best_picture_prefers_language_then_rating() {
+        let opts = vec![
+            serde_json::json!({"Url": "https://image.tmdb.org/a.jpg", "Language": "de", "CommunityRating": 9.0}),
+            serde_json::json!({"Url": "https://image.tmdb.org/b.jpg", "Language": "en", "CommunityRating": 5.0}),
+            serde_json::json!({"Url": "https://image.tmdb.org/c.jpg", "Language": "nl", "CommunityRating": 4.0}),
+            serde_json::json!({"Url": "https://image.tmdb.org/d.jpg", "CommunityRating": 8.0}),
+        ];
+        assert_eq!(best_image(&opts, "Primary", "nl-NL").as_deref(), Some("https://image.tmdb.org/c.jpg"));
+        assert_eq!(best_image(&opts, "Primary", "fr").as_deref(), Some("https://image.tmdb.org/b.jpg"));
+        assert_eq!(best_image(&opts, "Backdrop", "fr").as_deref(), Some("https://image.tmdb.org/d.jpg"));
+        assert_eq!(best_image(&[], "Logo", "en"), None);
+    }
 
     #[test]
     fn recognises_pictures_by_content() {

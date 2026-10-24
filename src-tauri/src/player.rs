@@ -149,6 +149,104 @@ pub struct PlayInfo {
     resume: f64,
     /// The next episode to play after this one.
     next: Option<NextEpisode>,
+    /// For the pause screen.
+    about: About,
+    /// Preview pictures for the timeline, if Jellyfin made them.
+    trickplay: Option<Trickplay>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct About {
+    item_id: String,
+    /// The show for an episode, else the item itself (backdrop and logo come from here).
+    art_id: String,
+    overview: String,
+    year: Option<i64>,
+    rating: Option<f64>,
+    official_rating: String,
+    genres: Vec<String>,
+    people: Vec<Person>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Person {
+    id: String,
+    name: String,
+    role: String,
+    has_image: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Trickplay {
+    /// "<base>/<index>.jpg" is one sheet of tiles.
+    base: String,
+    width: i64,
+    height: i64,
+    tile_width: i64,
+    tile_height: i64,
+    count: i64,
+    /// milliseconds between pictures
+    interval: i64,
+}
+
+fn about_of(item: &Value, id: &str) -> About {
+    let sv = |k: &str| item.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let series = sv("SeriesId").replace('-', "");
+    About {
+        item_id: id.to_string(),
+        art_id: if valid_item_id(&series) { series } else { id.to_string() },
+        overview: sv("Overview").chars().take(900).collect(),
+        year: item.get("ProductionYear").and_then(Value::as_i64),
+        rating: item.get("CommunityRating").and_then(Value::as_f64),
+        official_rating: sv("OfficialRating"),
+        genres: item
+            .get("Genres")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|g| g.as_str().map(String::from)).take(4).collect())
+            .unwrap_or_default(),
+        people: item
+            .get("People")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter(|p| matches!(p.get("Type").and_then(Value::as_str), Some("Actor") | Some("GuestStar") | None))
+                    .filter_map(|p| {
+                        let pid = p.get("Id").and_then(Value::as_str)?.replace('-', "");
+                        valid_item_id(&pid).then(|| Person {
+                            name: p.get("Name").and_then(Value::as_str).unwrap_or("").to_string(),
+                            role: p.get("Role").and_then(Value::as_str).unwrap_or("").to_string(),
+                            has_image: p.get("PrimaryImageTag").is_some(),
+                            id: pid,
+                        })
+                    })
+                    .take(16)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// Picks the trickplay size closest to 320 px wide.
+fn trickplay_of(item: &Value, tok: &str) -> Option<Trickplay> {
+    let per_source = item.get("Trickplay")?.as_object()?.values().next()?.as_object()?;
+    let (w, info) = per_source
+        .iter()
+        .filter_map(|(w, i)| w.parse::<i64>().ok().map(|w| (w, i)))
+        .min_by_key(|(w, _)| (w - 320).abs())?;
+    let g = |k: &str| info.get(k).and_then(Value::as_i64).unwrap_or(0);
+    let t = Trickplay {
+        base: format!("{}/s/{tok}/trick/{w}", media_base()),
+        width: g("Width").max(1),
+        height: g("Height").max(1),
+        tile_width: g("TileWidth").max(1),
+        tile_height: g("TileHeight").max(1),
+        count: g("ThumbnailCount"),
+        interval: g("Interval").max(1),
+    };
+    (t.count > 0).then_some(t)
 }
 
 #[derive(Serialize)]
@@ -290,7 +388,53 @@ pub async fn play_start(state: State<'_, AppState>, id: String, start: f64, audi
         segments,
         resume,
         next: next.filter(|n| valid_item_id(&n.id)),
+        trickplay: trickplay_of(&item, &tok),
+        about: about_of(&item, &id),
     })
+}
+
+/// Subtitles added while playing (for example just downloaded): adds them to the running
+/// playback without restarting it. Returns the full list.
+#[tauri::command]
+pub async fn play_subtitles(state: State<'_, AppState>, token: String) -> Result<Vec<SubTrack>> {
+    let item_id = {
+        let map = sessions().lock().map_err(|_| Error::msg("internal error"))?;
+        map.get(&token).map(|s| s.item_id.clone()).ok_or_else(|| Error::msg("This playback has ended."))?
+    };
+    let item = state.reader().await?.item_json(&item_id).await?;
+    let source_id = item
+        .pointer("/MediaSources/0/Id")
+        .and_then(Value::as_str)
+        .map(|s| s.replace('-', ""))
+        .filter(|s| valid_item_id(s))
+        .unwrap_or_else(|| item_id.clone());
+    let mut map = sessions().lock().map_err(|_| Error::msg("internal error"))?;
+    let session = map.get_mut(&token).ok_or_else(|| Error::msg("This playback has ended."))?;
+    let mut out = Vec::new();
+    for s in item.get("MediaStreams").and_then(Value::as_array).into_iter().flatten() {
+        if s.get("Type").and_then(Value::as_str) != Some("Subtitle") {
+            continue;
+        }
+        let index = s.get("Index").and_then(Value::as_i64).unwrap_or(-1);
+        if index < 0 {
+            continue;
+        }
+        let text = s.get("IsTextSubtitleStream").and_then(Value::as_bool).unwrap_or(false);
+        if !session.subs.contains_key(&index) {
+            if !text {
+                continue; // picture subtitles can't be shown without restarting the stream
+            }
+            session.subs.insert(index, format!("/Videos/{item_id}/{source_id}/Subtitles/{index}/0/Stream.vtt"));
+        }
+        out.push(SubTrack {
+            index,
+            language: s.get("Language").and_then(Value::as_str).unwrap_or("").to_string(),
+            title: s.get("DisplayTitle").and_then(Value::as_str).unwrap_or("Subtitle").to_string(),
+            url: format!("{}/s/{token}/sub/{index}", media_base()),
+            default: s.get("IsDefault").and_then(Value::as_bool).unwrap_or(false),
+        });
+    }
+    Ok(out)
 }
 
 /// Saves where you are (and, at the end, that you watched it) in Jellyfin for your user,
@@ -342,6 +486,12 @@ async fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<V
         if let Some(idx) = file.strip_prefix("sub/") {
             let idx: i64 = idx.parse().map_err(|_| Error::msg("bad index"))?;
             (s.subs.get(&idx).cloned().ok_or_else(|| Error::msg("no such subtitle"))?, s.dir.clone())
+        } else if let Some(rest) = file.strip_prefix("trick/") {
+            // "trick/<width>/<n>.jpg": numbers only.
+            let (w, n) = rest.split_once('/').ok_or_else(|| Error::msg("bad path"))?;
+            let n = n.strip_suffix(".jpg").ok_or_else(|| Error::msg("bad path"))?;
+            let (w, n): (u32, u32) = (w.parse().map_err(|_| Error::msg("bad path"))?, n.parse().map_err(|_| Error::msg("bad path"))?);
+            (format!("/Videos/{}/Trickplay/{w}/{n}.jpg", s.item_id), s.dir.clone())
         } else {
             let q = uri.query().map(|q| format!("?{}", strip_key(q))).unwrap_or_default();
             (format!("{}{}{}", s.dir, file, q.trim_end_matches('?')), s.dir.clone())

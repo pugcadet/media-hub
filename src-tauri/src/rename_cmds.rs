@@ -55,38 +55,43 @@ pub async fn list_folders(state: State<'_, AppState>, folder: String) -> Result<
 #[serde(rename_all = "camelCase")]
 pub struct PlanArgs {
     /// "tv" | "movie"
-    mode: String,
+    pub(crate) mode: String,
     #[serde(flatten)]
-    req: PlanRequest,
+    pub(crate) req: PlanRequest,
     /// Movies: also look in sub-folders.
     #[serde(default)]
-    recursive: bool,
+    pub(crate) recursive: bool,
     /// Where names come from: "auto" | "jellyfin" | "tmdb" | "tvmaze" | "none".
     #[serde(default)]
-    source: Option<String>,
+    pub(crate) source: Option<String>,
     /// A specific match picked by the user, "source:id".
     #[serde(default)]
-    match_id: Option<String>,
+    pub(crate) match_id: Option<String>,
+    /// Movies: only this file (and its subtitles etc.), matched to the Jellyfin item `item_id`.
+    #[serde(default)]
+    pub(crate) only_file: Option<String>,
+    #[serde(default)]
+    pub(crate) item_id: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanResult {
-    plan_id: String,
-    ops: Vec<PlanOp>,
-    ok: usize,
-    unchanged: usize,
-    conflict: usize,
-    unparsed: usize,
-    titles_found: usize,
-    warning: Option<String>,
+    pub(crate) plan_id: String,
+    pub(crate) ops: Vec<PlanOp>,
+    pub(crate) ok: usize,
+    pub(crate) unchanged: usize,
+    pub(crate) conflict: usize,
+    pub(crate) unparsed: usize,
+    pub(crate) titles_found: usize,
+    pub(crate) warning: Option<String>,
     /// What the files seem to be (from folder and file names).
-    guess: String,
-    candidates: Vec<Candidate>,
-    chosen: Option<Candidate>,
-    matched_movies: usize,
+    pub(crate) guess: String,
+    pub(crate) candidates: Vec<Candidate>,
+    pub(crate) chosen: Option<Candidate>,
+    pub(crate) matched_movies: usize,
     /// "tv" | "movie" (what the folder was treated as)
-    mode: String,
+    pub(crate) mode: String,
 }
 
 fn tmdb_client(state: &AppState) -> Option<Tmdb> {
@@ -179,14 +184,43 @@ const MAX_MOVIE_LOOKUPS: usize = 150;
 
 #[tauri::command]
 pub async fn plan_rename(state: State<'_, AppState>, args: PlanArgs) -> Result<PlanResult> {
+    let (result, root, ops) = make_plan(&state, args).await?;
+    state.set_plan(StoredPlan { id: result.plan_id.clone(), root, ops })?;
+    Ok(result)
+}
+
+/// A Jellyfin show as a match, straight from the local list (sure when Jellyfin has it identified).
+fn jellyfin_candidate(state: &AppState, id: &str) -> Option<Candidate> {
+    let row = state.store().ok()?.get_many(&[id.to_string()]).ok()?.into_iter().next()?;
+    Some(Candidate {
+        source: "jellyfin".into(),
+        id: row.id,
+        name: row.name,
+        year: row.year,
+        poster: None,
+        score: if row.matched { 100 } else { 70 },
+        ids: HashMap::new(),
+    })
+}
+
+pub(crate) async fn make_plan(state: &AppState, args: PlanArgs) -> Result<(PlanResult, std::path::PathBuf, Vec<PlanOp>)> {
     let root = state.library_root()?;
     fsops::safe_rel(&args.req.folder)?;
-    let PlanArgs { mode, mut req, recursive, source, match_id } = args;
+    let PlanArgs { mode, mut req, recursive, source, match_id, only_file, item_id } = args;
     let source = source.unwrap_or_else(|| "auto".into());
 
     let (root2, folder) = (root.clone(), req.folder.clone());
-    let recurse = mode != "movie" || recursive;
-    let files = blocking(move || fsops::scan_files(&root2, &folder, recurse)).await?;
+    let recurse = (mode != "movie" || recursive) && only_file.is_none();
+    let mut files = blocking(move || fsops::scan_files(&root2, &folder, recurse)).await?;
+    if let Some(only) = &only_file {
+        // One movie: the file itself and files next to it that share its name (subtitles, .nfo, …).
+        let (dir, name) = crate::naming::split_path(only);
+        let stem = format!("{}.", crate::naming::split_ext(name).0);
+        files.retain(|f| {
+            let (d, n) = crate::naming::split_path(f);
+            f == only || (d == dir && n.starts_with(&stem))
+        });
+    }
     // "auto": shows when most videos carry a season/episode number, otherwise movies.
     let mode = if mode == "auto" { planner::detect_kind(&files).to_string() } else { mode };
 
@@ -204,14 +238,27 @@ pub async fn plan_rename(state: State<'_, AppState>, args: PlanArgs) -> Result<P
         let year = req.year.or(gyear);
         guess = format!("{name}{}", year.map(|y| format!(" ({y})")).unwrap_or_default());
         if source != "none" && !name.trim().is_empty() {
-            candidates = tv_candidates(&state, &source, &name, year, &mut warn).await;
+            candidates = tv_candidates(state, &source, &name, year, &mut warn).await;
             chosen = match &match_id {
-                Some(m) => candidates.iter().find(|c| format!("{}:{}", c.source, c.id) == *m).cloned(),
+                Some(m) => candidates.iter().find(|c| format!("{}:{}", c.source, c.id) == *m).cloned().or_else(|| {
+                    m.strip_prefix("jellyfin:").and_then(|id| jellyfin_candidate(state, id)).map(|c| {
+                        candidates.insert(0, c.clone());
+                        c
+                    })
+                }),
                 None => candidates.first().filter(|c| c.score >= 60).cloned(),
             };
+            // Your own identified Jellyfin show is a sure match.
+            if let Some(c) = chosen.as_mut() {
+                if c.source == "jellyfin" {
+                    if let Some(j) = jellyfin_candidate(state, &c.id) {
+                        c.score = c.score.max(j.score);
+                    }
+                }
+            }
         }
         if let Some(c) = &chosen {
-            match episode_titles_for(&state, c).await {
+            match episode_titles_for(state, c).await {
                 Ok(t) => titles = t,
                 Err(e) => warn.push(format!("Episode titles could not be loaded ({e}).")),
             }
@@ -224,6 +271,17 @@ pub async fn plan_rename(state: State<'_, AppState>, args: PlanArgs) -> Result<P
             req.ids = c.ids.clone();
         } else if source != "none" {
             warn.push("No confident match found online; names come from the files. Pick a match or type the name.".into());
+        }
+    } else if let Some(jid) = item_id.as_deref().filter(|i| jellyfin::valid_item_id(i)) {
+        // A movie Jellyfin already knows: its own title, year and TMDB id.
+        guess = String::new();
+        let item = state.reader().await?.item_json(jid).await?;
+        let title = item.get("Name").and_then(Value::as_str).unwrap_or("").to_string();
+        let tmdb = item.pointer("/ProviderIds/Tmdb").and_then(Value::as_str).map(String::from);
+        let sure = item.get("ProviderIds").and_then(Value::as_object).map(|p| !p.is_empty()).unwrap_or(false);
+        for f in files.iter().filter(|f| crate::naming::is_video(f)) {
+            movie_matches.insert(f.clone(), MovieMatch { title: title.clone(), year: year_of(&item), tmdb: tmdb.clone() });
+            movie_scores.insert(f.clone(), if sure { 100 } else { 70 });
         }
     } else {
         guess = String::new();
@@ -240,7 +298,7 @@ pub async fn plan_rename(state: State<'_, AppState>, args: PlanArgs) -> Result<P
                 }
                 let key = (name.to_lowercase(), year);
                 if !cache.contains_key(&key) {
-                    let best = match movie_candidates(&state, &name, year).await {
+                    let best = match movie_candidates(state, &name, year).await {
                         Ok(list) => list.into_iter().next().filter(|c| c.score >= 70),
                         Err(e) => {
                             warn.push(e.to_string());
@@ -299,8 +357,7 @@ pub async fn plan_rename(state: State<'_, AppState>, args: PlanArgs) -> Result<P
         matched_movies,
         mode: mode.clone(),
     };
-    state.set_plan(StoredPlan { id: result.plan_id.clone(), root, ops })?;
-    Ok(result)
+    Ok((result, root, ops))
 }
 
 /// Runs the plan that was last previewed (and only that one).

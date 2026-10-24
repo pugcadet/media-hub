@@ -251,8 +251,8 @@ fn episode_pick(e: &serde_json::Value, why: &str) -> Option<Pick> {
     })
 }
 
-/// Four picks for today: something you left halfway, the next episode of a show, an
-/// unwatched title and an old favourite. Same picks all day, new ones tomorrow.
+/// Up to twelve picks for today: something you left halfway, the next episode, then one from
+/// several shelves (unwatched, top rated, your genres, quick movies, …). Same picks all day, new ones tomorrow.
 #[tauri::command]
 pub async fn todays_picks(state: State<'_, AppState>, date: String) -> Result<Vec<Pick>> {
     if !picks::valid_date(&date) {
@@ -283,29 +283,70 @@ pub async fn todays_picks(state: State<'_, AppState>, date: String) -> Result<Ve
             }
         }
     }
-    let store = state.store()?;
-    let mut add_from_pool = |ids: Vec<String>, salt: &str, why: &str| -> Result<()> {
-        for id in picks::pick_ids(&ids, &date, salt, 3) {
-            if out.len() >= 4 || out.iter().any(|o| o.art_id == id) {
+    let rows = state.store()?.pick_rows()?;
+    for (why, salt, list) in pick_shelves(&rows) {
+        if out.len() >= MAX_PICKS {
+            break;
+        }
+        let ids: Vec<String> = list.iter().map(|r| r.id.clone()).collect();
+        for id in picks::pick_ids(&ids, &date, salt, 6) {
+            if out.iter().any(|o| o.art_id == id) {
                 continue;
             }
-            if let Some(r) = store.get_many(&[id.clone()])?.into_iter().next() {
+            if let Some(r) = list.iter().find(|r| r.id == id) {
                 let meta = match r.kind.as_str() {
                     "series" => r.episodes.map(|e| format!("{e} episodes")).unwrap_or_else(|| "Show".into()),
                     _ => format!("Movie{}", r.runtime.map(|m| format!(" · {}", fmt_minutes(m.round() as i64))).unwrap_or_default()),
                 };
-                out.push(Pick { id: r.id.clone(), art_id: r.id, title: r.name, why: why.into(), meta });
+                let meta = match r.year {
+                    Some(y) => format!("{y} · {meta}"),
+                    None => meta,
+                };
+                out.push(Pick { id: r.id.clone(), art_id: r.id.clone(), title: r.name.clone(), why, meta });
                 break;
             }
         }
-        Ok(())
-    };
-    add_from_pool(store.pick_pool("movie", Some(false))?, "unwatched-movie", "Unwatched")?;
-    add_from_pool(store.pick_pool("series", Some(false))?, "unwatched-show", "New to you")?;
-    add_from_pool(store.pick_pool("movie", Some(true))?, "rewatch", "Rewatch")?;
-    add_from_pool(store.pick_pool("series", None)?, "any", "From your library")?;
-    out.truncate(4);
+    }
+    out.truncate(MAX_PICKS);
     Ok(out)
+}
+
+const MAX_PICKS: usize = 12;
+
+/// The shelves picks are drawn from, one pick each, in this order.
+fn pick_shelves(rows: &[crate::store::ItemRow]) -> Vec<(String, &'static str, Vec<&crate::store::ItemRow>)> {
+    let f = |p: &dyn Fn(&crate::store::ItemRow) -> bool| rows.iter().filter(|r| p(r)).collect::<Vec<_>>();
+    let movie = |r: &crate::store::ItemRow| r.kind == "movie";
+    let show = |r: &crate::store::ItemRow| r.kind == "series";
+    // A genre you watch a lot, for "Because you like …".
+    let mut genre_count: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for r in rows.iter().filter(|r| r.played) {
+        for g in &r.genres {
+            *genre_count.entry(g.as_str()).or_default() += 1;
+        }
+    }
+    let mut top: Vec<(&str, usize)> = genre_count.into_iter().collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let mut shelves: Vec<(String, &'static str, Vec<&crate::store::ItemRow>)> = vec![
+        ("Unwatched".into(), "unwatched-movie", f(&|r| movie(r) && !r.played)),
+        ("New to you".into(), "unwatched-show", f(&|r| show(r) && !r.played)),
+        ("Top rated".into(), "top", f(&|r| !r.played && r.rating.unwrap_or(0.0) >= 7.5)),
+    ];
+    for (i, (g, _)) in top.iter().take(2).enumerate() {
+        let g = g.to_string();
+        let list = f(&|r| !r.played && r.genres.iter().any(|x| *x == g));
+        shelves.push((format!("Because you like {g}"), if i == 0 { "genre1" } else { "genre2" }, list));
+    }
+    shelves.extend([
+        ("Quick movie".to_string(), "quick", f(&|r| movie(r) && !r.played && r.runtime.map(|m| m > 0.0 && m <= 95.0).unwrap_or(false))),
+        ("Something to binge".to_string(), "binge", f(&|r| show(r) && !r.played && r.episodes.unwrap_or(0) >= 20)),
+        ("Hidden gem".to_string(), "gem", f(&|r| !r.played && r.rating.unwrap_or(0.0) >= 7.0 && r.year.map(|y| y < 2010).unwrap_or(false))),
+        ("Throwback".to_string(), "throwback", f(&|r| r.year.map(|y| y < 2000).unwrap_or(false))),
+        ("Rewatch".to_string(), "rewatch", f(&|r| movie(r) && r.played)),
+        ("Old favourite".to_string(), "fav", f(&|r| show(r) && r.played)),
+        ("From your library".to_string(), "any", f(&|_| true)),
+    ]);
+    shelves
 }
 
 /// Saves a TMDB API key (or read access token) after checking that TMDB accepts it.

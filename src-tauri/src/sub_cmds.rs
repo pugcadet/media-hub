@@ -140,12 +140,41 @@ async fn download(state: &AppState, w: &Writer, id: &str, item: &Value, sub_id: 
     Ok(())
 }
 
+/// Downloads one subtitle and waits (up to ~20 s) until Jellyfin lists it, so the window
+/// can show it straight away. Returns the new subtitle's stream index, if it showed up.
 #[tauri::command]
-pub async fn subtitle_download(state: State<'_, AppState>, id: String, subtitle_id: String, lang: String, codes: Vec<String>) -> Result<()> {
+pub async fn subtitle_download(state: State<'_, AppState>, id: String, subtitle_id: String, lang: String, codes: Vec<String>) -> Result<Option<i64>> {
     let codes = check_codes(&lang, &codes)?;
     let w = state.writer().await?;
     let item = w.reader().item_json(&id).await?;
-    download(&state, &w, &id, &item, &subtitle_id, codes).await
+    let before: Vec<String> = streams(&item).into_iter().filter(|s| s.external).map(|s| s.path).collect();
+    download(&state, &w, &id, &item, &subtitle_id, codes.clone()).await?;
+    Ok(wait_for_new(&w, &id, &before, &codes, 14).await)
+}
+
+async fn wait_for_new(w: &Writer, id: &str, before: &[String], codes: &[String], tries: u32) -> Option<i64> {
+    for i in 0..tries {
+        sleep_ms(if i == 0 { 800 } else { 1500 }).await;
+        if let Ok(item) = w.reader().item_json(id).await {
+            if let Some(s) = streams(&item)
+                .into_iter()
+                .find(|s| s.external && !before.contains(&s.path) && codes.iter().any(|c| c.eq_ignore_ascii_case(&s.language)))
+            {
+                return Some(s.index);
+            }
+        }
+        if i == 3 {
+            // Still not there: ask Jellyfin to look at the files again.
+            let _ = w.refresh_light(id).await;
+        }
+    }
+    None
+}
+
+async fn sleep_ms(ms: u64) {
+    tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_millis(ms)))
+        .await
+        .ok();
 }
 
 #[derive(Serialize)]

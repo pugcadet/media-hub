@@ -119,7 +119,7 @@ pub fn map_path(server_path: &str, map: Option<&PathMap>, root: Option<&Path>) -
         if let Some(rest) = server_path.strip_prefix(m.server.as_str()) {
             if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
                 let rc = components(rest);
-                if let Some(p) = join_rest(Path::new(&m.local), &rc).filter(|p| p.is_file()) {
+                if let Some(p) = join_rest(Path::new(&m.local), &rc).filter(|p| p.exists()) {
                     return Some((p, m.clone()));
                 }
             }
@@ -128,7 +128,7 @@ pub fn map_path(server_path: &str, map: Option<&PathMap>, root: Option<&Path>) -
     let root = root?;
     for i in 0..comps.len() {
         let Some(candidate) = join_rest(root, &comps[i..]) else { continue };
-        if candidate.is_file() {
+        if candidate.exists() {
             let server = server_path[..comps[i].0].trim_end_matches(['/', '\\']).to_string();
             return Some((candidate, PathMap { server, local: root.to_string_lossy().into_owned() }));
         }
