@@ -54,13 +54,13 @@ pub struct Overview {
     can_write_segments: bool,
 }
 
-fn reader(state: &AppState) -> Result<crate::jellyfin::Client> {
-    state.client()?.ok_or_else(|| Error::msg("Connect to your server first."))
+async fn reader(state: &AppState) -> Result<crate::jellyfin::Client> {
+    state.reader().await
 }
 
 #[tauri::command]
 pub async fn segments_overview(state: State<'_, AppState>, season_id: String) -> Result<Overview> {
-    let c = reader(&state)?;
+    let c = reader(&state).await?;
     let children = c.children(&season_id).await?;
     let mut episodes = Vec::new();
     for e in children.iter().filter(|e| e.get("Type").and_then(Value::as_str) == Some("Episode")) {
@@ -111,7 +111,7 @@ pub async fn detect_season(
     intro_max: f64,
     credits_max: f64,
 ) -> Result<Vec<Suggestion>> {
-    let c = reader(&state)?;
+    let c = reader(&state).await?;
     let settings = state.settings()?;
     let ffmpeg = media_tools::locate_ffmpeg(settings.ffmpeg_path.as_deref())
         .ok_or_else(|| Error::msg("ffmpeg was not found. See Settings → Tools."))?;
@@ -241,7 +241,7 @@ pub async fn save_segments(
     if !valid_item_id(&item_id) {
         return Err(Error::msg("bad id"));
     }
-    let w = state.writer()?;
+    let w = state.writer().await?;
     let api = w
         .reader()
         .segment_api()

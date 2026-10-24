@@ -18,6 +18,9 @@ pub struct Client {
     http: reqwest::Client,
     base: String,
     auth: String,
+    /// The Jellyfin user the app acts as (needed by newer Jellyfin versions for item
+    /// details and to see watched status). Picked automatically: the first administrator.
+    pub user: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,6 +51,19 @@ pub struct RawItem {
     pub overview: Option<String>,
     pub date_created: Option<String>,
     pub image_tags: Option<HashMap<String, String>>,
+    pub provider_ids: Option<HashMap<String, String>>,
+    pub child_count: Option<i64>,
+    pub recursive_item_count: Option<i64>,
+    pub run_time_ticks: Option<f64>,
+    pub user_data: Option<UserData>,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct UserData {
+    pub played: Option<bool>,
+    pub playback_position_ticks: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,11 +109,18 @@ pub struct NewItem {
     pub overview: String,
     pub has_poster: bool,
     pub added: Option<String>,
+    pub library: String,
+    pub matched: bool,
+    pub seasons: Option<i64>,
+    pub episodes: Option<i64>,
+    pub runtime: Option<f64>,
+    pub played: bool,
+    pub path: String,
 }
 
 impl RawItem {
     /// Returns None for item types we do not list (module 1 lists movies and shows).
-    pub fn into_new(self) -> Option<NewItem> {
+    pub fn into_new(self, library: &str) -> Option<NewItem> {
         let kind = match self.kind.as_str() {
             "Movie" => "movie",
             "Series" => "series",
@@ -113,7 +136,20 @@ impl RawItem {
             .chars()
             .take(MAX_OVERVIEW_CHARS)
             .collect();
+        let matched = self
+            .provider_ids
+            .as_ref()
+            .map(|p| ["Tmdb", "Tvdb", "Imdb"].iter().any(|k| p.get(*k).map(|v| !v.is_empty()).unwrap_or(false)))
+            .unwrap_or(false);
+        let is_series = kind == "series";
         Some(NewItem {
+            library: library.to_string(),
+            matched,
+            seasons: if is_series { self.child_count } else { None },
+            episodes: if is_series { self.recursive_item_count } else { None },
+            runtime: self.run_time_ticks.map(|t| t / TICKS_PER_SECOND / 60.0),
+            played: self.user_data.as_ref().and_then(|u| u.played).unwrap_or(false),
+            path: self.path.clone().unwrap_or_default(),
             has_poster: self
                 .image_tags
                 .as_ref()
@@ -163,7 +199,8 @@ impl Client {
         Ok(Client {
             http,
             base: base.trim_end_matches('/').to_string(),
-            auth: format!("MediaBrowser Token=\"{api_key}\""),
+            auth: format!("MediaBrowser Client=\"Media Hub\", Device=\"Desktop\", DeviceId=\"media-hub\", Version=\"0.9\", Token=\"{api_key}\""),
+            user: None,
         })
     }
 
@@ -177,15 +214,47 @@ impl Client {
             200..=299 => Ok(resp),
             401 | 403 => Err(Error::Unauthorized),
             404 => Err(Error::msg("Jellyfin does not know this item (it may have been removed).")),
-            s => Err(Error::msg(format!("The server answered with status {s}."))),
+            s => {
+                // Jellyfin usually says why in the body; show a short, single-line version.
+                let body = resp.text().await.unwrap_or_default();
+                let why: String = body.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
+                Err(Error::msg(if why.is_empty() {
+                    format!("The server answered with status {s}.")
+                } else {
+                    format!("The server answered with status {s}: {why}")
+                }))
+            }
         }
+    }
+
+    fn with_user(&self, mut q: Vec<(&'static str, String)>) -> Vec<(&'static str, String)> {
+        if let Some(u) = &self.user {
+            q.push(("userId", u.clone()));
+        }
+        q
+    }
+
+    /// The first enabled administrator (an API key can act for any user).
+    pub async fn pick_user(&self) -> Result<String> {
+        let users: Vec<serde_json::Value> = self.get_json("/Users", &[]).await?;
+        let enabled = |u: &&serde_json::Value| u.pointer("/Policy/IsDisabled").and_then(|v| v.as_bool()) != Some(true);
+        let admin = users
+            .iter()
+            .filter(enabled)
+            .find(|u| u.pointer("/Policy/IsAdministrator").and_then(|v| v.as_bool()) == Some(true))
+            .or_else(|| users.iter().find(enabled));
+        admin
+            .and_then(|u| u.get("Id").and_then(|i| i.as_str()))
+            .map(|s| s.replace('-', ""))
+            .filter(|s| valid_item_id(s))
+            .ok_or_else(|| Error::msg("No Jellyfin user found to act as."))
     }
 
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base, path)
     }
 
-    async fn get(&self, path: &str, query: &[(&str, String)]) -> Result<reqwest::Response> {
+    async fn get(&self, path: &str, query: &[(&'static str, String)]) -> Result<reqwest::Response> {
         self.send(self.http.get(self.url(path)).query(query)).await
     }
 
@@ -201,7 +270,7 @@ impl Client {
             .map_err(|_| Error::msg("The server answered, but not like a Jellyfin server."))
     }
 
-    async fn get_json<T: DeserializeOwned>(&self, path: &str, query: &[(&str, String)]) -> Result<T> {
+    async fn get_json<T: DeserializeOwned>(&self, path: &str, query: &[(&'static str, String)]) -> Result<T> {
         Self::read_json(self.get(path, query).await?).await
     }
 
@@ -215,16 +284,84 @@ impl Client {
         self.get_json("/System/Info", &[]).await
     }
 
-    pub async fn items_page(&self, start: u64, limit: u64) -> Result<Page> {
+    /// The user's libraries ("TV Shows", "Movies", "Kids", ...): (id, name, kind).
+    pub async fn views(&self) -> Result<Vec<(String, String, String)>> {
+        let v: serde_json::Value = self.get_json("/UserViews", &self.with_user(vec![])).await?;
+        Ok(v.get("Items")
+            .and_then(|i| i.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| {
+                        let kind = x.get("CollectionType").and_then(|c| c.as_str()).unwrap_or("mixed").to_string();
+                        if !["movies", "tvshows", "mixed", "homevideos"].contains(&kind.as_str()) {
+                            return None;
+                        }
+                        Some((x.get("Id")?.as_str()?.replace('-', ""), x.get("Name")?.as_str()?.to_string(), kind))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// How many movies and episodes have no subtitles at all.
+    pub async fn count_without_subtitles(&self) -> Result<u64> {
         let q = vec![
+            ("IncludeItemTypes", "Movie,Episode".to_string()),
+            ("Recursive", "true".to_string()),
+            ("HasSubtitles", "false".to_string()),
+            ("Limit", "0".to_string()),
+        ];
+        let v: serde_json::Value = self.get_json("/Items", &self.with_user(q)).await?;
+        Ok(v.get("TotalRecordCount").and_then(|t| t.as_u64()).unwrap_or(0))
+    }
+
+    /// Movies and episodes without subtitles, newest first.
+    pub async fn without_subtitles(&self, start: u64, limit: u64) -> Result<serde_json::Value> {
+        let q = vec![
+            ("IncludeItemTypes", "Movie,Episode".to_string()),
+            ("Recursive", "true".to_string()),
+            ("HasSubtitles", "false".to_string()),
+            ("SortBy", "SeriesSortName,ParentIndexNumber,IndexNumber,SortName".to_string()),
+            ("Fields", "Path".to_string()),
+            ("StartIndex", start.to_string()),
+            ("Limit", limit.min(500).to_string()),
+        ];
+        self.get_json("/Items", &self.with_user(q)).await
+    }
+
+    /// In-progress items (for "Left halfway").
+    pub async fn resume(&self) -> Result<Vec<serde_json::Value>> {
+        let q = self.with_user(vec![("Limit", "20".to_string()), ("MediaTypes", "Video".to_string())]);
+        let v: serde_json::Value = match self.get_json("/UserItems/Resume", &q).await {
+            Ok(v) => v,
+            Err(_) => {
+                let u = self.user.clone().unwrap_or_default();
+                self.get_json(&format!("/Users/{u}/Items/Resume"), &q).await?
+            }
+        };
+        Ok(v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default())
+    }
+
+    /// Next episode to watch per show.
+    pub async fn next_up(&self) -> Result<Vec<serde_json::Value>> {
+        let q = self.with_user(vec![("Limit", "30".to_string())]);
+        let v: serde_json::Value = self.get_json("/Shows/NextUp", &q).await?;
+        Ok(v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default())
+    }
+
+    pub async fn items_page(&self, parent: Option<&str>, start: u64, limit: u64) -> Result<Page> {
+        let mut q = vec![
             ("IncludeItemTypes", "Movie,Series".to_string()),
             ("Recursive", "true".to_string()),
-            ("Fields", "Genres,Overview,DateCreated,SortName".to_string()),
+            ("Fields", "Genres,Overview,DateCreated,SortName,ProviderIds,ChildCount,RecursiveItemCount,ParentId,Path".to_string()),
             ("SortBy", "SortName".to_string()),
             ("StartIndex", start.to_string()),
             ("Limit", limit.to_string()),
         ];
-        self.get_json("/Items", &q).await
+        if let Some(p) = parent {
+            q.push(("ParentId", p.to_string()));
+        }
+        self.get_json("/Items", &self.with_user(q)).await
     }
 
     pub async fn episodes(&self, series_id: &str) -> Result<Vec<RawEpisode>> {
@@ -237,7 +374,7 @@ impl Client {
             ("Recursive", "true".to_string()),
             ("Limit", "5000".to_string()),
         ];
-        let page: EpisodePage = self.get_json("/Items", &q).await?;
+        let page: EpisodePage = self.get_json("/Items", &self.with_user(q)).await?;
         Ok(page.items)
     }
 
@@ -299,14 +436,14 @@ impl Client {
         if !valid_item_id(id) {
             return Err(Error::msg("bad id"));
         }
-        self.get_json(&format!("/Items/{id}"), &[]).await
+        self.get_json(&format!("/Items/{id}"), &self.with_user(vec![])).await
     }
 
     pub async fn seasons(&self, series_id: &str) -> Result<Vec<serde_json::Value>> {
         if !valid_item_id(series_id) {
             return Err(Error::msg("bad id"));
         }
-        let v: serde_json::Value = self.get_json(&format!("/Shows/{series_id}/Seasons"), &[]).await?;
+        let v: serde_json::Value = self.get_json(&format!("/Shows/{series_id}/Seasons"), &self.with_user(vec![])).await?;
         Ok(v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default())
     }
 
@@ -342,7 +479,7 @@ impl Client {
             ("SortBy", "IndexNumber,SortName".to_string()),
             ("Limit", "2000".to_string()),
         ];
-        let v: serde_json::Value = self.get_json("/Items", &q).await?;
+        let v: serde_json::Value = self.get_json("/Items", &self.with_user(q)).await?;
         Ok(v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default())
     }
 
@@ -426,7 +563,7 @@ impl Client {
         let req = self
             .http
             .post(self.url(&format!("/Items/{id}/PlaybackInfo")))
-            .query(&[("deviceId", device_id)])
+            .query(&self.with_user(vec![("deviceId", device_id.to_string())]))
             .json(body);
         Self::read_json(self.send(req).await?).await
     }
@@ -726,7 +863,8 @@ mod tests {
         {"Id":"0123456789abcdef0123456789abcdef","Name":"Bluey","SortName":"bluey","Type":"Series",
          "ProductionYear":2018,"CommunityRating":9.1,"Genres":["Kids","Animation"],
          "Overview":"A family of dogs.","DateCreated":"2024-01-01T10:00:00.0000000Z",
-         "ImageTags":{"Primary":"abc","Logo":"def"}},
+         "ImageTags":{"Primary":"abc","Logo":"def"},"ProviderIds":{"Tvdb":"353546"},"ChildCount":3,"RecursiveItemCount":151,
+         "UserData":{"Played":true}},
         {"Id":"fedcba9876543210fedcba9876543210","Name":"Inception","Type":"Movie","Genres":null,"ImageTags":{}},
         {"Id":"11111111111111111111111111111111","Name":"Some Season","Type":"Season"}
       ],
@@ -738,11 +876,14 @@ mod tests {
     fn parses_a_jellyfin_page() {
         let page: Page = serde_json::from_str(SAMPLE).unwrap();
         assert_eq!(page.total_record_count, 3);
-        let items: Vec<NewItem> = page.items.into_iter().filter_map(RawItem::into_new).collect();
+        let items: Vec<NewItem> = page.items.into_iter().filter_map(|i| i.into_new("lib")).collect();
         assert_eq!(items.len(), 2, "seasons must be skipped");
         assert_eq!(items[0].kind, "series");
         assert!(items[0].has_poster);
         assert_eq!(items[0].genres, vec!["Kids", "Animation"]);
+        assert!(items[0].matched && items[0].played);
+        assert_eq!((items[0].seasons, items[0].episodes), (Some(3), Some(151)));
+        assert!(!items[1].matched);
         assert_eq!(items[1].kind, "movie");
         assert!(!items[1].has_poster);
         assert_eq!(items[1].sort_name, "inception");

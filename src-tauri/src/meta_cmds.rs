@@ -21,8 +21,8 @@ pub struct Details {
     can_edit: bool,
 }
 
-fn reader(state: &AppState) -> Result<crate::jellyfin::Client> {
-    state.client()?.ok_or_else(|| Error::msg("Connect to your server first."))
+async fn reader(state: &AppState) -> Result<crate::jellyfin::Client> {
+    state.reader().await
 }
 
 fn check_id(id: &str) -> Result<()> {
@@ -36,7 +36,7 @@ fn check_id(id: &str) -> Result<()> {
 #[tauri::command]
 pub async fn item_details(state: State<'_, AppState>, id: String) -> Result<Details> {
     check_id(&id)?;
-    let c = reader(&state)?;
+    let c = reader(&state).await?;
     let item = c.item_json(&id).await?;
     let images = c.image_list(&id).await.unwrap_or_default();
     let seasons = if item.get("Type").and_then(Value::as_str) == Some("Series") {
@@ -70,7 +70,7 @@ fn sync_row(state: &AppState, id: &str, item: &Value) -> Result<()> {
 #[tauri::command]
 pub async fn save_metadata(state: State<'_, AppState>, id: String, edits: ItemEdits) -> Result<()> {
     check_id(&id)?;
-    let w = state.writer()?;
+    let w = state.writer().await?;
     let old = w.reader().item_json(&id).await?;
     let mut new = old.clone();
     apply_edits(&mut new, &edits)?;
@@ -97,7 +97,7 @@ pub async fn identify_search(
     year: Option<i32>,
     ids: HashMap<String, String>,
 ) -> Result<Vec<Value>> {
-    let c = reader(&state)?;
+    let c = reader(&state).await?;
     let mut clean_ids = HashMap::new();
     for (k, v) in ids {
         let key = match k.to_lowercase().as_str() {
@@ -123,7 +123,7 @@ pub async fn identify_apply(state: State<'_, AppState>, id: String, result: Valu
     if !result.is_object() {
         return Err(Error::msg("bad result"));
     }
-    let w = state.writer()?;
+    let w = state.writer().await?;
     let old = w.reader().item_json(&id).await?;
     let entry = state
         .store()?
@@ -138,7 +138,7 @@ pub async fn identify_apply(state: State<'_, AppState>, id: String, result: Valu
 #[tauri::command]
 pub async fn remote_images(state: State<'_, AppState>, id: String, kind: String) -> Result<Vec<Value>> {
     check_id(&id)?;
-    reader(&state)?.remote_images(&id, &kind).await
+    reader(&state).await?.remote_images(&id, &kind).await
 }
 
 fn ext_for(content_type: &str) -> &'static str {
@@ -184,7 +184,7 @@ pub async fn upload_image_file(app: tauri::AppHandle, state: State<'_, AppState>
     use tauri_plugin_dialog::DialogExt;
     check_id(&id)?;
     let kind = image_kind(&kind).ok_or_else(|| Error::msg("bad image kind"))?;
-    let w = state.writer()?;
+    let w = state.writer().await?;
     let picked = tauri::async_runtime::spawn_blocking(move || {
         app.dialog().file().add_filter("Pictures", &["jpg", "jpeg", "png", "webp"]).blocking_pick_file()
     })
@@ -217,7 +217,7 @@ pub async fn set_image(state: State<'_, AppState>, id: String, kind: String, url
     if crate::images::allowed_remote(&url).is_none() {
         return Err(Error::msg("That picture does not come from a known image site."));
     }
-    let w = state.writer()?;
+    let w = state.writer().await?;
 
     let backup = backup_current(&state, &w, &id, kind).await?;
     let entry = state
@@ -242,7 +242,7 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
         state.store()?.journal_mark_undone(change_id)?;
         return Ok(());
     }
-    let w = state.writer()?;
+    let w = state.writer().await?;
     match ch.action.as_str() {
         "item_update" | "identify" => {
             check_id(&ch.target)?;
@@ -282,7 +282,7 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
 #[tauri::command]
 pub async fn refresh_item(state: State<'_, AppState>, id: String, replace_all: bool) -> Result<()> {
     check_id(&id)?;
-    state.writer()?.refresh(&id, replace_all).await
+    state.writer().await?.refresh(&id, replace_all).await
 }
 
 #[tauri::command]

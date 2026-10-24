@@ -65,13 +65,13 @@ fn check_codes(lang: &str, codes: &[String]) -> Result<Vec<String>> {
     Ok(all)
 }
 
-fn reader(state: &AppState) -> Result<crate::jellyfin::Client> {
-    state.client()?.ok_or_else(|| Error::msg("Connect to your server first."))
+async fn reader(state: &AppState) -> Result<crate::jellyfin::Client> {
+    state.reader().await
 }
 
 #[tauri::command]
 pub async fn languages(state: State<'_, AppState>) -> Result<Vec<Value>> {
-    reader(&state)?.cultures().await
+    reader(&state).await?.cultures().await
 }
 
 #[tauri::command]
@@ -90,7 +90,7 @@ pub fn set_sub_langs(state: State<'_, AppState>, langs: Vec<String>) -> Result<(
 
 #[tauri::command]
 pub async fn item_children(state: State<'_, AppState>, id: String) -> Result<Vec<Value>> {
-    reader(&state)?.children(&id).await
+    reader(&state).await?.children(&id).await
 }
 
 #[derive(Serialize)]
@@ -106,7 +106,7 @@ pub async fn subtitle_options(state: State<'_, AppState>, id: String, lang: Stri
     if !valid_item_id(&id) || !subs::valid_lang(&lang) {
         return Err(Error::msg("bad request"));
     }
-    let c = reader(&state)?;
+    let c = reader(&state).await?;
     let item = c.item_json(&id).await?;
     let file = file_stem(&item);
     let found = c.subtitle_search(&id, &lang).await.map_err(|e| {
@@ -143,7 +143,7 @@ async fn download(state: &AppState, w: &Writer, id: &str, item: &Value, sub_id: 
 #[tauri::command]
 pub async fn subtitle_download(state: State<'_, AppState>, id: String, subtitle_id: String, lang: String, codes: Vec<String>) -> Result<()> {
     let codes = check_codes(&lang, &codes)?;
-    let w = state.writer()?;
+    let w = state.writer().await?;
     let item = w.reader().item_json(&id).await?;
     download(&state, &w, &id, &item, &subtitle_id, codes).await
 }
@@ -162,7 +162,7 @@ pub struct AutoResult {
 #[tauri::command]
 pub async fn subtitle_auto(state: State<'_, AppState>, id: String, lang: String, codes: Vec<String>, min_score: u32) -> Result<AutoResult> {
     let codes = check_codes(&lang, &codes)?;
-    let w = state.writer()?;
+    let w = state.writer().await?;
     let item = w.reader().item_json(&id).await?;
     if has_lang(&streams(&item), &codes) {
         return Ok(AutoResult { outcome: "has", score: None, name: None });

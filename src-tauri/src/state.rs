@@ -101,12 +101,23 @@ impl AppState {
     }
 
     /// The only way to get something that can change Jellyfin. Refuses while changes are switched off.
-    pub fn writer(&self) -> Result<Writer> {
+    pub async fn writer(&self) -> Result<Writer> {
         if self.settings()?.read_only {
             return Err(Error::msg("Changes to Jellyfin are switched off. Turn them on in Settings first."));
         }
-        let client = self.client()?.ok_or_else(|| Error::msg("Connect to your server first."))?;
-        Ok(client.into_writer())
+        Ok(self.reader().await?.into_writer())
+    }
+
+    /// A connected client that acts as a Jellyfin user (picked once, then remembered).
+    pub async fn reader(&self) -> Result<Client> {
+        let mut c = self.client()?.ok_or_else(|| Error::msg("Connect to your server first."))?;
+        if c.user.is_none() {
+            let u = c.pick_user().await?;
+            let saved = u.clone();
+            self.update_settings(move |s| s.user_id = Some(saved))?;
+            c.user = Some(u);
+        }
+        Ok(c)
     }
 
     /// A client for the saved server, or None when the app is not connected yet.
@@ -117,6 +128,8 @@ impl AppState {
         let Some(key) = self.key()? else {
             return Ok(None);
         };
-        Ok(Some(Client::new(&url, &key)?))
+        let mut c = Client::new(&url, &key)?;
+        c.user = self.settings()?.user_id;
+        Ok(Some(c))
     }
 }

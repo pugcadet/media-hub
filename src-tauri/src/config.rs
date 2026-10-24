@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 pub struct Settings {
     pub server_url: Option<String>,
     pub server_name: Option<String>,
+    /// Jellyfin user the app acts as (chosen automatically: first administrator).
+    pub user_id: Option<String>,
     /// The folder on this computer where the NAS share is mounted (for renaming).
     pub library_root: Option<String>,
     /// Preferred subtitle languages, 3-letter codes in order ("eng", "dut").
@@ -24,6 +26,10 @@ pub struct Settings {
     pub download_dir: Option<String>,
     /// Browser the downloader may borrow YouTube sign-in cookies from ("firefox", ...). None = off.
     pub cookies_browser: Option<String>,
+    /// Language for titles from TMDB, e.g. "en-US" or "nl-NL".
+    pub title_lang: String,
+    /// Whether a TMDB key is saved (the key itself is in the key storage).
+    pub has_tmdb: bool,
     /// While true, the app only reads from Jellyfin. Later modules check this
     /// flag before they change anything. It starts on and stays on by default.
     pub read_only: bool,
@@ -34,6 +40,7 @@ impl Default for Settings {
         Settings {
             server_url: None,
             server_name: None,
+            user_id: None,
             library_root: None,
             sub_langs: vec!["eng".into()],
             ffmpeg_path: None,
@@ -41,6 +48,8 @@ impl Default for Settings {
             device_id: None,
             download_dir: None,
             cookies_browser: None,
+            title_lang: "en-US".into(),
+            has_tmdb: false,
             read_only: true,
         }
     }

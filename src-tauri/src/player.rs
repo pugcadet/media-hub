@@ -157,7 +157,7 @@ pub async fn play_start(state: State<'_, AppState>, id: String, start: f64) -> R
     if !valid_item_id(&id) {
         return Err(Error::msg("bad id"));
     }
-    let c = state.client()?.ok_or_else(|| Error::msg("Connect to your server first."))?;
+    let c = state.reader().await?;
     let device_id = state.device_id()?;
     let item = c.item_json(&id).await?;
     let start = start.max(0.0);

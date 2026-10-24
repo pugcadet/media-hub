@@ -24,6 +24,30 @@ pub struct ItemRow {
     pub genres: Vec<String>,
     pub overview: String,
     pub has_poster: bool,
+    pub library: String,
+    /// Linked to TMDB, TVDB or IMDb in Jellyfin.
+    pub matched: bool,
+    pub seasons: Option<i64>,
+    pub episodes: Option<i64>,
+    /// minutes
+    pub runtime: Option<f64>,
+    pub played: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryInfo {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attention {
+    pub unmatched: i64,
+    pub no_poster: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +140,21 @@ fn migrate(conn: &Connection) -> Result<()> {
              COMMIT;",
         )?;
     }
+    if version < 3 {
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE items ADD COLUMN library TEXT NOT NULL DEFAULT '';
+             ALTER TABLE items ADD COLUMN matched INTEGER NOT NULL DEFAULT 1;
+             ALTER TABLE items ADD COLUMN seasons INTEGER;
+             ALTER TABLE items ADD COLUMN episodes INTEGER;
+             ALTER TABLE items ADD COLUMN runtime REAL;
+             ALTER TABLE items ADD COLUMN played INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE items ADD COLUMN path TEXT NOT NULL DEFAULT '';
+             CREATE TABLE libraries(id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, ord INTEGER NOT NULL);
+             PRAGMA user_version = 3;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 
@@ -134,10 +173,16 @@ fn row_to_item(r: &rusqlite::Row) -> rusqlite::Result<ItemRow> {
             .collect(),
         overview: r.get(6)?,
         has_poster: r.get::<_, i64>(7)? != 0,
+        library: r.get(8)?,
+        matched: r.get::<_, i64>(9)? != 0,
+        seasons: r.get(10)?,
+        episodes: r.get(11)?,
+        runtime: r.get(12)?,
+        played: r.get::<_, i64>(13)? != 0,
     })
 }
 
-const COLS: &str = "id, kind, name, year, rating, genres, overview, has_poster";
+const COLS: &str = "id, kind, name, year, rating, genres, overview, has_poster, library, matched, seasons, episodes, runtime, played";
 
 /// Escapes % and _ so a search for "100%" is a literal search.
 fn like_pattern(q: &str) -> String {
@@ -179,7 +224,7 @@ impl Store {
 
     /// Replaces the whole cached list in one transaction. If the server suddenly returns
     /// nothing while we hold a list, we keep the old list and say so.
-    pub fn replace_all(&mut self, items: &[NewItem], now: i64) -> Result<()> {
+    pub fn replace_all(&mut self, items: &[NewItem], libraries: &[(String, String, String)], now: i64) -> Result<()> {
         let existing: i64 = self.conn.query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))?;
         if items.is_empty() && existing > 0 {
             return Err(Error::msg(
@@ -189,12 +234,15 @@ impl Store {
         let tx = self.conn.transaction()?;
         {
             let mut up = tx.prepare(
-                "INSERT INTO items(id,kind,name,sort_name,year,rating,genres,overview,has_poster,added,synced)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+                "INSERT INTO items(id,kind,name,sort_name,year,rating,genres,overview,has_poster,added,synced,
+                                   library,matched,seasons,episodes,runtime,played,path)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
                  ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, name=excluded.name,
                    sort_name=excluded.sort_name, year=excluded.year, rating=excluded.rating,
                    genres=excluded.genres, overview=excluded.overview, has_poster=excluded.has_poster,
-                   added=excluded.added, synced=excluded.synced",
+                   added=excluded.added, synced=excluded.synced, library=excluded.library,
+                   matched=excluded.matched, seasons=excluded.seasons, episodes=excluded.episodes,
+                   runtime=excluded.runtime, played=excluded.played, path=excluded.path",
             )?;
             for it in items {
                 up.execute(params![
@@ -208,11 +256,25 @@ impl Store {
                     it.overview,
                     it.has_poster as i64,
                     it.added,
-                    now
+                    now,
+                    it.library,
+                    it.matched as i64,
+                    it.seasons,
+                    it.episodes,
+                    it.runtime,
+                    it.played as i64,
+                    it.path
                 ])?;
             }
         }
         tx.execute("DELETE FROM items WHERE synced <> ?1", params![now])?;
+        tx.execute("DELETE FROM libraries", [])?;
+        for (i, (id, name, kind)) in libraries.iter().enumerate() {
+            tx.execute(
+                "INSERT OR REPLACE INTO libraries(id,name,kind,ord) VALUES (?1,?2,?3,?4)",
+                params![id, name, kind, i as i64],
+            )?;
+        }
         tx.execute(
             "INSERT INTO meta(key,value) VALUES('last_sync',?1)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -222,8 +284,36 @@ impl Store {
         Ok(())
     }
 
+    pub fn libraries(&self) -> Result<Vec<LibraryInfo>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT l.id, l.name, l.kind, (SELECT COUNT(*) FROM items i WHERE i.library = l.id)
+             FROM libraries l ORDER BY l.ord",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(LibraryInfo { id: r.get(0)?, name: r.get(1)?, kind: r.get(2)?, count: r.get(3)? })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn attention(&self) -> Result<Attention> {
+        let n = |sql: &str| -> Result<i64> { Ok(self.conn.query_row(sql, [], |r| r.get(0))?) };
+        Ok(Attention {
+            unmatched: n("SELECT COUNT(*) FROM items WHERE matched = 0")?,
+            no_poster: n("SELECT COUNT(*) FROM items WHERE has_poster = 0")?,
+        })
+    }
+
+    /// Ids for the daily picks: titles with a poster, optionally only (un)watched ones.
+    pub fn pick_pool(&self, kind: &str, played: Option<bool>) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM items WHERE kind=?1 AND has_poster=1 AND (?2 IS NULL OR played = ?2)",
+        )?;
+        let rows = stmt.query_map(params![kind, played.map(|p| p as i64)], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn clear(&mut self) -> Result<()> {
-        self.conn.execute_batch("DELETE FROM items; DELETE FROM meta;")?;
+        self.conn.execute_batch("DELETE FROM items; DELETE FROM meta; DELETE FROM libraries;")?;
         Ok(())
     }
 
@@ -244,25 +334,39 @@ impl Store {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn list(
         &self,
         kind: Option<&str>,
+        library: Option<&str>,
+        flag: Option<&str>,
         query: Option<&str>,
         sort: &str,
         offset: i64,
         limit: i64,
     ) -> Result<Vec<ItemRow>> {
         let kind = kind.filter(|k| *k == "movie" || *k == "series");
+        let library = library.filter(|l| !l.is_empty());
+        // Fixed conditions only; nothing from the window is pasted into the query.
+        let flag_sql = match flag {
+            Some("unmatched") => "matched = 0",
+            Some("noposter") => "has_poster = 0",
+            Some("unwatched") => "played = 0",
+            _ => "1 = 1",
+        };
         let pattern = query.filter(|q| !q.trim().is_empty()).map(like_pattern);
         let sql = format!(
             "SELECT {COLS} FROM items
-             WHERE (?1 IS NULL OR kind = ?1) AND (?2 IS NULL OR name LIKE ?2 ESCAPE '\\')
-             ORDER BY {} LIMIT ?3 OFFSET ?4",
+             WHERE (?1 IS NULL OR kind = ?1) AND (?2 IS NULL OR library = ?2)
+               AND (?3 IS NULL OR name LIKE ?3 ESCAPE '\\' OR path LIKE ?3 ESCAPE '\\' OR id = ?5)
+               AND {flag_sql}
+             ORDER BY {} LIMIT ?4 OFFSET ?6",
             order_by(sort)
         );
         let mut stmt = self.conn.prepare(&sql)?;
+        let exact = query.map(|q| q.trim().to_lowercase());
         let rows = stmt.query_map(
-            params![kind, pattern, limit.clamp(1, 500), offset.max(0)],
+            params![kind, library, pattern, limit.clamp(1, 500), exact, offset.max(0)],
             row_to_item,
         )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -481,15 +585,22 @@ mod tests {
             overview: "x".into(),
             has_poster: poster,
             added: None,
+            library: "lib".into(),
+            matched: true,
+            seasons: None,
+            episodes: None,
+            runtime: None,
+            played: false,
+            path: String::new(),
         }
     }
 
     #[test]
     fn sync_replaces_and_removes_old_items() {
         let mut s = Store::in_memory().unwrap();
-        s.replace_all(&[item("a", "movie", "Alpha", true), item("b", "series", "Beta", true)], 1).unwrap();
-        s.replace_all(&[item("b", "series", "Beta", true), item("c", "movie", "Gamma", false)], 2).unwrap();
-        let all = s.list(None, None, "name", 0, 100).unwrap();
+        s.replace_all(&[item("a", "movie", "Alpha", true), item("b", "series", "Beta", true)], &[], 1).unwrap();
+        s.replace_all(&[item("b", "series", "Beta", true), item("c", "movie", "Gamma", false)], &[], 2).unwrap();
+        let all = s.list(None, None, None, None, "name", 0, 100).unwrap();
         let names: Vec<_> = all.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, vec!["Beta", "Gamma"]);
         let c = s.counts().unwrap();
@@ -499,8 +610,8 @@ mod tests {
     #[test]
     fn empty_answer_keeps_old_list() {
         let mut s = Store::in_memory().unwrap();
-        s.replace_all(&[item("a", "movie", "Alpha", true)], 1).unwrap();
-        assert!(s.replace_all(&[], 2).is_err());
+        s.replace_all(&[item("a", "movie", "Alpha", true)], &[], 1).unwrap();
+        assert!(s.replace_all(&[], &[], 2).is_err());
         assert_eq!(s.counts().unwrap().movies, 1);
     }
 
@@ -509,21 +620,25 @@ mod tests {
         let mut s = Store::in_memory().unwrap();
         s.replace_all(
             &[item("a", "movie", "100% Wolf", true), item("b", "series", "Bluey", true), item("c", "movie", "Blue Planet", true)],
+            &[],
             1,
         )
         .unwrap();
-        assert_eq!(s.list(None, Some("100%"), "name", 0, 10).unwrap().len(), 1);
-        assert_eq!(s.list(None, Some("%"), "name", 0, 10).unwrap().len(), 1);
-        assert_eq!(s.list(Some("movie"), Some("blue"), "name", 0, 10).unwrap().len(), 1);
-        assert_eq!(s.list(None, Some("blue"), "name", 0, 10).unwrap().len(), 2);
+        assert_eq!(s.list(None, None, None, Some("100%"), "name", 0, 10).unwrap().len(), 1);
+        assert_eq!(s.list(None, None, None, Some("%"), "name", 0, 10).unwrap().len(), 1);
+        assert_eq!(s.list(Some("movie"), None, None, Some("blue"), "name", 0, 10).unwrap().len(), 1);
+        assert_eq!(s.list(None, None, None, Some("blue"), "name", 0, 10).unwrap().len(), 2);
     }
 
     #[test]
     fn unknown_sort_falls_back_and_candidates_need_poster() {
         let mut s = Store::in_memory().unwrap();
-        s.replace_all(&[item("a", "movie", "A", true), item("b", "movie", "B", false)], 1).unwrap();
-        assert_eq!(s.list(None, None, "x; DROP TABLE items", 0, 10).unwrap().len(), 2);
+        s.replace_all(&[item("a", "movie", "A", true), item("b", "movie", "B", false)], &[("lib".into(), "Films".into(), "movies".into())], 1).unwrap();
+        assert_eq!(s.list(None, None, Some("x; DROP"), None, "x; DROP TABLE items", 0, 10).unwrap().len(), 2);
+        assert_eq!(s.list(None, None, Some("noposter"), None, "name", 0, 10).unwrap().len(), 1);
         assert_eq!(s.candidate_ids("movie").unwrap(), vec!["a".to_string()]);
+        assert_eq!(s.libraries().unwrap()[0].count, 2);
+        assert_eq!(s.attention().unwrap().no_poster, 1);
         let row = &s.get_many(&["a".to_string()]).unwrap()[0];
         assert_eq!(row.genres, vec!["Kids", "Animation"]);
     }

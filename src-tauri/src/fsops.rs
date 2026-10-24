@@ -252,6 +252,7 @@ mod tests {
             season: None,
             episodes: vec![],
             verified: true,
+            score: None,
         }
     }
 

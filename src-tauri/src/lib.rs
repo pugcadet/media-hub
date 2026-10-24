@@ -16,6 +16,7 @@ mod player;
 mod rename_cmds;
 mod secrets;
 mod seg_cmds;
+mod sources;
 mod state;
 mod storage;
 mod store;
@@ -46,6 +47,11 @@ pub fn run() {
             commands::sync_library,
             commands::list_items,
             commands::todays_picks,
+            commands::libraries,
+            commands::attention,
+            commands::missing_subtitles,
+            commands::set_tmdb_key,
+            commands::set_title_lang,
             rename_cmds::pick_library_root,
             rename_cmds::list_folders,
             rename_cmds::plan_rename,

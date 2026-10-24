@@ -30,6 +30,17 @@ pub struct PlanRequest {
     pub year: Option<i32>,
     #[serde(default)]
     pub find_replace: Vec<FindReplace>,
+    /// Ids of the matched show (tmdb/tvdb), used for {tmdbtag}/{tvdbtag}. Filled by the app.
+    #[serde(default, skip_deserializing)]
+    pub ids: HashMap<String, String>,
+}
+
+/// What the online match decided for one movie file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MovieMatch {
+    pub title: String,
+    pub year: Option<i32>,
+    pub tmdb: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -46,6 +57,8 @@ pub struct PlanOp {
     pub episodes: Vec<u32>,
     /// True when reading the NEW name back gives the same season/episode (or title/year).
     pub verified: bool,
+    /// How sure the online match is (0-100), when one was made.
+    pub score: Option<u8>,
 }
 
 enum Rule {
@@ -177,8 +190,54 @@ fn add_sidecars(files: &[String], videos: &[VideoInfo], rules: &[Rule], ops: &mu
             season: None,
             episodes: Vec::new(),
             verified: true,
+            score: None,
         });
     }
+}
+
+/// A year written in the file names ("Bluey (2018) - S01E01"), when the folder has none.
+pub fn year_from_files(files: &[String]) -> Option<i32> {
+    files.iter().filter(|f| is_video(split_path(f).1)).find_map(|f| {
+        let stem = split_ext(split_path(f).1).0;
+        let before = match parse_episode(stem, None) {
+            Some(m) => {
+                let marker = stem[..m.end].rfind(|c: char| c == 's' || c == 'S').unwrap_or(0);
+                &stem[..marker]
+            }
+            None => stem,
+        };
+        parse_name(before).year
+    })
+}
+
+/// Best guess of the show's name and year, from the folder or else the file names.
+pub fn guess_show(folder: &str, files: &[String]) -> (String, Option<i32>) {
+    let p = parse_name(folder.rsplit('/').next().unwrap_or(""));
+    let year = p.year.or_else(|| year_from_files(files));
+    if !p.title.trim().is_empty() {
+        return (p.title, year);
+    }
+    let from_file = files.iter().find(|f| is_video(split_path(f).1)).map(|f| {
+        let stem = split_ext(split_path(f).1).0;
+        let end = parse_episode(stem, None).map(|m| stem[..m.end].rfind(['s', 'S']).unwrap_or(0)).unwrap_or(stem.len());
+        parse_name(&stem[..end]).title
+    });
+    (from_file.unwrap_or_default(), year)
+}
+
+/// Title and year read from a movie file name (or its folder).
+pub fn movie_guess(rel: &str, folder: &str) -> (String, Option<i32>) {
+    let (dir, name) = split_path(rel);
+    let mut p = parse_name(split_ext(name).0);
+    let folder_name = folder.rsplit('/').next().unwrap_or("");
+    if (p.title.is_empty() || p.year.is_none()) && !dir.is_empty() && dir.rsplit('/').next() != Some(folder_name) {
+        let d = parse_name(dir.rsplit('/').next().unwrap_or(""));
+        p.year = p.year.or(d.year);
+        if p.title.is_empty() {
+            p.title = d.title;
+        }
+    }
+    (p.title, p.year)
 }
 
 pub fn plan_tv(
@@ -197,7 +256,7 @@ pub fn plan_tv(
         .clone()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| parsed.title.clone());
-    let year = req.year.or(parsed.year);
+    let year = req.year.or(parsed.year).or_else(|| year_from_files(files));
     if show.trim().is_empty() {
         return Err("Could not work out the show name. Type it in.".into());
     }
@@ -220,6 +279,7 @@ pub fn plan_tv(
                 season: None,
                 episodes: Vec::new(),
                 verified: false,
+                score: None,
             });
             continue;
         };
@@ -255,10 +315,10 @@ pub fn plan_tv(
             vars.insert("title", Var::text(title));
         }
         vars.insert("ext", Var::text(ext.to_lowercase()));
-        if let Some(id) = &parsed.tmdb {
+        if let Some(id) = req.ids.get("tmdb").or(parsed.tmdb.as_ref()) {
             vars.insert("tmdbtag", Var::text(format!("{{tmdb-{id}}}")));
         }
-        if let Some(id) = &parsed.tvdb {
+        if let Some(id) = req.ids.get("tvdb").or(parsed.tvdb.as_ref()) {
             vars.insert("tvdbtag", Var::text(format!("{{tvdb-{id}}}")));
         }
 
@@ -274,6 +334,7 @@ pub fn plan_tv(
                     season: Some(m.season),
                     episodes: m.episodes.clone(),
                     verified: false,
+                    score: None,
                 });
                 continue;
             }
@@ -294,6 +355,7 @@ pub fn plan_tv(
             season: Some(m.season),
             episodes: m.episodes,
             verified,
+            score: None,
         });
     }
 
@@ -306,6 +368,7 @@ pub fn plan_tv(
 pub fn plan_movies(
     files: &[String],
     req: &PlanRequest,
+    matches: &HashMap<String, MovieMatch>,
     exists: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<PlanOp>, String> {
     let tpl = Template::parse(&req.template, MOVIE_TOKENS)?;
@@ -329,8 +392,12 @@ pub fn plan_movies(
                 p.title = from_dir.title;
             }
         }
-        let title = req.show.clone().filter(|s| !s.trim().is_empty() && files.len() == 1).unwrap_or(p.title.clone());
-        let year = req.year.filter(|_| files.len() == 1).or(p.year);
+        let found = matches.get(f.as_str());
+        if let Some(m) = found {
+            p.tmdb = m.tmdb.clone().or(p.tmdb);
+        }
+        let title = found.map(|m| m.title.clone()).unwrap_or(p.title.clone());
+        let year = found.and_then(|m| m.year).or(p.year);
 
         let mut vars: HashMap<&str, Var> = HashMap::new();
         vars.insert("title", Var::text(title.as_str()));
@@ -357,6 +424,7 @@ pub fn plan_movies(
                     season: None,
                     episodes: Vec::new(),
                     verified: false,
+                    score: None,
                 });
                 continue;
             }
@@ -373,6 +441,7 @@ pub fn plan_movies(
             season: None,
             episodes: Vec::new(),
             verified,
+            score: None,
         });
     }
 
@@ -390,7 +459,7 @@ mod tests {
     const MOVIE: &str = "{title}< ({year})>/{title}< ({year})>.{ext}";
 
     fn req(folder: &str, template: &str) -> PlanRequest {
-        PlanRequest { template: template.into(), folder: folder.into(), show: None, year: None, find_replace: vec![] }
+        PlanRequest { template: template.into(), folder: folder.into(), show: None, year: None, find_replace: vec![], ids: HashMap::new() }
     }
 
     fn files(list: &[&str]) -> Vec<String> {
@@ -504,7 +573,7 @@ mod tests {
             "The.Matrix.1999.1080p.BluRay.x264.en.srt",
             "Mission Impossible - Fallout (2018).mp4",
         ]);
-        let ops = plan_movies(&f, &req("", MOVIE), &nothing_exists).unwrap();
+        let ops = plan_movies(&f, &req("", MOVIE), &HashMap::new(), &nothing_exists).unwrap();
         assert_eq!(by_from(&ops, &f[0]).to, "The Matrix (1999)/The Matrix (1999).mkv");
         assert_eq!(by_from(&ops, &f[1]).to, "The Matrix (1999)/The Matrix (1999).en.srt");
         assert_eq!(
@@ -515,11 +584,31 @@ mod tests {
     }
 
     #[test]
+    fn year_comes_from_file_names_when_folder_has_none() {
+        let f = files(&["Bluey/Season 1/Bluey (2018) - S01E01 - Magic Xylophone.mkv"]);
+        let ops = plan_tv(&f, &req("Bluey", TV), &HashMap::new(), &nothing_exists).unwrap();
+        assert_eq!(ops[0].to, "Bluey (2018)/Season 01/Bluey (2018) - S01E01 - Magic Xylophone.mkv");
+        assert_eq!(guess_show("Bluey", &f), ("Bluey".to_string(), Some(2018)));
+        assert_eq!(guess_show("", &files(&["Bluey.2018.S01E02.mkv"])), ("Bluey".to_string(), Some(2018)));
+    }
+
+    #[test]
+    fn online_movie_matches_fix_titles() {
+        let f = files(&["matrix.mkv"]);
+        let mut m = HashMap::new();
+        m.insert("matrix.mkv".to_string(), MovieMatch { title: "The Matrix".into(), year: Some(1999), tmdb: Some("603".into()) });
+        let ops = plan_movies(&f, &req("", "{title}< ({year})>< {tmdbtag}>/{title}< ({year})>.{ext}"), &m, &nothing_exists).unwrap();
+        assert_eq!(ops[0].to, "The Matrix (1999) {tmdb-603}/The Matrix (1999).mkv");
+        assert_eq!(movie_guess("Inception (2010)/movie.mkv", ""), ("movie".to_string(), Some(2010)));
+    }
+
+    #[test]
     fn movie_id_tags_can_be_kept() {
         let f = files(&["Inception (2010) {tmdb-27205}.mp4"]);
         let ops = plan_movies(
             &f,
             &req("", "{title}< ({year})>< {tmdbtag}>/{title}< ({year})>< {tmdbtag}>.{ext}"),
+            &HashMap::new(),
             &nothing_exists,
         )
         .unwrap();
