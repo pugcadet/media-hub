@@ -12,6 +12,8 @@ mod rename_cmds;
 mod secrets;
 mod state;
 mod store;
+mod sub_cmds;
+mod subs;
 
 use tauri::Manager;
 
@@ -49,6 +51,12 @@ pub fn run() {
             meta_cmds::undo_change,
             meta_cmds::refresh_item,
             meta_cmds::set_read_only,
+            sub_cmds::languages,
+            sub_cmds::set_sub_langs,
+            sub_cmds::item_children,
+            sub_cmds::subtitle_options,
+            sub_cmds::subtitle_download,
+            sub_cmds::subtitle_auto,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Media Hub");

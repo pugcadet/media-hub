@@ -331,6 +331,34 @@ impl Client {
         Ok(v.get("Images").and_then(|i| i.as_array()).cloned().unwrap_or_default())
     }
 
+    /// Direct children (seasons of a show, episodes of a season), with file path and streams.
+    pub async fn children(&self, parent_id: &str) -> Result<Vec<serde_json::Value>> {
+        if !valid_item_id(parent_id) {
+            return Err(Error::msg("bad id"));
+        }
+        let q = vec![
+            ("ParentId", parent_id.to_string()),
+            ("Fields", "Path,MediaStreams,Overview".to_string()),
+            ("SortBy", "IndexNumber,SortName".to_string()),
+            ("Limit", "2000".to_string()),
+        ];
+        let v: serde_json::Value = self.get_json("/Items", &q).await?;
+        Ok(v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default())
+    }
+
+    pub async fn cultures(&self) -> Result<Vec<serde_json::Value>> {
+        self.get_json("/Localization/Cultures", &[]).await
+    }
+
+    /// Asks Jellyfin's subtitle providers (e.g. OpenSubtitles) for candidates. Changes nothing.
+    pub async fn subtitle_search(&self, id: &str, lang: &str) -> Result<Vec<crate::subs::SubInfo>> {
+        if !valid_item_id(id) || !crate::subs::valid_lang(lang) {
+            return Err(Error::msg("bad request"));
+        }
+        let q = vec![("isPerfectMatch", "false".to_string())];
+        self.get_json(&format!("/Items/{id}/RemoteSearch/Subtitles/{lang}"), &q).await
+    }
+
     /// Asks Jellyfin's metadata providers (TMDB, TVDB, ...) for matches. Uses POST,
     /// but only searches: nothing on the server changes.
     pub async fn remote_search(&self, kind: &str, name: &str, year: Option<i32>, ids: &HashMap<String, String>) -> Result<Vec<serde_json::Value>> {
@@ -415,6 +443,25 @@ impl Writer {
     pub async fn delete_image(&self, id: &str, kind: &str, index: u32) -> Result<()> {
         let path = Client::image_path(id, kind, index)?;
         let req = self.c.http.delete(self.c.url(&path));
+        self.c.send(req).await.map(|_| ())
+    }
+
+    /// Jellyfin downloads the subtitle and stores it with the video.
+    pub async fn subtitle_download(&self, id: &str, subtitle_id: &str) -> Result<()> {
+        // The id goes into the URL path, so only plain characters are accepted.
+        let plain = subtitle_id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+        if !valid_item_id(id) || subtitle_id.is_empty() || subtitle_id.len() > 200 || !plain {
+            return Err(Error::msg("bad request"));
+        }
+        self.post(&format!("/Items/{id}/RemoteSearch/Subtitles/{subtitle_id}"), &[], None).await
+    }
+
+    /// Removes an external subtitle stream. Only used to undo a download made by this app.
+    pub async fn subtitle_delete(&self, id: &str, index: i64) -> Result<()> {
+        if !valid_item_id(id) || index < 0 {
+            return Err(Error::msg("bad request"));
+        }
+        let req = self.c.http.delete(self.c.url(&format!("/Videos/{id}/Subtitles/{index}")));
         self.c.send(req).await.map(|_| ())
     }
 

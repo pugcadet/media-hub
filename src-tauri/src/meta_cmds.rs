@@ -210,6 +210,10 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
                 w.upload_image(id, kind, index, &bytes, ct).await?;
             }
         }
+        "subtitle" => {
+            check_id(&ch.target)?;
+            crate::sub_cmds::undo_download(&w, &ch.target, &ch.old_value).await?;
+        }
         _ => return Err(Error::msg("This kind of change cannot be undone here.")),
     }
     state.store()?.journal_mark_undone(change_id)?;
