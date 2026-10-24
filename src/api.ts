@@ -76,7 +76,7 @@ export type ImageKind = "Primary" | "Backdrop" | "Logo" | "Thumb" | "Banner";
 export interface Change {
   id: number;
   at: number;
-  action: "item_update" | "identify" | "image" | "subtitle";
+  action: "item_update" | "identify" | "image" | "subtitle" | "segment";
   target: string;
   undone: boolean;
 }
@@ -211,6 +211,41 @@ export interface AutoResult {
   name: string | null;
 }
 
+export interface Span {
+  start: number;
+  end: number;
+}
+
+export interface Seg {
+  id: string;
+  kind: string;
+  start: number;
+  end: number;
+}
+
+export interface SegEpisode {
+  id: string;
+  name: string;
+  index: number | null;
+  duration: number;
+  segments: Seg[];
+}
+
+export interface SegOverview {
+  episodes: SegEpisode[];
+  ffmpeg: string | null;
+  canWriteSegments: boolean;
+}
+
+export interface Suggestion {
+  id: string;
+  intro: Span | null;
+  credits: Span | null;
+  introSource: string;
+  creditsSource: string;
+  problem: string | null;
+}
+
 export type Sort = "name" | "rating" | "year" | "added";
 export type Kind = "movie" | "series" | null;
 
@@ -248,6 +283,13 @@ export const api = {
     invoke<void>("subtitle_download", { id, subtitleId, lang, codes }),
   subtitleAuto: (id: string, lang: string, codes: string[], minScore: number) =>
     invoke<AutoResult>("subtitle_auto", { id, lang, codes, minScore }),
+  segmentsOverview: (seasonId: string) => invoke<SegOverview>("segments_overview", { seasonId }),
+  detectSeason: (seasonId: string, introMax: number, creditsMax: number) =>
+    invoke<Suggestion[]>("detect_season", { seasonId, introMax, creditsMax }),
+  saveSegments: (itemId: string, intro: Span | null, credits: Span | null, clear: string[]) =>
+    invoke<void>("save_segments", { itemId, intro, credits, clear }),
+  ffmpegInfo: () => invoke<{ path: string | null; version: string | null }>("ffmpeg_info"),
+  pickFfmpeg: () => invoke<string | null>("pick_ffmpeg"),
   undo: (batch: string) => invoke<{ restored: number; skipped: string[] }>("undo_rename", { batch }),
 };
 

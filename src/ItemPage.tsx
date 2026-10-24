@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, Details, errorText, imageUrl, ImageKind, ItemEdits, JfItem, remoteImageUrl, RemoteImage, SearchResult } from "./api";
 import Nav from "./Nav";
 import { EpisodesTab, SubtitlesTab } from "./Subtitles";
+import { IntrosTab } from "./Intros";
 import type { View } from "./App";
 
-type Tab = "details" | "art" | "identify" | "seasons" | "subs" | "episodes";
+type Tab = "details" | "art" | "identify" | "seasons" | "subs" | "episodes" | "intros";
 const KINDS: { kind: ImageKind; label: string; wide: boolean }[] = [
   { kind: "Primary", label: "Poster", wide: false },
   { kind: "Backdrop", label: "Backdrop", wide: true },
@@ -13,7 +14,13 @@ const KINDS: { kind: ImageKind; label: string; wide: boolean }[] = [
   { kind: "Banner", label: "Banner", wide: true },
 ];
 
-const ACTION_LABEL: Record<string, string> = { item_update: "Edited details", identify: "Identified", image: "Changed picture", subtitle: "Downloaded subtitle" };
+const ACTION_LABEL: Record<string, string> = {
+  item_update: "Edited details",
+  identify: "Identified",
+  image: "Changed picture",
+  subtitle: "Downloaded subtitle",
+  segment: "Changed intro/credits",
+};
 
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
@@ -129,7 +136,7 @@ export default function ItemPage({ id, onBack, onOpen, onNav, subLangs }: { id: 
     ["art", "Artwork"],
     ...(kind ? ([["identify", "Identify"]] as [Tab, string][]) : []),
     ...(d.seasons.length ? ([["seasons", `Seasons (${d.seasons.length})`]] as [Tab, string][]) : []),
-    ...(isSeason ? ([["episodes", "Episodes"]] as [Tab, string][]) : []),
+    ...(isSeason ? ([["episodes", "Episodes"], ["intros", "Intros & credits"]] as [Tab, string][]) : []),
     ...(item.Type === "Movie" || item.Type === "Episode" ? ([["subs", "Subtitles"]] as [Tab, string][]) : []),
   ];
 
@@ -248,6 +255,8 @@ export default function ItemPage({ id, onBack, onOpen, onNav, subLangs }: { id: 
         )}
 
         {tab === "subs" && <SubtitlesTab id={id} canEdit={d.canEdit} subLangs={subLangs} />}
+
+        {tab === "intros" && <IntrosTab seasonId={id} canEdit={d.canEdit} onSettings={() => onNav("settings")} />}
 
         {tab === "episodes" && <EpisodesTab id={id} canEdit={d.canEdit} subLangs={subLangs} onOpen={onOpen} />}
 
