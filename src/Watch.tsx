@@ -194,7 +194,7 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
         <div className="w-hero-body">
           <button className="link small" onClick={onBack}>← Back</button>
           {logo && !isEpisode ? <img className="w-logo" src={imageUrl(artId, "Logo", 800)} alt={title} onError={() => setLogo(false)} /> : <h1 className="w-title">{isEpisode && it.SeriesName ? cleanTitle(it.SeriesName) : title}</h1>}
-          {isEpisode && <div className="w-epname">S{it.ParentIndexNumber} · E{it.IndexNumber} — {it.Name}</div>}
+          {isEpisode && <div className="w-epname">{epCode(it.ParentIndexNumber, it.IndexNumber).trim()}{epCode(it.ParentIndexNumber, it.IndexNumber) ? " — " : ""}{it.Name}</div>}
           <div className="hero-meta">
             {it.ProductionYear && <span>{it.ProductionYear}</span>}
             {it.OfficialRating && <span>{it.OfficialRating}</span>}
@@ -206,7 +206,7 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
           <div className="row">
             {playId && (
               <button className="primary bb-btn" onClick={() => nav.play(playId)}>
-                ▶ {resumeAt > 0 ? "Resume" : "Play"}{it.Type === "Series" && next ? ` S${next.ParentIndexNumber} E${next.IndexNumber}` : ""}
+                ▶ {resumeAt > 0 ? "Resume" : "Play"}{it.Type === "Series" && next ? epCode(next.ParentIndexNumber ?? d.seasons.find((x) => x.Id === season)?.IndexNumber, next.IndexNumber) : ""}
               </button>
             )}
             <button className="bb-btn ghost" onClick={() => void api.setPlayed(id, !it.UserData?.Played).then(() => api.details(id).then(setD)).catch(() => undefined)}>
@@ -229,19 +229,19 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
               {eps?.map((e) => {
                 const pos = e.UserData?.PlaybackPositionTicks ?? 0;
                 return (
-                  <button key={e.Id} className="w-ep" onClick={() => nav.play(e.Id)} onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: "episode", title: e.Name, seriesId: id, seasonId: season, played: e.UserData?.Played }, false))}>
-                    <div className="art wide cover">
+                  <div key={e.Id} className="w-ep" onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: "episode", title: e.Name, seriesId: id, seasonId: season, played: e.UserData?.Played }, false))}>
+                    <button className="art wide cover tile-art" onClick={() => nav.play(e.Id)} aria-label={`Play ${e.Name}`}>
                       {e.ImageTags?.Primary ? <img src={imageUrl(e.Id, "Primary", 480, 0, e.ImageTags.Primary)} alt="" loading="lazy" /> : <div className="noart">E{e.IndexNumber}</div>}
-                      <span className="ep-play static"><Icon name="play" size={18} /></span>
+                      <span className="tile-play"><Icon name="play" size={20} /></span>
                       {e.UserData?.Played && <span className="played">✓</span>}
                       {pos > 0 && e.RunTimeTicks ? <span className="tile-progress"><span style={{ width: `${Math.min(100, (pos / e.RunTimeTicks) * 100)}%` }} /></span> : null}
-                    </div>
-                    <div className="w-ep-text">
+                    </button>
+                    <button className="w-ep-text tile-text" onClick={() => nav.open(e.Id)}>
                       <div className="strong">{e.IndexNumber}. {e.Name}</div>
                       <div className="muted small">{e.RunTimeTicks ? `${Math.round(e.RunTimeTicks / 600_000_000)} min` : ""}{e.PremiereDate ? ` · ${new Date(e.PremiereDate).toLocaleDateString()}` : ""}</div>
                       {e.Overview && <div className="small muted w-ep-ov">{e.Overview}</div>}
-                    </div>
-                  </button>
+                    </button>
+                  </div>
                 );
               })}
             </div>
@@ -265,4 +265,12 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
       </div>
     </div>
   );
+}
+
+/** " S1 E3", or "" when the numbers aren't known. */
+function epCode(season: number | null | undefined, ep: number | null | undefined): string {
+  if (season == null && ep == null) return "";
+  if (season == null) return ` E${ep}`;
+  if (ep == null) return ` S${season}`;
+  return ` S${season} E${ep}`;
 }

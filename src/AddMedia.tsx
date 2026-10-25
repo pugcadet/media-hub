@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { api, errorText, ImportSource, remoteImageUrl, SearchResult, Status } from "./api";
-import { track } from "./activity";
+import { api, errorText, ImportSource, InboxEntry, remoteImageUrl, SearchResult, Status } from "./api";
+import { track, useEpoch } from "./activity";
 import { nav } from "./nav";
 
 const STYLE = {
@@ -44,6 +44,24 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [inbox, setInbox] = useState<{ dir: string | null; list: InboxEntry[] } | null>(null);
+  const [fromInbox, setFromInbox] = useState<string | null>(null);
+  const epoch = useEpoch();
+
+  useEffect(() => {
+    api.inboxList().then(([dir, list]) => setInbox({ dir, list })).catch((e) => { setInbox({ dir: null, list: [] }); setError(errorText(e)); });
+  }, [epoch]);
+
+  function chooseSource(s: ImportSource, inboxName: string | null) {
+    setSrc(s);
+    setFromInbox(inboxName);
+    setKind(s.kind);
+    setTitle(s.title);
+    setYear(s.year ? String(s.year) : "");
+    setChosen(null);
+    setDone(null);
+    void search(s.kind, s.title, s.year ? String(s.year) : "");
+  }
 
   useEffect(() => {
     if (status.libraryRoot) api.folders("").then(setFolders).catch(() => setFolders([]));
@@ -63,12 +81,7 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
     try {
       const s = await api.importPick(folder);
       if (!s) return;
-      setSrc(s);
-      setKind(s.kind);
-      setTitle(s.title);
-      setYear(s.year ? String(s.year) : "");
-      setChosen(null);
-      void search(s.kind, s.title, s.year ? String(s.year) : "");
+      chooseSource(s, null);
     } catch (e) {
       setError(errorText(e));
     }
@@ -183,6 +196,30 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
       </div>
       {error && <p className="error">{error}</p>}
       {done && <p className="note">{done}</p>}
+
+      <section className="card form">
+        <div className="section-head">
+          <h2>Inbox{inbox?.list.length ? ` (${inbox.list.length})` : ""}</h2>
+          <div className="row end">
+            {inbox?.dir && <span className="muted small mono">{inbox.dir}</span>}
+            <button className="link small" onClick={() => void api.inboxPick().then(() => api.inboxList()).then(([dir, list]) => setInbox({ dir, list })).catch((e) => setError(errorText(e)))}>{inbox?.dir ? "Change folder" : "Watch a folder…"}</button>
+          </div>
+        </div>
+        {!inbox?.dir && <p className="muted small">Point Media Hub at your downloads folder: new shows and movies show up here, ready to add with one click.</p>}
+        {inbox?.dir && inbox.list.length === 0 && <p className="muted small">Nothing new in the inbox.</p>}
+        {inbox?.list.map((e) => (
+          <div key={e.name} className={`inbox-row ${fromInbox === e.name ? "on" : ""}`}>
+            <span className="ico">{e.source.isFolder ? "📁" : "🎞"}</span>
+            <div className="names">
+              <div className="strong ellipsis">{e.name}</div>
+              <div className="muted small">
+                Looks like {e.source.kind === "tv" ? "a show" : "a movie"}: {e.source.title}{e.source.year ? ` (${e.source.year})` : ""} · {e.source.files.filter((f) => f.video).length} video{e.source.files.filter((f) => f.video).length === 1 ? "" : "s"} · {size(e.source.totalBytes)}
+              </div>
+            </div>
+            <button className={fromInbox === e.name ? "primary" : ""} onClick={() => void api.inboxSelect(e.name).then((s) => chooseSource(s, e.name)).catch((err) => setError(errorText(err)))}>{fromInbox === e.name ? "Selected" : "Add…"}</button>
+          </div>
+        ))}
+      </section>
 
       <section className="card form">
         <div className="picker-head"><span className="step-dot">1</span><div className="strong grow">What do you want to add?</div></div>

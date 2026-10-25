@@ -472,7 +472,7 @@ function FolderFix({ status, onChanged, preset, embedded, onDone }: { status: St
                           <div className="small muted">{o.kind === "folder" ? "Folder" : dirOf(o.from) || "(top)"}</div>
                           <div className="mono">{last(o.from)}</div>
                           {o.from !== o.to && <div className="mono to">→ {o.kind === "folder" ? last(o.to) : last(o.to)}</div>}
-                          {o.note && <div className="small warn">{o.note}</div>}
+                          <div className={`small ${o.status === "ok" ? "muted" : "warn"}`}>{explain(o, plan.chosen ? SOURCE_LABEL[plan.chosen.source] : null).join(" · ")}</div>
                         </div>
                         {o.kind === "video" && o.score != null && <span className={`small strong ${o.score >= 90 ? "ok" : o.score >= 75 ? "warn" : "bad"}`}>{o.score}%</span>}
                         <span className={`small strong ${st.cls}`}>{st.label}</span>
@@ -577,6 +577,151 @@ async function renameRow(r: CheckRow): Promise<number> {
   return rep.done;
 }
 
+const JUNK = /\b(2160p|1080p|720p|480p|4k|uhd|x26[45]|h\.?26[45]|hevc|web-?dl|webrip|bluray|brrip|hdtv|amzn|nf|dsnp|hmax|ddp?5\.1|aac|ac3|atmos|10bit|hdr|proper|repack)\b/i;
+
+/** Why one file or folder gets its new name, in plain words. */
+export function explain(o: PlanOp, source: string | null): string[] {
+  const from = last(o.from);
+  const to = last(o.to);
+  const why: string[] = [];
+  if (o.status === "conflict") return [o.note ?? "A file with the new name already exists, so this one is skipped"];
+  if (o.status === "unparsed") return [o.note ?? "No season and episode number found in the name, so it's left alone"];
+  if (o.status === "unchanged") return ["Already right"];
+  if (o.kind === "folder") {
+    if (/\(\d{4}\)/.test(to) && !/\(\d{4}\)/.test(from)) why.push("adds the year, so Jellyfin finds the right show");
+    if (/^Season \d+$/i.test(to)) why.push("standard season folder name");
+    if (!why.length) why.push("uses the name Jellyfin knows it by");
+    return why;
+  }
+  if (o.kind === "sidecar") return ["follows its video (subtitle or extra file)"];
+  const fromDir = dirOf(o.from), toDir = dirOf(o.to);
+  if (fromDir !== toDir) why.push(`moves into “${last(toDir)}”`);
+  if (JUNK.test(stripExt(from)) && !JUNK.test(stripExt(to))) why.push("drops release tags (quality, codec, group)");
+  if (/\(\d{4}\)/.test(to) && !/\(\d{4}\)/.test(from)) why.push("adds the year");
+  if (/S\d{2}E\d{2}/.test(to) && !/S\d{2}E\d{2}/.test(from)) why.push("standard S01E02 numbering");
+  if (o.title && !from.toLowerCase().includes(o.title.toLowerCase())) why.push(`adds the episode title “${o.title}”${source ? ` from ${source}` : ""}`);
+  if (/\./.test(stripExt(from)) && !/\./.test(stripExt(to).replace(/\.$/, ""))) why.push("spaces instead of dots");
+  if (o.note && o.note !== "Gets its own folder") why.push(o.note);
+  if (o.note === "Gets its own folder") why.push("gets its own folder (how Jellyfin likes movies)");
+  if (!why.length) why.push("tidies the name to the standard pattern");
+  return why;
+}
+
+function CheckDetail({ r, onFix, onDone }: { r: CheckRow; onFix: () => void; onDone: () => void }) {
+  const [plan, setPlan] = useState<PlanResult | null>(null);
+  const [ids, setIds] = useState<Record<string, string>>({});
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [showRight, setShowRight] = useState(false);
+
+  useEffect(() => {
+    const p = presetFor(r);
+    api.plan({
+      mode: p.kind, folder: p.folder, template: r.kind === "series" ? TV_TEMPLATE : MOVIE_TEMPLATE, show: null, year: null,
+      findReplace: [], recursive: r.kind === "series", source: r.kind === "series" ? "jellyfin" : "none", matchId: p.matchId,
+      renameFolder: null, seasonFolders: false, onlyFile: p.onlyFile, itemId: p.itemId,
+    }).then((pl) => {
+      setPlan(pl);
+      setPicked(new Set(pl.ops.filter((o) => o.status === "ok").map((o) => o.from)));
+    }).catch((e) => setError(errorText(e)));
+    api.details(r.id).then((d) => setIds(d.item.ProviderIds ?? {})).catch(() => undefined);
+  }, [r.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (error) return <div className="check-detail"><p className="error">{error}</p></div>;
+  if (!plan) return <div className="check-detail"><p className="muted small">Working out every change…</p></div>;
+  const videos = plan.ops.filter((o) => o.kind === "video");
+  const known = videos.filter((o) => o.score === 100 && o.verified).length;
+  const idText = Object.entries(ids).filter(([k]) => ["Tmdb", "Tvdb", "Imdb"].includes(k)).map(([k, v]) => `${k.toUpperCase()} ${v}`).join(" · ");
+  const source = plan.chosen ? (plan.chosen.source === "jellyfin" ? "your Jellyfin library" : SOURCE_LABEL[plan.chosen.source]) : null;
+  const changes = plan.ops.filter((o) => o.status !== "unchanged" || showRight);
+  const groups = new Map<string, PlanOp[]>();
+  for (const o of changes) {
+    const g = o.kind === "folder" ? "Folders" : o.season != null ? (o.season === 0 ? "Specials" : `Season ${o.season}`) : "Files";
+    groups.set(g, [...(groups.get(g) ?? []), o]);
+  }
+  const toggle = (k: string) => setPicked((p) => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+
+  async function apply() {
+    if (!plan || !picked.size) return;
+    setBusy(true);
+    try {
+      await track(`Renaming ${r.name}`, async () => {
+        const rep = await api.apply(plan.planId, true, [...picked]);
+        if (rep.failed.length) throw `${rep.done} renamed; ${rep.failed.length} skipped: ${rep.failed[0]}`;
+        await api.libraryScan().catch(() => undefined);
+      });
+      onDone();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="check-detail">
+      <div className={`why-box ${r.sure ? "sure" : ""}`}>
+        <div className="strong">{r.sure ? "Why this is a 100% match" : "Why this needs a look"}</div>
+        <ul>
+          {r.kind === "series" ? (
+            <>
+              <li className={ids.Tmdb || ids.Tvdb || ids.Imdb ? "ok" : "warn"}>
+                {ids.Tmdb || ids.Tvdb || ids.Imdb ? `Identified in Jellyfin as “${r.name}${r.year ? ` (${r.year})` : ""}” (${idText})` : "Not identified in Jellyfin yet, so the name and year aren't certain"}
+              </li>
+              <li className={known === videos.length && videos.length ? "ok" : "warn"}>{known} of {videos.length} episode files were found in the episode list{plan.titlesFound ? ` (${plan.titlesFound} titles known)` : ""}</li>
+              {plan.unparsed > 0 && <li className="warn">{plan.unparsed} file{plan.unparsed === 1 ? "" : "s"} without a season/episode number: left alone</li>}
+              {plan.conflict > 0 && <li className="warn">{plan.conflict} would clash with an existing file: skipped</li>}
+            </>
+          ) : (
+            <>
+              <li className={ids.Tmdb || ids.Imdb ? "ok" : "warn"}>{ids.Tmdb || ids.Imdb ? `Jellyfin knows this file as “${r.name}${r.year ? ` (${r.year})` : ""}” (${idText})` : "Not identified in Jellyfin yet"}</li>
+              <li>Only this movie's own files are touched (the video and files with the same name)</li>
+            </>
+          )}
+          <li className="muted">Nothing is deleted or overwritten, and the whole rename can be undone in History.</li>
+        </ul>
+      </div>
+
+      <div className="row between">
+        <div className="row">
+          <button className="link small" onClick={() => setPicked(new Set(plan.ops.filter((o) => o.status === "ok").map((o) => o.from)))}>Select all</button>
+          <button className="link small" onClick={() => setPicked(new Set())}>Select none</button>
+          <label className="check small"><input type="checkbox" checked={showRight} onChange={(e) => setShowRight(e.target.checked)} />Also show what's already right ({plan.unchanged})</label>
+        </div>
+        <div className="row end">
+          {!(ids.Tmdb || ids.Tvdb || ids.Imdb) && <button onClick={() => nav.open(r.id, { tab: "identify" })}>Identify first…</button>}
+          <button onClick={onFix}>More options…</button>
+          <button className="primary" disabled={!picked.size || busy} onClick={() => void apply()}>{busy ? "Renaming…" : `Rename ${picked.size} selected`}</button>
+        </div>
+      </div>
+
+      <div className="change-list">
+        {[...groups.entries()].map(([g, ops]) => (
+          <div key={g}>
+            <div className="change-group small strong">{g}</div>
+            {ops.map((o) => {
+              const can = o.status === "ok";
+              return (
+                <label key={o.from} className={`change ${can ? "" : "off"}`}>
+                  <input type="checkbox" disabled={!can} checked={picked.has(o.from)} onChange={() => toggle(o.from)} />
+                  <div className="names">
+                    <div className="mono small"><span className="muted">{last(o.from)}</span></div>
+                    {o.from !== o.to && <div className="mono small accent">→ {o.kind === "video" && dirOf(o.from) !== dirOf(o.to) ? `${last(dirOf(o.to))}/` : ""}{last(o.to)}</div>}
+                    <div className="why small">{explain(o, source).join(" · ")}</div>
+                  </div>
+                  {o.kind === "video" && o.score != null && <span className={`small strong ${o.score >= 100 ? "ok" : o.score >= 75 ? "warn" : "bad"}`} title="How sure the episode is right">{o.score}%</span>}
+                </label>
+              );
+            })}
+          </div>
+        ))}
+        {changes.length === 0 && <p className="muted small pad">Nothing to change.</p>}
+      </div>
+    </div>
+  );
+}
+
 function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => void }) {
   const epoch = useEpoch();
   const [res, setRes] = useState<CheckResult | null>(null);
@@ -585,6 +730,8 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
   const [filter, setFilter] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [show, setShow] = useState<"todo" | "right" | "errors">("todo");
+  const [open, setOpen] = useState<string | null>(null);
+  const [scope, setScope] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     api.namingCheckLast().then((r) => setRes(r)).catch(() => setRes(null));
@@ -599,8 +746,7 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
           job.update(e.payload.name, e.payload.total ? e.payload.done / e.payload.total : null);
         });
         try {
-          const r = await api.namingCheck(TV_TEMPLATE, MOVIE_TEMPLATE, ids);
-          setRes(r);
+          setRes(await api.namingCheck(TV_TEMPLATE, MOVIE_TEMPLATE, ids));
         } finally {
           un();
           setChecking(null);
@@ -612,8 +758,10 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
   }
 
   const rows = res?.rows ?? [];
+  const top = (r: CheckRow) => r.folder.split("/")[0] || "(library folder)";
+  const tops = [...new Set(rows.map(top))].sort();
   const q = filter.toLowerCase();
-  const match = (r: CheckRow) => !q || r.name.toLowerCase().includes(q) || r.folder.toLowerCase().includes(q);
+  const match = (r: CheckRow) => (!scope.size || scope.has(top(r))) && (!q || r.name.toLowerCase().includes(q) || r.folder.toLowerCase().includes(q));
   const todo = rows.filter((r) => !r.error && (r.toRename + r.folders + r.problems > 0 || r.reasons.length > 0));
   const sure = todo.filter((r) => r.sure);
   const look = todo.filter((r) => !r.sure);
@@ -621,10 +769,10 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
   const errors = rows.filter((r) => r.error);
 
   async function bulk() {
-    const list = sure.filter((r) => picked.has(r.id));
+    const list = sure.filter((r) => picked.has(r.id) && match(r));
     if (!list.length) return;
     const files = list.reduce((n, r) => n + r.toRename + r.folders, 0);
-    if (!(await askConfirm(`Rename ${files} files and folders in ${list.length} title${list.length === 1 ? "" : "s"}? These are 100% matches. Nothing is deleted or overwritten, and every batch can be undone.`, { okLabel: "Rename all" }))) return;
+    if (!(await askConfirm(`Rename ${files} files and folders in ${list.length} title${list.length === 1 ? "" : "s"}? All are 100% matches (open one to see exactly what changes). Nothing is deleted or overwritten, and every batch can be undone.`, { okLabel: "Rename all" }))) return;
     try {
       await track(`Renaming ${list.length} titles`, async (job) => {
         let n = 0;
@@ -651,32 +799,35 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
   }
 
   const rowView = (r: CheckRow) => (
-    <div
-      key={r.id}
-      className="check-row"
-      onContextMenu={(e) => openMenu(e, [
-        { label: "Fix…", run: () => onFix(r) },
-        { label: "Open title", run: () => nav.open(r.id) },
-        { label: "Show folder in Finder", run: () => void api.revealRel(r.folder).catch(() => undefined) },
-        { label: "Check again", run: () => void check([r.id]) },
-        { sep: true },
-        ...itemMenu({ id: r.id, kind: r.kind, title: r.name }).filter((m) => m.label === "Identify…" || m.label === "Fill in missing artwork"),
-      ])}
-    >
-      {r.sure && <input type="checkbox" checked={picked.has(r.id)} onChange={() => setPicked((p) => { const n = new Set(p); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; })} aria-label="Select" />}
-      <button className="thumb" onClick={() => nav.open(r.id)} title="Open"><img src={imageUrl(r.id, "Primary", 120)} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /></button>
-      <button className="check-main link-plain" onClick={() => onFix(r)}>
-        <div className="title">{r.name}{r.year ? <span className="muted"> ({r.year})</span> : null} <span className="muted small">· {r.kind === "series" ? "Show" : "Movie"}</span></div>
-        <div className="check-reasons">
-          {r.sure && <span className="chip static on">100% match</span>}
-          {r.error ? <span className="bad small">{r.error}</span> : r.reasons.map((x, i) => <span key={i} className={`small ${/Not identified|clash|without/.test(x) ? "warn" : "muted"}`}>{x}</span>)}
+    <div key={r.id} className={`check-item ${open === r.id ? "open" : ""}`}>
+      <div
+        className="check-row"
+        onContextMenu={(e) => openMenu(e, [
+          { label: open === r.id ? "Hide the changes" : "Show the changes", run: () => setOpen(open === r.id ? null : r.id) },
+          { label: "More options…", run: () => onFix(r) },
+          { label: "Open title", run: () => nav.open(r.id) },
+          { label: "Show folder in Finder", run: () => void api.revealRel(r.folder).catch(() => undefined) },
+          { label: "Check again", run: () => void check([r.id]) },
+          { sep: true },
+          ...itemMenu({ id: r.id, kind: r.kind, title: r.name }).filter((m) => m.label === "Identify…" || m.label === "Fill in missing artwork"),
+        ])}
+      >
+        {r.sure ? <input type="checkbox" checked={picked.has(r.id)} onChange={() => setPicked((p) => { const n = new Set(p); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; })} aria-label="Select" /> : <span style={{ width: 16 }} />}
+        <button className="thumb" onClick={() => nav.open(r.id)} title="Open"><img src={imageUrl(r.id, "Primary", 120)} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /></button>
+        <button className="check-main link-plain" onClick={() => setOpen(open === r.id ? null : r.id)}>
+          <div className="title">{r.name}{r.year ? <span className="muted"> ({r.year})</span> : null} <span className="muted small">· {r.kind === "series" ? "Show" : "Movie"} · <span className="mono">{r.folder || "(library folder)"}</span></span></div>
+          <div className="check-reasons">
+            {r.sure && <span className="chip static on">100% match</span>}
+            {r.error ? <span className="bad small">{r.error}</span> : r.reasons.map((x, i) => <span key={i} className={`small ${/Not identified|clash|without/.test(x) ? "warn" : "muted"}`}>{x}</span>)}
+          </div>
+          {r.example && open !== r.id && <div className="mono small check-example"><span className="muted">{r.example[0]}</span> <span className="accent">→ {r.example[1]}</span></div>}
+        </button>
+        <div className="row end">
+          <button className="icon-btn" title="Show in Finder" onClick={() => void api.revealRel(r.folder).catch(() => undefined)}><Icon name="folder" /></button>
+          <button onClick={() => setOpen(open === r.id ? null : r.id)}>{open === r.id ? "Hide" : "See changes"}</button>
         </div>
-        {r.example && <div className="mono small check-example"><span className="muted">{r.example[0]}</span> <span className="accent">→ {r.example[1]}</span></div>}
-      </button>
-      <div className="row end">
-        <button className="icon-btn" title="Show in Finder" onClick={() => void api.revealRel(r.folder).catch(() => undefined)}><Icon name="folder" /></button>
-        <button onClick={() => onFix(r)}>{r.sure ? "Review" : "Fix…"}</button>
       </div>
+      {open === r.id && <CheckDetail r={r} onFix={() => onFix(r)} onDone={() => { setOpen(null); void check([r.id]); }} />}
     </div>
   );
 
@@ -687,12 +838,24 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
         <div className="row between">
           <div>
             <div className="strong">Which shows and movies are named wrong, and why</div>
-            <div className="muted small">{res ? `Last checked ${new Date(res.at * 1000).toLocaleString()} · ${rows.length} titles` : "Not checked yet. Nothing is renamed by checking."}</div>
+            <div className="muted small">{res ? `Last checked ${new Date(res.at * 1000).toLocaleString()} · ${rows.length} titles` : "Not checked yet. Checking renames nothing."} Click a title to see every change and why; pick the files you want.</div>
           </div>
           <div className="row end">
-            {checking ? <button onClick={() => void api.namingCheckCancel()}>Stop</button> : <button className="primary" onClick={() => void check()}>{res ? "Check again" : "Check my library"}</button>}
+            {checking ? <button onClick={() => void api.namingCheckCancel()}>Stop</button> : (
+              <>
+                {scope.size > 0 && <button onClick={() => void check(rows.filter((r) => scope.has(top(r))).map((r) => r.id))}>Check only {[...scope].join(", ")}</button>}
+                <button className="primary" onClick={() => void check()}>{res ? "Check everything again" : "Check my library"}</button>
+              </>
+            )}
           </div>
         </div>
+        {tops.length > 1 && (
+          <div className="chips">
+            <span className="muted small">Folders:</span>
+            <button className={`chip ${scope.size === 0 ? "on" : ""}`} onClick={() => setScope(new Set())}>All</button>
+            {tops.map((t) => <button key={t} className={`chip ${scope.has(t) ? "on" : ""}`} onClick={() => setScope((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n; })}>{t}</button>)}
+          </div>
+        )}
         {checking && <div className="muted small">Checking {checking}…</div>}
         {error && <p className="error">{error}</p>}
       </section>
@@ -701,9 +864,9 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
         <>
           <div className="toolbar">
             <div className="chips">
-              <button className={`chip ${show === "todo" ? "on" : ""}`} onClick={() => setShow("todo")}>To fix ({todo.length})</button>
-              <button className={`chip ${show === "right" ? "on" : ""}`} onClick={() => setShow("right")}>Already right ({right.length})</button>
-              {errors.length > 0 && <button className={`chip ${show === "errors" ? "on" : ""}`} onClick={() => setShow("errors")}>Couldn't check ({errors.length})</button>}
+              <button className={`chip ${show === "todo" ? "on" : ""}`} onClick={() => setShow("todo")}>To fix ({todo.filter(match).length})</button>
+              <button className={`chip ${show === "right" ? "on" : ""}`} onClick={() => setShow("right")}>Already right ({right.filter(match).length})</button>
+              {errors.length > 0 && <button className={`chip ${show === "errors" ? "on" : ""}`} onClick={() => setShow("errors")}>Couldn't check ({errors.filter(match).length})</button>}
             </div>
             <label className="searchbox"><Icon name="search" /><input placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} /></label>
           </div>
@@ -713,11 +876,13 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
               {sure.filter(match).length > 0 && (
                 <section className="card list-card">
                   <div className="section-head">
-                    <h2>Sure matches ({sure.length})</h2>
+                    <div>
+                      <h2>Sure matches ({sure.filter(match).length})</h2>
+                      <div className="muted small">Identified in Jellyfin and every episode found in the episode list. Safe to rename in one go.</div>
+                    </div>
                     <div className="row end">
-                      <span className="muted small">Identified in Jellyfin and every episode found: safe to rename in one go.</span>
                       <button className="link small" onClick={() => setPicked(new Set(sure.filter(match).map((r) => r.id)))}>Select all</button>
-                      <button className="primary" disabled={!sure.some((r) => picked.has(r.id))} onClick={() => void bulk()}>Rename {sure.filter((r) => picked.has(r.id)).length || ""} selected</button>
+                      <button className="primary" disabled={!sure.some((r) => picked.has(r.id) && match(r))} onClick={() => void bulk()}>Rename {sure.filter((r) => picked.has(r.id) && match(r)).length || ""} selected</button>
                     </div>
                   </div>
                   {sure.filter(match).map(rowView)}
@@ -725,11 +890,16 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
               )}
               {look.filter(match).length > 0 && (
                 <section className="card list-card">
-                  <div className="section-head"><h2>Needs a look ({look.length})</h2><span className="muted small">Click one to see the files, pick the right match and rename.</span></div>
+                  <div className="section-head">
+                    <div>
+                      <h2>Needs a look ({look.filter(match).length})</h2>
+                      <div className="muted small">Not identified, some episodes not in the list, or files without numbers. Open one to choose what to rename.</div>
+                    </div>
+                  </div>
                   {look.filter(match).map(rowView)}
                 </section>
               )}
-              {todo.length === 0 && <p className="ok strong">Everything is named right.</p>}
+              {todo.filter(match).length === 0 && <p className="ok strong">Everything here is named right.</p>}
             </>
           )}
           {show === "right" && (

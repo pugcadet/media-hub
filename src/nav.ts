@@ -2,7 +2,7 @@
 // screens without passing callbacks through every component.
 export type View =
   | "home" | "library" | "collections" | "renamer" | "metadata" | "subtitles" | "intros" | "add"
-  | "storage" | "downloads" | "settings";
+  | "storage" | "downloads" | "settings" | "health" | "missing" | "duplicates" | "tags" | "history";
 
 export interface Route {
   view: View;
@@ -15,6 +15,8 @@ export interface Route {
   /** renamer: start on this folder / item */
   folder?: string;
   item?: string;
+  /** Changes on every menu click, so the screen starts fresh. */
+  n?: number;
 }
 
 export interface OpenOpts {

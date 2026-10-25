@@ -95,7 +95,7 @@ fn walk(base: &Path, dir: &Path, out: &mut Vec<ImportFile>, depth: usize) {
 }
 
 /// Lists what would be added and guesses show/movie, title and year.
-fn describe(path: &Path) -> Result<ImportSource> {
+pub(crate) fn describe(path: &Path) -> Result<ImportSource> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut files = Vec::new();
     let is_folder = path.is_dir();
@@ -257,6 +257,77 @@ pub async fn import_run(app: AppHandle, state: State<'_, AppState>, dest: String
         Ok(ImportDone { folder: rel_folder, moved, copied, skipped })
     })
     .await
+}
+
+/* ------------------------------------------------------------------ inbox */
+
+/// Chooses the folder to watch for new downloads.
+#[tauri::command]
+pub async fn inbox_pick(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>> {
+    let picked = blocking(move || Ok(app.dialog().file().blocking_pick_folder())).await?;
+    let Some(fp) = picked else { return Ok(None) };
+    let path = fp.into_path().map_err(|_| Error::msg("That folder cannot be used."))?;
+    if !path.is_dir() {
+        return Err(Error::msg("That is not a folder."));
+    }
+    let s = path.to_string_lossy().into_owned();
+    let saved = s.clone();
+    state.update_settings(move |st| st.inbox_dir = Some(saved))?;
+    Ok(Some(s))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxEntry {
+    name: String,
+    source: ImportSource,
+    modified: u64,
+}
+
+/// What's waiting in the inbox: each folder or video directly inside it.
+#[tauri::command]
+pub async fn inbox_list(state: State<'_, AppState>) -> Result<(Option<String>, Vec<InboxEntry>)> {
+    let Some(dir) = state.settings()?.inbox_dir else { return Ok((None, Vec::new())) };
+    let d2 = dir.clone();
+    let list = blocking(move || {
+        let mut out = Vec::new();
+        let Ok(rd) = std::fs::read_dir(&d2) else { return Err(Error::msg("The inbox folder can't be read. Is the drive connected?")) };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || name.ends_with(".part") || name.ends_with(".mediahub-part") {
+                continue;
+            }
+            let p = e.path();
+            if !(p.is_dir() || is_video(&name)) {
+                continue;
+            }
+            let modified = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+            if let Ok(source) = describe(&p) {
+                out.push(InboxEntry { name, source, modified });
+            }
+        }
+        out.sort_by(|a, b| b.modified.cmp(&a.modified));
+        Ok(out)
+    })
+    .await?;
+    Ok((Some(dir), list))
+}
+
+/// Picks one inbox entry as the thing to add (like choosing it in the dialog).
+#[tauri::command]
+pub async fn inbox_select(state: State<'_, AppState>, name: String) -> Result<ImportSource> {
+    let dir = state.settings()?.inbox_dir.ok_or_else(|| Error::msg("No inbox folder chosen."))?;
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err(Error::msg("bad name"));
+    }
+    let p = Path::new(&dir).join(&name);
+    let info = blocking({
+        let p = p.clone();
+        move || describe(&p)
+    })
+    .await?;
+    *PICKED.lock().map_err(|_| Error::msg("internal error"))? = Some(p);
+    Ok(info)
 }
 
 #[cfg(test)]

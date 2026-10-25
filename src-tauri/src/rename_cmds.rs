@@ -94,7 +94,7 @@ pub struct PlanResult {
     pub(crate) mode: String,
 }
 
-fn tmdb_client(state: &AppState) -> Option<Tmdb> {
+pub(crate) fn tmdb_client(state: &AppState) -> Option<Tmdb> {
     let s = state.settings().ok()?;
     if !s.has_tmdb {
         return None;

@@ -8,7 +8,7 @@ import Downloads from "./Downloads";
 import Storage from "./Storage";
 import ItemPage from "./ItemPage";
 import Sidebar from "./Sidebar";
-import { MetadataTool, SubtitlesTool } from "./Tools";
+import { SubtitlesTool } from "./Tools";
 import IntrosTool from "./IntrosTool";
 import Home from "./Home";
 import Collections from "./Collections";
@@ -20,6 +20,11 @@ import { setNav, type OpenOpts, type Route, type View } from "./nav";
 import { useEpoch } from "./activity";
 import { usePrefs } from "./prefs";
 import { startScheduler } from "./scheduler";
+import Health from "./Health";
+import Missing from "./Missing";
+import Duplicates from "./Duplicates";
+import Tags from "./Tags";
+import History from "./History";
 
 export type { Route, View } from "./nav";
 
@@ -59,7 +64,7 @@ export default function App() {
 
   const go = useCallback((r: Route) => {
     setItemStack([]);
-    setRoute(r);
+    setRoute({ ...r, n: Date.now() });
   }, []);
   const navTo = useCallback((v: View) => go({ view: v }), [go]);
   const open = useCallback((id: string, opts?: OpenOpts) => {
@@ -121,6 +126,21 @@ export default function App() {
       case "home":
         page = <Home status={status} canEdit={!status.readOnly} />;
         break;
+      case "health":
+        page = <Health status={status} focus="all" />;
+        break;
+      case "missing":
+        page = <Missing status={status} />;
+        break;
+      case "duplicates":
+        page = <Duplicates status={status} />;
+        break;
+      case "tags":
+        page = <Tags status={status} />;
+        break;
+      case "history":
+        page = <History status={status} />;
+        break;
       case "collections":
         page = <Collections status={status} selected={route.collection ?? null} />;
         break;
@@ -131,7 +151,7 @@ export default function App() {
         page = <Renamer key={`${route.folder ?? ""}-${route.item ?? ""}`} status={status} onChanged={refresh} onNav={navTo} start={route.folder !== undefined ? { folder: route.folder, item: route.item } : undefined} />;
         break;
       case "metadata":
-        page = <MetadataTool onOpen={(id) => open(id)} onRoute={go} />;
+        page = <Health status={status} focus="art" />;
         break;
       case "subtitles":
         page = <SubtitlesTool status={status} onOpen={(id) => open(id)} />;
@@ -169,7 +189,7 @@ export default function App() {
       <Sidebar status={status} libraries={libraries} attention={attention} route={route} onRoute={go} />
       <div className="main-col">
         <ActivityBar />
-        <div className="page">{page}</div>
+        <div className="page" key={`${route.view}-${route.n ?? 0}`}>{page}</div>
       </div>
       {player}
     </div>

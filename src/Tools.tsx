@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, AutoResult, codesFor, cultures, Culture, errorText, imageUrl, Item, JfChild, languageName, Status } from "./api";
 import type { Route } from "./App";
 import { track, useEpoch } from "./activity";
-import { prefs, setPrefs } from "./prefs";
+import { prefs, setPrefs, subSkipped, usePrefs } from "./prefs";
 import { itemMenu, openMenu } from "./ui";
 
 /** Metadata and art: titles that need a match or a poster. */
@@ -69,12 +69,20 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
   const stop = useRef(false);
   const [results, setResults] = useState<Record<string, string>>({});
 
+  const { subSkipFolders } = usePrefs();
+  const [skipped, setSkipped] = useState(0);
   const load = () =>
-    api.missingSubtitles(0, 300).then((r) => { setItems(r.Items ?? []); setTotal(r.TotalRecordCount ?? 0); }).catch((e) => setError(errorText(e)));
+    api.missingSubtitles(0, 300).then((r) => {
+      const all = r.Items ?? [];
+      const keep = all.filter((e) => !subSkipped(e.Path));
+      setItems(keep);
+      setSkipped(all.length - keep.length);
+      setTotal(r.TotalRecordCount ?? 0);
+    }).catch((e) => setError(errorText(e)));
   useEffect(() => {
     void load();
     cultures().then(setList).catch(() => setList([]));
-  }, []);
+  }, [subSkipFolders.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
   const codes = useMemo(() => codesFor(lang, list), [lang, list]);
 
   async function fill() {
@@ -123,7 +131,7 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
           )}
         </div>
       </div>
-      <p className="muted">{total} videos have no subtitles at all{total > items.length ? ` (showing the first ${items.length})` : ""}. Only matches scoring at least {minScore} are downloaded; 100 means made for exactly that file. Subtitle sites limit downloads per day.</p>
+      <p className="muted">{total} videos have no subtitles at all{total > items.length ? ` (showing the first ${items.length})` : ""}. Only matches scoring at least {minScore} are downloaded; 100 means made for exactly that file. Subtitle sites limit downloads per day.{skipped > 0 ? ` ${skipped} in skipped folders are left out (Settings → Subtitle downloads).` : ""}</p>
       {status.readOnly && <p className="note">Downloading needs changes to Jellyfin switched on in Settings.</p>}
       {error && <p className="error">{error}</p>}
       <div className="card list-card">

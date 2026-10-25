@@ -35,6 +35,8 @@ pub struct Settings {
     /// While true, the app only reads from Jellyfin. Later modules check this
     /// flag before they change anything. It starts on and stays on by default.
     pub read_only: bool,
+    /// Folder Media Hub watches for new downloads to add ("inbox").
+    pub inbox_dir: Option<String>,
 }
 
 impl Default for Settings {
@@ -54,6 +56,7 @@ impl Default for Settings {
             has_tmdb: false,
             sync_watched: true,
             read_only: true,
+            inbox_dir: None,
         }
     }
 }

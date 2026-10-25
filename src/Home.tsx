@@ -3,6 +3,8 @@ import { api, Card, cleanTitle, HomeFeed, imageUrl, Item, localDate, Pick, Statu
 import { track, useEpoch } from "./activity";
 import { nav } from "./nav";
 import { CardTile, itemMenu, openMenu, playTitle, Row } from "./ui";
+import { setPrefs, usePrefs } from "./prefs";
+import { askConfirm } from "./confirm";
 
 export function itemToCard(i: Item): Card {
   const sub = i.kind === "series"
@@ -68,9 +70,24 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
     api.list(null, "", "rating", 0, 30).then((r) => setTop(r.map(itemToCard))).catch(() => setTop([]));
   }, [epoch, status.lastSync]);
 
+  const { hiddenNextUp } = usePrefs();
+  const [cleared, setCleared] = useState<Set<string>>(new Set());
   const hero = picks[0];
-  const resume = feed?.resume ?? [];
-  const nextUp = (feed?.nextUp ?? []).filter((n) => !resume.some((r) => r.id === n.id));
+  const resume = (feed?.resume ?? []).filter((r) => !cleared.has(r.id));
+  const nextUp = (feed?.nextUp ?? []).filter((n) => !resume.some((r) => r.id === n.id) && !hiddenNextUp.includes(n.seriesId ?? n.id));
+  const removeResume = (ids: string[]) => {
+    setCleared((s) => new Set([...s, ...ids]));
+    void track(ids.length > 1 ? "Clearing Continue watching" : "Removing from Continue watching", async () => {
+      for (const id of ids) await api.clearResume(id);
+    });
+  };
+  const hideNext = (ids: string[]) => setPrefs((p) => ({ hiddenNextUp: [...new Set([...p.hiddenNextUp, ...ids])] }));
+  const syncPicks = () => void track("“Picks of the day” in Jellyfin", async (job) => {
+    const ids = picks.map((p) => p.id);
+    await api.syncPicksCollection(ids);
+    const n = await api.syncPicksPlaylist(ids);
+    job.update(`Collection and playlist updated (${n} videos)`);
+  });
 
   return (
     <div className={`pg home ${variant}`}>
@@ -86,18 +103,23 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
       {error && <p className="error">{error}</p>}
       {hero && <Billboard pick={hero} onPlay={() => void playTitle(hero.id)} />}
 
-      <Row title="Continue watching" cards={resume} wide canEdit={canEdit} />
-      <Row title="Next up" cards={nextUp} wide canEdit={canEdit} />
+      <Row title="Continue watching" cards={resume} wide canEdit={canEdit}
+        menuExtra={(c) => [{ label: "Remove from Continue watching", run: () => removeResume([c.id]) }]}
+        action={resume.length > 0 && <button className="link small" onClick={() => void askConfirm("Clear Continue watching? Where you stopped is forgotten (also in Infuse).", { okLabel: "Clear" }).then((ok) => { if (ok) removeResume(resume.map((r) => r.id)); })}>Clear</button>} />
+      <Row title="Next up" cards={nextUp} wide canEdit={canEdit}
+        menuExtra={(c) => [{ label: "Hide this show from Next up", run: () => hideNext([c.seriesId ?? c.id]) }]}
+        action={<>
+          {hiddenNextUp.length > 0 && <button className="link small" onClick={() => setPrefs({ hiddenNextUp: [] })}>Show {hiddenNextUp.length} hidden</button>}
+          {nextUp.length > 0 && <button className="link small" onClick={() => hideNext(nextUp.map((c) => c.seriesId ?? c.id))}>Clear</button>}
+        </>} />
 
       {picks.length > 1 && (
         <section className="hrow">
           <div className="section-head">
             <h2>Picks of the day</h2>
             <div className="row end">
-              <span className="muted small">New ones at midnight · also in Jellyfin as “Picks of the day”</span>
-              {canEdit && (
-                <button className="link small" onClick={() => void track("Updating “Picks of the day” in Jellyfin", () => api.syncPicksCollection(picks.map((p) => p.id)).then(() => undefined))}>Update in Jellyfin</button>
-              )}
+              <span className="muted small">New ones at midnight · in Infuse under Playlists and Collections as “Picks of the day”</span>
+              {canEdit && <button className="link small" onClick={syncPicks}>Update in Jellyfin now</button>}
             </div>
           </div>
           <div className="picks-row">{picks.slice(1).map((p) => <PickTile key={p.id} p={p} canEdit={canEdit} />)}</div>

@@ -1,5 +1,6 @@
 import { cleanTitle, imageUrl, Item } from "./api";
-import { itemMenu, openMenu } from "./ui";
+import { Icon, itemMenu, openMenu, playTitle } from "./ui";
+import { nav } from "./nav";
 
 function meta(item: Item): string {
   if (item.kind === "series") {
@@ -31,6 +32,8 @@ export default function Poster({ item, onOpen, width = 300, canEdit = true }: { 
           <div className="noart">{name}</div>
         )}
         <span className={`flag ${f.cls}`}>{f.text}</span>
+        <span className="tile-play" role="button" aria-label={`Play ${name}`} title="Play"
+          onClick={(e) => { e.stopPropagation(); if (item.kind === "movie") nav.play(item.id); else void playTitle(item.id); }}><Icon name="play" size={20} /></span>
         {item.played && <span className="played" title="Watched">✓</span>}
       </div>
       <div className="title">{name}</div>

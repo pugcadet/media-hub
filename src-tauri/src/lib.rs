@@ -9,6 +9,7 @@ mod fsops;
 mod images;
 mod import;
 mod jellyfin;
+mod library;
 mod local;
 mod media_tools;
 mod meta_cmds;
@@ -63,6 +64,22 @@ pub fn run() {
             commands::set_played,
             import::import_pick,
             import::import_run,
+            import::inbox_pick,
+            import::inbox_list,
+            import::inbox_select,
+            commands::clear_resume,
+            library::library_health,
+            library::missing_episodes,
+            library::find_duplicates,
+            library::merge_versions,
+            library::trash_item_file,
+            library::tag_stats,
+            library::tags_merge,
+            library::make_episode_stills,
+            library::health_alerts,
+            library::sync_picks_playlist,
+            library::journal_all,
+            library::segment_summary,
             updater::check_update,
             updater::install_update,
             rename_cmds::pick_library_root,

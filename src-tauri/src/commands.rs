@@ -418,3 +418,12 @@ pub async fn set_played(state: State<'_, AppState>, id: String, played: bool) ->
     }
     state.store()?.set_played(&id, played)
 }
+
+/// Takes a title off "Continue watching" (forgets where you stopped).
+#[tauri::command]
+pub async fn clear_resume(state: State<'_, AppState>, id: String) -> Result<()> {
+    if !crate::jellyfin::valid_item_id(&id) {
+        return Err(Error::msg("bad id"));
+    }
+    state.reader().await?.save_position(&id, 0.0).await
+}

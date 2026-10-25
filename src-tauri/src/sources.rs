@@ -271,6 +271,117 @@ pub async fn tvmaze_episodes(id: &str) -> Result<HashMap<(u32, u32), String>> {
     Ok(out)
 }
 
+
+// ------------------------------------------------- full episode lists (with air dates)
+
+/// One episode as a TV database lists it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpInfo {
+    pub season: u32,
+    pub episode: u32,
+    pub title: String,
+    /// "YYYY-MM-DD" when known.
+    pub air_date: Option<String>,
+}
+
+impl Tmdb {
+    /// Every episode with its air date.
+    pub async fn episode_list(&self, id: &str) -> Result<Vec<EpInfo>> {
+        if !id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(Error::msg("bad id"));
+        }
+        let show = self.get(&format!("/tv/{id}"), &[]).await?;
+        let seasons: Vec<u32> = show
+            .get("seasons")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|s| s.get("season_number").and_then(Value::as_u64)).map(|n| n as u32).collect())
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for n in seasons.into_iter().take(60) {
+            let s = self.get(&format!("/tv/{id}/season/{n}"), &[]).await?;
+            out.extend(parse_tmdb_season(&s, n));
+        }
+        Ok(out)
+    }
+
+    /// TMDB id of a show from its TVDB or IMDb id.
+    pub async fn find_tv(&self, tvdb: Option<&str>, imdb: Option<&str>) -> Result<Option<String>> {
+        let (source, id) = match (tvdb, imdb) {
+            (Some(t), _) if t.chars().all(|c| c.is_ascii_digit()) => ("tvdb_id", t),
+            (_, Some(i)) if i.starts_with("tt") && i[2..].chars().all(|c| c.is_ascii_digit()) => ("imdb_id", i),
+            _ => return Ok(None),
+        };
+        let v = self.get(&format!("/find/{id}"), &[("external_source", source.to_string())]).await?;
+        Ok(v.get("tv_results").and_then(Value::as_array).and_then(|a| a.first()).and_then(|r| r.get("id")).map(|i| i.to_string()))
+    }
+}
+
+pub fn parse_tmdb_season(s: &Value, n: u32) -> Vec<EpInfo> {
+    s.get("episodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            Some(EpInfo {
+                season: n,
+                episode: e.get("episode_number").and_then(Value::as_u64)? as u32,
+                title: e.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                air_date: e.get("air_date").and_then(Value::as_str).filter(|d| d.len() >= 10).map(|d| d[..10].to_string()),
+            })
+        })
+        .collect()
+}
+
+/// TVmaze id from a TVDB or IMDb id.
+pub async fn tvmaze_lookup(tvdb: Option<&str>, imdb: Option<&str>) -> Result<Option<String>> {
+    let q = match (tvdb, imdb) {
+        (Some(t), _) if t.chars().all(|c| c.is_ascii_digit()) => ("thetvdb", t.to_string()),
+        (_, Some(i)) if i.starts_with("tt") && i[2..].chars().all(|c| c.is_ascii_digit()) => ("imdb", i.to_string()),
+        _ => return Ok(None),
+    };
+    let resp = http()?
+        .get(format!("{TVMAZE}/lookup/shows"))
+        .query(&[q])
+        .send()
+        .await
+        .map_err(|e| Error::Network(e.without_url().to_string()))?;
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+    let v: Value = resp.json().await.map_err(|_| Error::msg("TVmaze gave an unexpected answer."))?;
+    Ok(v.get("id").map(|i| i.to_string()))
+}
+
+pub async fn tvmaze_episode_list(id: &str) -> Result<Vec<EpInfo>> {
+    if !id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(Error::msg("bad id"));
+    }
+    let resp = http()?
+        .get(format!("{TVMAZE}/shows/{id}/episodes"))
+        .query(&[("specials", "1")])
+        .send()
+        .await
+        .map_err(|e| Error::Network(e.without_url().to_string()))?;
+    let v: Value = resp.json().await.map_err(|_| Error::msg("TVmaze gave an unexpected answer."))?;
+    Ok(parse_tvmaze_list(&v))
+}
+
+pub fn parse_tvmaze_list(v: &Value) -> Vec<EpInfo> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            Some(EpInfo {
+                season: e.get("season").and_then(Value::as_u64)? as u32,
+                episode: e.get("number").and_then(Value::as_u64)? as u32,
+                title: e.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                air_date: e.get("airdate").and_then(Value::as_str).filter(|d| d.len() >= 10).map(|d| d[..10].to_string()),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,6 +410,19 @@ mod tests {
         let r = rank(vec![c("Bluey Minisodes", 2024), c("Bluey", 2018)], "Bluey", Some(2018));
         assert_eq!(r[0].name, "Bluey");
         assert!(r[0].score > r[1].score);
+    }
+
+    #[test]
+    fn episode_lists_parse() {
+        let tm = serde_json::json!({"episodes": [{"episode_number": 1, "name": "Pilot", "air_date": "2020-01-02"}, {"episode_number": 2, "name": "Two", "air_date": ""}]});
+        let l = parse_tmdb_season(&tm, 3);
+        assert_eq!(l.len(), 2);
+        assert_eq!((l[0].season, l[0].episode, l[0].air_date.as_deref()), (3, 1, Some("2020-01-02")));
+        assert_eq!(l[1].air_date, None);
+        let tv = serde_json::json!([{"season": 1, "number": 5, "name": "Five", "airdate": "2019-05-05"}, {"season": 0, "number": null, "name": "Special"}]);
+        let l = parse_tvmaze_list(&tv);
+        assert_eq!(l.len(), 1);
+        assert_eq!(l[0].episode, 5);
     }
 
     #[test]

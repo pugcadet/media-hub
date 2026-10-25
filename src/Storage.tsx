@@ -65,7 +65,7 @@ export default function Storage({ status }: { status: Status; onNav: (v: View) =
     setMessage(null);
     setPicked(new Set());
     try {
-      setRows(await api.storageScan(base));
+      setRows((await api.storageScan(base)).sort((a, b) => (b.info?.size ?? 0) - (a.info?.size ?? 0)));
     } catch (e) {
       setMessage({ text: errorText(e), error: true });
     } finally {
@@ -134,7 +134,10 @@ export default function Storage({ status }: { status: Status; onNav: (v: View) =
   return (
     <div className="app">
       <header>
-        <div className="brand"><span className="logo" />Media Hub</div>
+        <div>
+          <h1>Storage</h1>
+          <div className="muted small">Biggest files first. Shrink movies to H.265 with the graphics chip, even out loudness. Originals go to a trash folder you empty yourself.</div>
+        </div>
       </header>
       {!status.libraryRoot ? (
         <main><p className="muted">Choose your library folder first (Renamer or Settings).</p></main>

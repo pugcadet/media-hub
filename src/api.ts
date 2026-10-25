@@ -397,6 +397,92 @@ export interface ImportSource {
   year: number | null;
 }
 
+export interface HealthRow {
+  id: string;
+  kind: "series" | "movie";
+  name: string;
+  year: number | null;
+  identified: boolean;
+  poster: boolean;
+  backdrop: boolean;
+  logo: boolean;
+  thumb: boolean;
+  banner: boolean;
+  videos: number;
+  noSubs: number;
+  libraryFolder: string;
+}
+
+export interface EpInfo {
+  season: number;
+  episode: number;
+  title: string;
+  airDate: string | null;
+}
+
+export interface MissingReport {
+  source: string;
+  have: number;
+  known: number;
+  missing: EpInfo[];
+  upcoming: EpInfo[];
+  specialsMissing: number;
+}
+
+export interface DupItem {
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+  width: number;
+  height: number;
+  codec: string;
+  hdr: boolean;
+  bitrate: number;
+  versions: number;
+  best: boolean;
+}
+
+export interface DupGroup {
+  title: string;
+  kind: "movie" | "episode";
+  items: DupItem[];
+}
+
+export interface TagStat {
+  kind: "genre" | "tag";
+  name: string;
+  count: number;
+}
+
+export interface Alert {
+  level: "error" | "warn" | "info";
+  title: string;
+  detail: string;
+}
+
+export interface JournalRow {
+  id: number;
+  at: number;
+  action: string;
+  target: string;
+  title: string;
+  undone: boolean;
+}
+
+export interface SegSummary {
+  episodes: number;
+  intro: number;
+  credits: number;
+  recap: number;
+}
+
+export interface InboxEntry {
+  name: string;
+  source: ImportSource;
+  modified: number;
+}
+
 export interface PlayInfo {
   token: string;
   url: string;
@@ -411,6 +497,7 @@ export interface PlayInfo {
   next: { id: string; label: string } | null;
   about?: About;
   trickplay?: Trickplay | null;
+  chapters?: { name: string; start: number }[];
 }
 
 export interface DlRequest {
@@ -564,6 +651,22 @@ export const api = {
   importPick: (folder: boolean) => invoke<ImportSource | null>("import_pick", { folder }),
   importRun: (dest: string, title: string, year: number | null, mode: "move" | "copy") =>
     invoke<{ folder: string; moved: number; copied: number; skipped: string[] }>("import_run", { dest, title, year, mode }),
+  clearResume: (id: string) => invoke<void>("clear_resume", { id }),
+  inboxPick: () => invoke<string | null>("inbox_pick"),
+  inboxList: () => invoke<[string | null, InboxEntry[]]>("inbox_list"),
+  inboxSelect: (name: string) => invoke<ImportSource>("inbox_select", { name }),
+  libraryHealth: () => invoke<HealthRow[]>("library_health"),
+  missingEpisodes: (seriesId: string) => invoke<MissingReport>("missing_episodes", { seriesId }),
+  findDuplicates: () => invoke<DupGroup[]>("find_duplicates"),
+  mergeVersions: (ids: string[]) => invoke<void>("merge_versions", { ids }),
+  trashItemFile: (id: string) => invoke<number>("trash_item_file", { id }),
+  tagStats: () => invoke<TagStat[]>("tag_stats"),
+  tagsMerge: (kind: "genre" | "tag", from: string[], to: string | null) => invoke<number>("tags_merge", { kind, from, to }),
+  makeEpisodeStills: (parentId: string) => invoke<number>("make_episode_stills", { parentId }),
+  healthAlerts: () => invoke<Alert[]>("health_alerts"),
+  syncPicksPlaylist: (ids: string[]) => invoke<number>("sync_picks_playlist", { ids }),
+  journalAll: (limit: number) => invoke<JournalRow[]>("journal_all", { limit }),
+  segmentSummary: (seriesId: string, fresh = false) => invoke<SegSummary>("segment_summary", { seriesId, fresh }),
   undo: (batch: string) => invoke<{ restored: number; skipped: string[] }>("undo_rename", { batch }),
 };
 

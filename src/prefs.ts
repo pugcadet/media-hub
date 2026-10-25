@@ -35,6 +35,12 @@ export interface Prefs {
   minSubScore: number;
   schedule: Schedule;
   lastRun: Record<string, string>;
+  /** Shows (series ids) hidden from "Next up" in Media Hub. */
+  hiddenNextUp: string[];
+  /** Library folders (names or path parts) the subtitle downloader leaves alone. */
+  subSkipFolders: string[];
+  /** Run intro detection in the background when you play a season without markers. */
+  autoDetectIntros: boolean;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -48,6 +54,9 @@ export const DEFAULT_PREFS: Prefs = {
   minSubScore: 100,
   schedule: { enabled: false, hour: 4, subtitles: true, art: true, picks: true, scan: true },
   lastRun: {},
+  hiddenNextUp: [],
+  subSkipFolders: [],
+  autoDetectIntros: true,
 };
 
 const KEY = "mediahub.prefs.v1";
@@ -63,6 +72,8 @@ function load(): Prefs {
       subStyle: { ...DEFAULT_PREFS.subStyle, ...(p.subStyle ?? {}) },
       schedule: { ...DEFAULT_PREFS.schedule, ...(p.schedule ?? {}) },
       lastRun: { ...(p.lastRun ?? {}) },
+      hiddenNextUp: p.hiddenNextUp ?? [],
+      subSkipFolders: p.subSkipFolders ?? [],
     };
   } catch {
     return DEFAULT_PREFS;
@@ -120,4 +131,14 @@ export function subCss(s: SubStyle): CSSProperties {
     textShadow: shadow,
     fontWeight: s.bold ? 700 : 500,
   };
+}
+
+/** True when a server path is inside one of the folders the subtitle downloader skips. */
+export function subSkipped(path: string | undefined): boolean {
+  if (!path) return false;
+  const p = "/" + path.replace(/\\/g, "/").toLowerCase() + "/";
+  return prefs().subSkipFolders.some((f) => {
+    const x = f.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").toLowerCase();
+    return !!x && p.includes(`/${x}/`);
+  });
 }

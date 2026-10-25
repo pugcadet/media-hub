@@ -1218,3 +1218,94 @@ mod tests {
         assert!(Client::new("http://x", "0123456789abcdef0123456789abcdef").is_ok());
     }
 }
+
+// ------------------------------------------------------------- 0.11 additions
+
+impl Client {
+    /// Any /Items query as the chosen user (all pages up to `max`).
+    pub async fn items_query(&self, mut q: Vec<(&'static str, String)>, max: usize) -> Result<Vec<serde_json::Value>> {
+        let mut out = Vec::new();
+        let page = 500usize;
+        q.push(("Limit", page.to_string()));
+        loop {
+            let mut qq = q.clone();
+            qq.push(("StartIndex", out.len().to_string()));
+            let v: serde_json::Value = self.get_json("/Items", &self.with_user(qq)).await?;
+            let items = Self::items_of(v);
+            let n = items.len();
+            out.extend(items);
+            if n < page || out.len() >= max {
+                break;
+            }
+        }
+        out.truncate(max);
+        Ok(out)
+    }
+
+    /// Installed server plugins: (name, version, status).
+    pub async fn plugins(&self) -> Result<Vec<(String, String, String)>> {
+        let v: serde_json::Value = self.get_json("/Plugins", &[]).await?;
+        Ok(v.as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| {
+                let s = |k: &str| p.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                (s("Name"), s("Version"), s("Status"))
+            })
+            .collect())
+    }
+
+    /// Playlists of the chosen user.
+    pub async fn playlists(&self) -> Result<Vec<serde_json::Value>> {
+        let q = vec![("IncludeItemTypes", "Playlist".to_string()), ("Recursive", "true".to_string())];
+        Ok(Self::items_of(self.get_json("/Items", &self.with_user(q)).await?))
+    }
+
+    /// Entries of a playlist (each has PlaylistItemId).
+    pub async fn playlist_items(&self, id: &str) -> Result<Vec<serde_json::Value>> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        Ok(Self::items_of(self.get_json(&format!("/Playlists/{id}/Items"), &self.with_user(vec![])).await?))
+    }
+}
+
+impl Writer {
+    /// Groups items as versions of one title (Jellyfin "merge versions").
+    pub async fn merge_versions(&self, ids: &[String]) -> Result<()> {
+        if ids.len() < 2 {
+            return Err(Error::msg("Pick at least two."));
+        }
+        self.post("/Videos/MergeVersions", &[("ids", ids_param(ids)?)], None).await
+    }
+
+    /// Makes a playlist for the chosen user and returns its id.
+    pub async fn playlist_create(&self, name: &str, ids: &[String]) -> Result<String> {
+        let user = self.c.user.clone().ok_or_else(|| Error::msg("Choose a user in Settings first."))?;
+        let body = serde_json::json!({ "Name": name, "Ids": ids, "UserId": user, "MediaType": "Video" });
+        let req = self.c.http.post(self.c.url("/Playlists")).json(&body);
+        let resp = self.c.send(req).await?;
+        let v: serde_json::Value = Client::read_json(resp).await?;
+        v.get("Id").and_then(|i| i.as_str()).map(|s| s.replace('-', "")).filter(|i| valid_item_id(i)).ok_or_else(|| Error::msg("Jellyfin did not return the playlist."))
+    }
+
+    pub async fn playlist_add(&self, id: &str, ids: &[String]) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let mut q = vec![("ids", ids_param(ids)?)];
+        if let Some(u) = &self.c.user {
+            q.push(("userId", u.clone()));
+        }
+        self.post(&format!("/Playlists/{id}/Items"), &q, None).await
+    }
+
+    pub async fn playlist_remove_entries(&self, id: &str, entry_ids: &[String]) -> Result<()> {
+        if !valid_item_id(id) || entry_ids.is_empty() {
+            return Ok(());
+        }
+        let clean: Vec<String> = entry_ids.iter().filter(|e| e.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).cloned().collect();
+        let req = self.c.http.delete(self.c.url(&format!("/Playlists/{id}/Items"))).query(&[("entryIds", clean.join(","))]);
+        self.c.send(req).await.map(|_| ())
+    }
+}

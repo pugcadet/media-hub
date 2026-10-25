@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, cleanTitle, errorText, imageUrl, PlayInfo, ScoredSub, Status, SubTrack } from "./api";
-import { fmt } from "./Intros";
+import { autoDetectSeason, fmt } from "./Intros";
 import { prefs, setPrefs, subCss, usePrefs, type SubStyle } from "./prefs";
 import { nav } from "./nav";
 
@@ -109,6 +109,11 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
         if (cancelled) return;
         setInfo(pi);
         setTracks(pi.subtitles);
+        if (session.n === 0 && prefs().autoDetectIntros && !status?.readOnly && !pi.segments.some((x) => x.Type === "Intro")) {
+          void api.details(id).then((d) => {
+            if (d.item.Type === "Episode" && d.item.SeasonId) void autoDetectSeason(d.item.SeasonId, `${d.item.SeriesName ?? ""} ${d.item.SeasonName ?? ""}`.trim());
+          }).catch(() => undefined);
+        }
         const v = video.current!;
         // First start: offer to continue where you stopped (Infuse-style).
         let startAt = session.start;
@@ -337,6 +342,8 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       else if (k === "m") { const v = video.current; if (v) { v.muted = !v.muted; say(v.muted ? "Muted" : "Sound on"); } }
       else if (k === "c") { if (e.shiftKey) cycleSubtitles(); else void toggleMainSubs(); }
       else if (k === "n" && info?.next) playNext();
+      else if (e.key === "]" || e.key === "PageDown") { e.preventDefault(); jumpChapter(1); }
+      else if (e.key === "[" || e.key === "PageUp") { e.preventDefault(); jumpChapter(-1); }
       else if (k === "f") void fullscreen();
       else if (k === "s" && current) skipCurrent();
       else if (e.key === "Escape") { if (panel !== "none") setPanel("none"); else onClose(); }
@@ -344,6 +351,17 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  const chapters = (info?.chapters ?? []).filter((c) => c.start >= 0 && (!duration || c.start < duration));
+  function jumpChapter(dir: number) {
+    if (!chapters.length) return say("No chapters");
+    const t = video.current?.currentTime ?? time;
+    const target = dir > 0 ? chapters.find((c) => c.start > t + 1) : [...chapters].reverse().find((c) => c.start < t - 3);
+    if (!target) return say(dir > 0 ? "Last chapter" : "First chapter");
+    seek(target.start);
+    say(target.name || `Chapter ${chapters.indexOf(target) + 1}`);
+  }
+  const chapterAt = (t: number) => [...chapters].reverse().find((c) => c.start <= t);
 
   function changeVolume(d: number) {
     const v = video.current;
@@ -614,7 +632,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
               <button onClick={() => setOffset((o) => Math.round((o + 0.5) * 10) / 10)} aria-label="Later">+</button>
             </span>
           </div>
-          <div className="muted small">C turns {subLang === "eng" ? "English" : subLang} subtitles on and off · Shift+C goes through all</div>
+          <div className="muted small">C turns {subLang === "eng" ? "English" : subLang} subtitles on and off · Shift+C goes through all · [ and ] jump between chapters</div>
         </div>
       )}
       {panel === "style" && (
@@ -648,11 +666,13 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           {hover && duration > 0 && (
             <div className="p-preview" style={{ left: Math.max(110, Math.min(hover.x, (video.current?.clientWidth ?? 1000) - 166)) }}>
               {thumb && <div className="p-thumb" style={thumb} />}
+              {chapterAt(hover.t)?.name && <span className="small p-chapname">{chapterAt(hover.t)!.name}</span>}
               <span className="mono small">{fmt(hover.t)}{marks.find((m) => hover.t >= m.start && hover.t < m.end) ? ` · ${marks.find((m) => hover.t >= m.start && hover.t < m.end)!.kind === "Outro" ? "Credits" : marks.find((m) => hover.t >= m.start && hover.t < m.end)!.kind}` : ""}</span>
             </div>
           )}
           <div className="p-rail">
             {marks.map((m, i) => <span key={i} className={`p-mark ${m.kind.toLowerCase()}`} style={{ left: pct(m.start), width: `calc(${pct(m.end)} - ${pct(m.start)})` }} />)}
+            {chapters.filter((c) => c.start > 1).map((c, i) => <span key={`c${i}`} className="p-chapter" style={{ left: pct(c.start) }} title={c.name} />)}
             <span className="p-fill" style={{ width: pct(time) }} />
           </div>
           <input type="range" min={0} max={duration || 1} step={1} value={time} onChange={(e) => seek(Number(e.target.value))} aria-label="Position" />

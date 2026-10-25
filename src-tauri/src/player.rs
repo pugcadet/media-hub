@@ -153,6 +153,32 @@ pub struct PlayInfo {
     about: About,
     /// Preview pictures for the timeline, if Jellyfin made them.
     trickplay: Option<Trickplay>,
+    /// Chapter marks: (name, start in seconds).
+    chapters: Vec<Chapter>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Chapter {
+    name: String,
+    start: f64,
+}
+
+pub fn chapters_of(item: &Value) -> Vec<Chapter> {
+    item.get("Chapters")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| {
+                    Some(Chapter {
+                        name: c.get("Name").and_then(Value::as_str).unwrap_or("").to_string(),
+                        start: c.get("StartPositionTicks").and_then(Value::as_f64)? / TICKS_PER_SECOND,
+                    })
+                })
+                .take(200)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Serialize)]
@@ -390,6 +416,7 @@ pub async fn play_start(state: State<'_, AppState>, id: String, start: f64, audi
         resume,
         next: next.filter(|n| valid_item_id(&n.id)),
         trickplay,
+        chapters: chapters_of(&item),
         about: about_of(&item, &id),
     })
 }

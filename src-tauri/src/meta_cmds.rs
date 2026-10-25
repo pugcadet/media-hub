@@ -54,7 +54,7 @@ pub async fn item_details(state: State<'_, AppState>, id: String) -> Result<Deta
     })
 }
 
-fn sync_row(state: &AppState, id: &str, item: &Value) -> Result<()> {
+pub(crate) fn sync_row(state: &AppState, id: &str, item: &Value) -> Result<()> {
     let name = item.get("Name").and_then(Value::as_str).unwrap_or("");
     let year = item.get("ProductionYear").and_then(Value::as_i64).map(|y| y as i32);
     let rating = item.get("CommunityRating").and_then(Value::as_f64);
@@ -407,6 +407,14 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
         // A local file swap: no Jellyfin change involved.
         crate::storage::undo_swap(&ch.old_value)?;
         state.store()?.journal_mark_undone(change_id)?;
+        return Ok(());
+    }
+    if ch.action == "file_trashed" {
+        crate::library::undo_trash(&ch.old_value)?;
+        state.store()?.journal_mark_undone(change_id)?;
+        if let Ok(c) = state.reader().await {
+            let _ = c.library_scan().await;
+        }
         return Ok(());
     }
     let w = state.writer().await?;

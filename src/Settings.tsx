@@ -111,6 +111,7 @@ export default function Settings({ status, onChanged }: { status: Status; onChan
       </section>
 
       <PlayerSettings status={status} />
+      <SubSkipSettings status={status} />
       <ScheduleSettings status={status} />
       <SubLangSettings subLangs={status.subLangs} onChanged={onChanged} />
       <ToolsSettings />
@@ -129,6 +130,7 @@ function PlayerSettings({ status }: { status: Status }) {
       <label className="check"><input type="checkbox" checked={p.autoSkipIntro} onChange={(e) => setPrefs({ autoSkipIntro: e.target.checked })} /><span>Skip intros by themselves (a 3-second countdown on the button, press “Watch it” to stay)</span></label>
       <label className="check"><input type="checkbox" checked={p.autoSkipCredits} onChange={(e) => setPrefs({ autoSkipCredits: e.target.checked })} /><span>Skip credits: go to the next episode after 5 seconds (or skip to the end of a movie's credits)</span></label>
       <label className="check"><input type="checkbox" checked={p.upNextAutoplay} onChange={(e) => setPrefs({ upNextAutoplay: e.target.checked })} /><span>Play the next episode by itself when the credits start</span></label>
+      <label className="check"><input type="checkbox" checked={p.autoDetectIntros} onChange={(e) => setPrefs({ autoDetectIntros: e.target.checked })} /><span>When I play a season without intro markers, find them in the background (needs ffmpeg; only sure finds are saved)</span></label>
       <label className="check"><input type="checkbox" checked={p.recapsOff} onChange={(e) => setPrefs({ recapsOff: e.target.checked })} /><span>Turn recaps off completely (no recap markers in the player or the intros tool). Remove saved ones with “Remove recaps” on a season or show.</span></label>
       <label className="wide-label">Language that C switches on (and fetches when missing)
         <select value={p.subLang} onChange={(e) => setPrefs({ subLang: e.target.value })}>
@@ -167,6 +169,48 @@ function ScheduleSettings({ status }: { status: Status }) {
         <button onClick={() => void runDaily(status, true)}>Run now</button>
       </div>
       {status.readOnly && <p className="muted small">Artwork, subtitles and picks need changes switched on (above).</p>}
+    </section>
+  );
+}
+
+function SubSkipSettings({ status }: { status: Status }) {
+  const p = usePrefs();
+  const [folders, setFolders] = useState<{ name: string }[]>([]);
+  const [base, setBase] = useState("");
+  const [custom, setCustom] = useState("");
+  useEffect(() => {
+    if (status.libraryRoot) api.folders(base).then(setFolders).catch(() => setFolders([]));
+  }, [status.libraryRoot, base]);
+  const toggle = (f: string) =>
+    setPrefs({ subSkipFolders: p.subSkipFolders.includes(f) ? p.subSkipFolders.filter((x) => x !== f) : [...p.subSkipFolders, f] });
+  const rel = (n: string) => (base ? `${base}/${n}` : n);
+  return (
+    <section className="card form">
+      <h2>Subtitle downloads</h2>
+      <p className="muted small">Folders the subtitle downloader leaves alone (the Subtitles screen, “Get missing subtitles” and the daily task). Handy for kids' shows, home videos or foreign-language folders.</p>
+      {p.subSkipFolders.length > 0 && (
+        <div className="chips">
+          {p.subSkipFolders.map((f) => <span key={f} className="chip static on">{f}<button className="link x" onClick={() => toggle(f)} aria-label="Remove">×</button></span>)}
+        </div>
+      )}
+      {status.libraryRoot && (
+        <div className="skip-picker">
+          <div className="small muted">
+            <button className="link" onClick={() => setBase("")}>Library folder</button>
+            {base && base.split("/").map((part, i, all) => <span key={i}> › <button className="link" onClick={() => setBase(all.slice(0, i + 1).join("/"))}>{part}</button></span>)}
+          </div>
+          {folders.map((f) => (
+            <div key={f.name} className="skip-row">
+              <label className="check small"><input type="checkbox" checked={p.subSkipFolders.includes(rel(f.name))} onChange={() => toggle(rel(f.name))} />{f.name}</label>
+              <button className="link small" onClick={() => setBase(rel(f.name))}>open ›</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="row">
+        <label>Or type part of a path<input value={custom} placeholder="e.g. Kids or Anime" onChange={(e) => setCustom(e.target.value)} /></label>
+        <button disabled={!custom.trim()} onClick={() => { toggle(custom.trim()); setCustom(""); }}>Add</button>
+      </div>
     </section>
   );
 }

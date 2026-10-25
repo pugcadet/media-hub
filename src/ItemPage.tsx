@@ -4,7 +4,8 @@ import {
   languageName, remoteImageUrl, RemoteImage, SearchResult, Status,
 } from "./api";
 import { SubtitlesTab, EpisodesTab } from "./Subtitles";
-import { IntrosTab, removeSegments } from "./Intros";
+import { IntrosTab } from "./Intros";
+import { listen } from "@tauri-apps/api/event";
 import Renamer from "./Renamer";
 import { askConfirm } from "./confirm";
 import { track, useEpoch } from "./activity";
@@ -491,26 +492,36 @@ function CastTab({ item, canEdit }: { item: JfItem; canEdit: boolean }) {
 
 /* --------------------------------------------------------------- seasons */
 
-/** Whole-show tools: remove recaps/intros/credits in every season at once. */
+/** Whole-show tools: artwork for every season, stills for episodes without one. */
 function ShowTools({ seriesId, seasons, canEdit }: { seriesId: string; seasons: JfItem[]; canEdit: boolean }) {
-  const kinds: { k: "Recap" | "Intro" | "Outro"; label: string }[] = [{ k: "Recap", label: "recaps" }, { k: "Intro", label: "intros" }, { k: "Outro", label: "credits" }];
-  void seriesId;
   return (
     <details className="more">
       <summary>Whole-show tools</summary>
       <div className="row" style={{ marginTop: 10 }}>
-        {kinds.map(({ k, label }) => (
-          <button key={k} disabled={!canEdit} onClick={() => void askConfirm(`Remove all ${label} markers in every season of this show? Each removal goes in the undo list.`, { okLabel: `Remove ${label}`, danger: true }).then((ok) => { if (ok) void track(`Removing ${label}`, (job) => removeSegments(seasons.map((s) => s.Id), [k], job)); })}>Remove all {label}</button>
-        ))}
         <button disabled={!canEdit} onClick={() => void track("Artwork for every season", async (job) => {
           for (const [i, s] of seasons.entries()) {
             job.update(s.Name, i / seasons.length);
             await api.fillMissingArt(s.Id, ["Primary", "Backdrop", "Thumb", "Banner"]).catch(() => undefined);
           }
         })}>Fill in missing season artwork</button>
+        <button disabled={!canEdit} title="Takes a frame from the video for every episode without a picture (needs ffmpeg)" onClick={() => void stills(seriesId)}>Make episode stills from the video</button>
+        <span className="muted small">Removing recaps, intros or credits for the whole show: Intros and credits → this show.</span>
       </div>
     </details>
   );
+}
+
+/** Stills for episodes without a picture, with progress in the top bar. */
+async function stills(parentId: string) {
+  await track("Episode stills from the video", async (job) => {
+    const un = await listen<{ done: number; total: number; label?: string }>("bulk-progress", (e) => job.update(e.payload.label ?? "", e.payload.total ? e.payload.done / e.payload.total : null));
+    try {
+      const n = await api.makeEpisodeStills(parentId);
+      job.update(n ? `${n} stills added` : "Every episode already has a picture", 1);
+    } finally {
+      un();
+    }
+  });
 }
 
 /** A season: subtitle and intro tools on top, then the episodes. */
@@ -540,8 +551,8 @@ function SeasonPanel({ season, canEdit, subLangs, onNav }: { season: JfItem; can
       <div className="row">
         <button className={tool === "subs" ? "primary" : ""} onClick={() => setTool(tool === "subs" ? "none" : "subs")}>Get missing subtitles…</button>
         <button className={tool === "intros" ? "primary" : ""} onClick={() => setTool(tool === "intros" ? "none" : "intros")}>Intros and credits…</button>
-        <button disabled={!canEdit} onClick={() => void askConfirm(`Remove every recap marker in ${season.Name}?`, { okLabel: "Remove recaps", danger: true }).then((ok) => { if (ok) void track("Removing recaps", (job) => removeSegments([season.Id], ["Recap"], job)); })}>Remove recaps</button>
         <button disabled={!canEdit} onClick={() => void track(`Artwork for ${season.Name}`, () => api.fillMissingArt(season.Id, ["Primary", "Backdrop", "Thumb", "Banner"]).then(() => undefined))}>Fill in season artwork</button>
+        <button disabled={!canEdit} title="Takes a frame from the video for every episode without a picture (needs ffmpeg)" onClick={() => void stills(season.Id)}>Make episode stills</button>
         {recapsOff && <span className="muted small">Recaps are off (Settings → Player)</span>}
       </div>
       {tool === "subs" && <EpisodesTab id={season.Id} canEdit={canEdit} subLangs={subLangs} onOpen={(id) => nav.open(id)} />}
@@ -561,7 +572,7 @@ function SeasonPanel({ season, canEdit, subLangs, onNav }: { season: JfItem; can
               onKeyDown={(k) => k.key === "Enter" && nav.open(e.Id)}
               onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: "episode", title: e.Name, seriesId: e.SeriesId ?? season.SeriesId, seasonId: season.Id, played: e.UserData?.Played }, canEdit))}
             >
-              <div className="ep-thumb art wide cover">
+              <div className="ep-thumb art wide cover" title="Play" onClick={(ev) => { ev.stopPropagation(); nav.play(e.Id); }}>
                 {e.ImageTags?.Primary ? <img src={imageUrl(e.Id, "Primary", 400, 0, e.ImageTags.Primary)} alt="" loading="lazy" /> : <div className="noart small">E{e.IndexNumber ?? "?"}</div>}
                 <button className="ep-play" aria-label="Play" onClick={(ev) => { ev.stopPropagation(); nav.play(e.Id); }}><Icon name="play" size={18} /></button>
                 {pos > 0 && e.RunTimeTicks ? <span className="tile-progress"><span style={{ width: `${Math.min(100, (pos / e.RunTimeTicks) * 100)}%` }} /></span> : null}

@@ -2,7 +2,7 @@
 // "Picks of the day" collection, fill in missing artwork and fetch missing subtitles.
 import { api, localDate, Status } from "./api";
 import { track } from "./activity";
-import { prefs, setPrefs } from "./prefs";
+import { prefs, setPrefs, subSkipped } from "./prefs";
 
 let running = false;
 
@@ -20,10 +20,7 @@ export async function runDaily(status: Status, force = false): Promise<void> {
       await track("Daily: scanning the library", () => api.sync().then(() => undefined)).catch(() => undefined);
     }
     if (s.picks && canEdit) {
-      await track("Daily: “Picks of the day” in Jellyfin", async () => {
-        const picks = await api.picks(today);
-        if (picks.length) await api.syncPicksCollection(picks.map((x) => x.id));
-      }, { reload: false }).catch(() => undefined);
+      await syncPicks(today);
     }
     if (s.art && canEdit) {
       await track("Daily: missing artwork", async (job) => {
@@ -51,6 +48,7 @@ export async function runDaily(status: Status, force = false): Promise<void> {
         let got = 0;
         for (const [i, e] of (r.Items ?? []).entries()) {
           if (job.cancelled) break;
+          if (subSkipped(e.Path)) continue;
           job.update(e.SeriesName ? `${e.SeriesName} · ${e.Name}` : e.Name, i / (r.Items?.length || 1));
           try {
             const res = await api.subtitleAuto(e.Id, lang, [lang], p.minSubScore);
@@ -67,8 +65,26 @@ export async function runDaily(status: Status, force = false): Promise<void> {
   }
 }
 
+/** Today's picks as a Jellyfin collection and playlist, so Infuse and other apps see them. */
+async function syncPicks(today: string): Promise<void> {
+  await track("“Picks of the day” in Jellyfin", async (job) => {
+    const picks = await api.picks(today);
+    if (!picks.length) return;
+    const ids = picks.map((x) => x.id);
+    await api.syncPicksCollection(ids).catch(() => undefined);
+    const n = await api.syncPicksPlaylist(ids);
+    job.update(`${n} videos in the playlist`);
+  }, { reload: false }).catch(() => undefined);
+  setPrefs((cur) => ({ lastRun: { ...cur.lastRun, picks: today } }));
+}
+
 /** Checks every few minutes whether today's run is due. Returns a stop function. */
 export function startScheduler(status: Status): () => void {
+  // Picks change every day: keep them in Jellyfin even without the daily schedule.
+  const picksTimer = window.setTimeout(() => {
+    const today = localDate();
+    if (!status.readOnly && prefs().lastRun.picks !== today) void syncPicks(today);
+  }, 20_000);
   const tick = () => {
     const p = prefs();
     if (!p.schedule.enabled) return;
@@ -78,6 +94,7 @@ export function startScheduler(status: Status): () => void {
   const first = window.setTimeout(tick, 60_000); // give the app a minute to settle
   const t = window.setInterval(tick, 10 * 60_000);
   return () => {
+    window.clearTimeout(picksTimer);
     window.clearTimeout(first);
     window.clearInterval(t);
   };

@@ -2,8 +2,37 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import Hls from "hls.js";
 import { api, errorText, SegEpisode, SegOverview, Span } from "./api";
-import type { JobHandle } from "./activity";
+import { track, type JobHandle } from "./activity";
+import { askConfirm } from "./confirm";
 import { usePrefs } from "./prefs";
+
+const autoTried = new Set<string>();
+
+/**
+ * Finds intros and credits for a season in the background when it has no markers yet, and
+ * saves only the sure ones (found by listening, or by chapter names, without a problem).
+ */
+export async function autoDetectSeason(seasonId: string, seasonLabel: string): Promise<void> {
+  if (autoTried.has(seasonId)) return;
+  autoTried.add(seasonId);
+  const ov = await api.segmentsOverview(seasonId).catch(() => null);
+  if (!ov || !ov.ffmpeg || !ov.canWriteSegments || ov.episodes.length < 2) return;
+  if (ov.episodes.some((e) => e.segments.some((x) => x.kind === "Intro" || x.kind === "Outro"))) return;
+  await track(`Finding intros: ${seasonLabel}`, async (job) => {
+    const un = await listen<{ done: number; total: number; label: string }>("detect-progress", (e) => job.update(e.payload.label, e.payload.total ? e.payload.done / e.payload.total : null));
+    let saved = 0;
+    try {
+      const res = await api.detectSeason(seasonId, 6 * 60, 5 * 60);
+      for (const r of res) {
+        if (r.problem || (!r.intro && !r.credits)) continue;
+        await api.saveSegments(r.id, r.intro, r.credits, null, []).then(() => saved++).catch(() => undefined);
+      }
+    } finally {
+      un();
+    }
+    job.update(saved ? `Markers saved for ${saved} episodes` : "Nothing sure enough to save", 1);
+  }, { reload: false }).catch(() => undefined);
+}
 
 /** Removes every marker of `kinds` ("Intro" | "Outro" | "Recap") in the given seasons. */
 export async function removeSegments(seasonIds: string[], kinds: string[], job?: JobHandle): Promise<number> {
@@ -51,6 +80,12 @@ export function parseTime(v: string): number | null {
   return parts.reduce((acc, p) => acc * 60 + Number(p), 0);
 }
 
+/** "Intro 0:05–0:35 · Credits 19:40" or "No markers yet". */
+function summary(d: Draft, parts: Part[]): string {
+  const bits = parts.filter((p) => d[p]).map((p) => `${LABEL[p]} ${fmt(d[p]!.start)}–${fmt(d[p]!.end)}`);
+  return bits.length ? bits.join(" · ") + (d.source && d.source !== "manual" ? ` (${d.source})` : "") : "No markers yet";
+}
+
 function saved(ep: SegEpisode, part: Part): Span | null {
   const s = ep.segments.find((x) => x.kind === KIND[part]);
   return s ? { start: s.start, end: s.end } : null;
@@ -90,7 +125,11 @@ interface Flag {
   actions: { label: string; danger?: boolean; run: () => void }[];
 }
 
-export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seasonId: string; seasonName?: string; canEdit: boolean; onSettings: () => void }) {
+export function IntrosTab({ seasonId, seasonName, canEdit, onSettings, show }: {
+  seasonId: string; seasonName?: string; canEdit: boolean; onSettings: () => void;
+  /** When opened for a whole show: offers removing markers in every season. */
+  show?: { name: string; seasonIds: string[]; onChanged?: () => void };
+}) {
   const [ov, setOv] = useState<SegOverview | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -134,7 +173,8 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seaso
     return () => void un.then((f) => f());
   }, []);
 
-  const eps = ov?.episodes ?? [];
+  // An episode without a known length is drawn as long as its last marker (plus a minute).
+  const eps = (ov?.episodes ?? []).map((e) => (e.duration > 0 ? e : { ...e, duration: Math.max(60, ...e.segments.map((x) => x.end + 60)) }));
   const maxDur = Math.max(60, ...eps.map((e) => e.duration));
   const set = (id: string, p: Part, s: Span | null) => setDrafts((d) => ({ ...d, [id]: { ...d[id], [p]: s, source: "manual" } }));
   const targets = () => eps.filter((e) => applyTo === "season" || selected.has(e.id));
@@ -362,6 +402,20 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seaso
           {changes.length > 0 && <button className="link small" onClick={() => void load()}>Discard all changes</button>}
           <p className="muted small">Every saved change goes into the undo list, so you can put it back.</p>
         </div>
+
+        {show && (
+          <div className="card form">
+            <h2>Whole show</h2>
+            <p className="muted small">Remove a kind of marker from every season of {show.name} at once. Saved straight to Jellyfin; each one can be undone.</p>
+            <div className="seg wide3">
+              {([["Recap", "recaps"], ["Intro", "intros"], ["Outro", "credits"]] as const).map(([k, label]) => (
+                <button key={k} disabled={!canEdit} onClick={() => void askConfirm(`Remove all ${label} in every season of ${show.name}?`, { okLabel: `Remove ${label}`, danger: true }).then((ok) => {
+                  if (ok) void track(`Removing ${label}`, (job) => removeSegments(show.seasonIds, [k], job)).then(() => { show.onChanged?.(); void load(); });
+                })}>Remove {label}</button>
+              ))}
+            </div>
+          </div>
+        )}
       </aside>
 
       <section className="seg-main">
@@ -406,7 +460,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seaso
                     <input type="checkbox" checked={selected.has(e.id)} onChange={() => setSelected((s) => { const n = new Set(s); if (n.has(e.id)) n.delete(e.id); else n.add(e.id); return n; })} aria-label="Select episode" />
                     <button className="link-plain" onClick={() => setOpen(open === e.id ? null : e.id)}>
                       <span className="tl-title">{epName(e)}</span>
-                      <span className={`small ${f ? "bad" : d.problem ? "warn" : "muted"}`}>{f ? f.title.split(" · ")[1] : d.problem ?? (d.source ? `from ${d.source}` : "OK")}</span>
+                      <span className={`small ${f ? "bad" : d.problem ? "warn" : !d.intro && !d.credits ? "muted" : "ok"}`}>{f ? f.title.split(" · ")[1] : d.problem ?? summary(d, parts)}</span>
                     </button>
                   </div>
                   <Bars ep={e} draft={d} maxDur={maxDur} drawing={drawing} wrong={wrong} onDraw={(p, s) => set(e.id, p, s)} />

@@ -1,8 +1,8 @@
 // Shared pieces: right-click menus, picture viewer, choice dialog, cards and rows,
 // and the activity bar at the top of the window.
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { api, Card, errorText, imageUrl } from "./api";
-import { dismiss, reloadAll, track, useJobs } from "./activity";
+import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Alert, api, Card, errorText, imageUrl } from "./api";
+import { dismiss, reloadAll, track, useEpoch, useJobs } from "./activity";
 import { nav } from "./nav";
 
 /* ------------------------------------------------------------------ store */
@@ -275,7 +275,7 @@ export function Hosts() {
 
 /* -------------------------------------------------------------- icons */
 
-export function Icon({ name, size = 16 }: { name: "reload" | "expand" | "folder" | "play" | "plus" | "check" | "x" | "search" | "more"; size?: number }) {
+export function Icon({ name, size = 16 }: { name: "reload" | "expand" | "folder" | "play" | "plus" | "check" | "x" | "search" | "more" | "bell"; size?: number }) {
   const p: Record<string, ReactNode> = {
     reload: <><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></>,
     expand: <><path d="M14 4h6v6" /><path d="M10 20H4v-6" /><path d="M20 4l-7 7" /><path d="M4 20l7-7" /></>,
@@ -285,6 +285,7 @@ export function Icon({ name, size = 16 }: { name: "reload" | "expand" | "folder"
     check: <path d="M5 12l5 5 9-10" />,
     x: <><path d="M6 6l12 12" /><path d="M18 6L6 18" /></>,
     search: <><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></>,
+    bell: <><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></>,
     more: <><circle cx="5" cy="12" r="1.5" fill="currentColor" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /><circle cx="19" cy="12" r="1.5" fill="currentColor" /></>,
   };
   return (
@@ -294,8 +295,21 @@ export function Icon({ name, size = 16 }: { name: "reload" | "expand" | "folder"
 
 /* --------------------------------------------------------- cards & rows */
 
-/** A poster (or wide thumbnail for episodes) that opens on click and has a right-click menu. */
-export function CardTile({ c, wide, canEdit = true, inCollection, onOpen }: { c: Card; wide?: boolean; canEdit?: boolean; inCollection?: string; onOpen?: (c: Card) => void }) {
+/** Plays what a card stands for: the video itself, or a show from where you are. */
+export function playCard(c: Card): void {
+  if (c.kind === "movie" || c.kind === "episode") nav.play(c.id);
+  else if (c.kind === "series" || c.kind === "season") void playTitle(c.id);
+  else if (c.kind === "collection") nav.route({ view: "collections", collection: c.id });
+  else nav.open(c.id);
+}
+
+/**
+ * A poster (or wide thumbnail for episodes). Clicking the picture plays it; clicking the
+ * text opens the page with info, cast and seasons. Right-click for everything else.
+ */
+export function CardTile({ c, wide, canEdit = true, inCollection, onOpen, menuExtra }: {
+  c: Card; wide?: boolean; canEdit?: boolean; inCollection?: string; onOpen?: (c: Card) => void; menuExtra?: (c: Card) => MenuItem[];
+}) {
   const isWide = wide ?? (c.kind === "episode");
   const art = isWide
     ? c.kind === "episode" ? imageUrl(c.id, "Primary", 480) : imageUrl(c.artId, "Thumb", 480)
@@ -303,15 +317,15 @@ export function CardTile({ c, wide, canEdit = true, inCollection, onOpen }: { c:
   const fallback = isWide ? imageUrl(c.artId, "Backdrop", 480) : null;
   const [broken, setBroken] = useState(false);
   const [broken2, setBroken2] = useState(false);
-  const open = () => (onOpen ? onOpen(c) : c.kind === "person" ? undefined : nav.open(c.id));
+  const open = () => (onOpen ? onOpen(c) : c.kind === "person" ? undefined : nav.open(c.kind === "episode" && c.seriesId ? c.id : c.id));
+  const playable = !onOpen && c.kind !== "person" && c.kind !== "other";
+  const menu = (e: React.MouseEvent) => openMenu(e, [
+    ...(menuExtra ? [...menuExtra(c), { sep: true }] : []),
+    ...itemMenu({ id: c.id, kind: c.kind, title: c.title, seriesId: c.seriesId, played: c.played, inCollection }, canEdit),
+  ]);
   return (
-    <button
-      className={`tile ${isWide ? "wide" : ""}`}
-      onClick={open}
-      onContextMenu={(e) => openMenu(e, itemMenu({ id: c.id, kind: c.kind, title: c.title, seriesId: c.seriesId, played: c.played, inCollection }, canEdit))}
-      title={c.title}
-    >
-      <div className={`art ${isWide ? "wide cover" : ""}`}>
+    <div className={`tile ${isWide ? "wide" : ""}`} onContextMenu={menu} title={c.title}>
+      <button className={`art ${isWide ? "wide cover" : ""} tile-art`} onClick={playable ? () => playCard(c) : open} aria-label={playable ? `Play ${c.title}` : `Open ${c.title}`}>
         {!broken ? (
           <img src={art} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} />
         ) : fallback && !broken2 ? (
@@ -319,17 +333,20 @@ export function CardTile({ c, wide, canEdit = true, inCollection, onOpen }: { c:
         ) : (
           <div className="noart">{c.title}</div>
         )}
+        {playable && <span className="tile-play"><Icon name="play" size={20} /></span>}
         {c.played && <span className="played" title="Watched">✓</span>}
         {c.progress != null && c.progress > 0.01 && c.progress < 0.99 && <span className="tile-progress"><span style={{ width: `${c.progress * 100}%` }} /></span>}
-      </div>
-      <div className="title">{c.title}</div>
-      <div className="sub">{c.subtitle}</div>
-    </button>
+      </button>
+      <button className="tile-text" onClick={open}>
+        <div className="title">{c.title}</div>
+        <div className="sub">{c.subtitle}</div>
+      </button>
+    </div>
   );
 }
 
 /** A titled, horizontally scrolling row of cards. */
-export function Row({ title, cards, wide, action, canEdit, inCollection }: { title: string; cards: Card[]; wide?: boolean; action?: ReactNode; canEdit?: boolean; inCollection?: string }) {
+export function Row({ title, cards, wide, action, canEdit, inCollection, menuExtra }: { title: string; cards: Card[]; wide?: boolean; action?: ReactNode; canEdit?: boolean; inCollection?: string; menuExtra?: (c: Card) => MenuItem[] }) {
   const ref = useRef<HTMLDivElement>(null);
   if (!cards.length) return null;
   const scroll = (d: number) => ref.current?.scrollBy({ left: d * ref.current.clientWidth * 0.85, behavior: "smooth" });
@@ -344,13 +361,52 @@ export function Row({ title, cards, wide, action, canEdit, inCollection }: { tit
         </div>
       </div>
       <div ref={ref} className={`hrow-scroll ${wide ? "wide" : ""}`}>
-        {cards.map((c) => <CardTile key={`${c.id}-${c.kind}`} c={c} wide={wide} canEdit={canEdit} inCollection={inCollection} />)}
+        {cards.map((c) => <CardTile key={`${c.id}-${c.kind}`} c={c} wide={wide} canEdit={canEdit} inCollection={inCollection} menuExtra={menuExtra} />)}
       </div>
     </section>
   );
 }
 
 /* ------------------------------------------------------------ activity */
+
+function Alerts() {
+  const epoch = useEpoch();
+  const [list, setList] = useState<Alert[]>([]);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const load = () => api.healthAlerts().then(setList).catch(() => setList([]));
+    void load();
+    const t = window.setInterval(load, 10 * 60_000);
+    return () => window.clearInterval(t);
+  }, [epoch]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    window.addEventListener("mousedown", close);
+    return () => window.removeEventListener("mousedown", close);
+  }, [open]);
+  const serious = list.filter((a) => a.level !== "info").length;
+  return (
+    <div className="alerts" ref={ref}>
+      <button className={`icon-btn ${serious ? "has-alerts" : ""}`} title="Alerts" aria-label="Alerts" onClick={() => setOpen(!open)}>
+        <Icon name="bell" />{list.length > 0 && <span className={`alert-count ${serious ? "" : "info"}`}>{list.length}</span>}
+      </button>
+      {open && (
+        <div className="alert-menu">
+          <div className="strong">Alerts</div>
+          {list.length === 0 && <div className="muted small">All good.</div>}
+          {list.map((a, i) => (
+            <div key={i} className={`alert-row ${a.level}`}>
+              <span className={`dot ${a.level === "error" ? "bad" : a.level === "warn" ? "warn" : ""}`} />
+              <div><div className="strong small">{a.title}</div><div className="muted small">{a.detail}</div></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ActivityBar() {
   const jobs = useJobs();
@@ -373,6 +429,7 @@ export function ActivityBar() {
         ))}
         {running.length > 3 && <span className="muted small">+{running.length - 3} more</span>}
       </div>
+      <Alerts />
       <button
         className={`icon-btn ${spin ? "spinning" : ""}`}
         title="Reload everything (R)"

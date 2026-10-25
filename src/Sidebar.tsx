@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Attention, Library, Status } from "./api";
+import { api, type Attention, type Library, type Status } from "./api";
 import type { Route, View } from "./nav";
 import { UpdateBadge } from "./Updates";
 import { setPrefs, usePrefs } from "./prefs";
@@ -13,12 +13,17 @@ interface Props {
 }
 
 const TOOLS: { view: View; label: string }[] = [
+  { view: "health", label: "Library health" },
   { view: "add", label: "Add show or movie" },
   { view: "renamer", label: "Renamer" },
   { view: "metadata", label: "Metadata and art" },
   { view: "subtitles", label: "Subtitles" },
   { view: "intros", label: "Intros and credits" },
-  // Storage and Downloads are parked for now (code kept, hidden from the menu).
+  { view: "missing", label: "Missing episodes" },
+  { view: "duplicates", label: "Duplicates" },
+  { view: "tags", label: "Genres and tags" },
+  { view: "storage", label: "Storage" },
+  // Downloads is parked for now (code kept, hidden from the menu).
 ];
 
 /** The "hub" in the top-left corner: switches between the parts of Media Hub. */
@@ -68,6 +73,13 @@ export function HubSwitcher() {
 }
 
 export default function Sidebar({ status, libraries, attention, route, onRoute }: Props) {
+  const [inbox, setInbox] = useState(0);
+  useEffect(() => {
+    const load = () => api.inboxList().then(([, l]) => setInbox(l.length)).catch(() => setInbox(0));
+    void load();
+    const t = window.setInterval(load, 5 * 60_000);
+    return () => window.clearInterval(t);
+  }, [route.view]);
   const libs: { id: string | null; label: string; count: number }[] = libraries.length
     ? libraries.map((l) => ({ id: l.id, label: l.name, count: l.count }))
     : [{ id: null, label: "Everything", count: status.movies + status.series }];
@@ -75,6 +87,7 @@ export default function Sidebar({ status, libraries, attention, route, onRoute }
     if (!attention) return "";
     if (v === "subtitles" && attention.noSubtitles) return String(attention.noSubtitles);
     if (v === "metadata" && attention.unmatched + attention.noPoster) return String(attention.unmatched + attention.noPoster);
+    if (v === "add" && inbox) return String(inbox);
     return "";
   };
 
@@ -101,6 +114,7 @@ export default function Sidebar({ status, libraries, attention, route, onRoute }
           <span className="sb-badge">{badge(t.view)}</span>
         </button>
       ))}
+      <button className={`sb-item ${route.view === "history" ? "on" : ""}`} onClick={() => onRoute({ view: "history" })}><span>History and undo</span></button>
       <div className="spacer" />
       <UpdateBadge />
       <button className={`sb-item ${route.view === "settings" ? "on" : ""}`} onClick={() => onRoute({ view: "settings" })}>

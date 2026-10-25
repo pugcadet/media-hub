@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, AutoResult, codesFor, cultures, Culture, errorText, JfChild, languageName, SubOptions } from "./api";
 import { track } from "./activity";
-import { prefs, setPrefs } from "./prefs";
+import { prefs, setPrefs, subSkipped } from "./prefs";
 
 function useCultures(): Culture[] {
   const [list, setList] = useState<Culture[]>([]);
@@ -137,7 +137,8 @@ export function EpisodesTab({ id, canEdit, subLangs, onOpen }: { id: string; can
   const codes = useMemo(() => codesFor(lang, list), [lang, list]);
   const has = (e: JfChild) =>
     (e.MediaStreams ?? []).some((s) => s.Type === "Subtitle" && !s.IsForced && s.Language && codes.includes(s.Language.toLowerCase()));
-  const missing = (eps ?? []).filter((e) => !has(e));
+  const missing = (eps ?? []).filter((e) => !has(e) && !subSkipped(e.Path));
+  const skippedHere = (eps ?? []).filter((e) => !has(e) && subSkipped(e.Path)).length;
 
   // A ref-like flag read inside the loop.
   const stopRef = useMemo(() => ({ current: false }), []);
@@ -183,7 +184,7 @@ export function EpisodesTab({ id, canEdit, subLangs, onOpen }: { id: string; can
         )}
       </div>
       <p className="muted small">
-        Takes the best match per episode only when it scores at least {minScore} (100 = made for exactly this file). Episodes with built-in subtitles in this language are skipped. Subtitle sites limit downloads per day, so large batches may stop early.
+        Takes the best match per episode only when it scores at least {minScore} (100 = made for exactly this file). Episodes with built-in subtitles in this language are skipped. Subtitle sites limit downloads per day, so large batches may stop early.{skippedHere ? ` This season is in a folder you skip (Settings), so ${skippedHere} are left out.` : ""}
       </p>
       {error && <p className="error">{error}</p>}
       <div className="table">
