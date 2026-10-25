@@ -1,7 +1,7 @@
 
-added 74 packages in 2s
+added 74 packages in 3s
 [1m[92m    Updating[0m crates.io index
-[1m[92m   Compiling[0m media-hub v0.10.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
+[1m[92m   Compiling[0m media-hub v0.11.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
 [1m[33mwarning[0m[1m: method `candidate_ids` is never used[0m
    [1m[94m--> [0msrc/store.rs:375:12
     [1m[94m|[0m
@@ -14,26 +14,26 @@ added 74 packages in 2s
     [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 [1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 20.16s
-[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-288822dbf8a7e2f0)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 37.51s
+[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-4c87248f1f0144fb)
 
-running 106 tests
+running 111 tests
 test config::tests::key_validation ... ok
 test collections::tests::episode_cards_point_at_the_show ... ok
-test config::tests::rejects_bad_input ... ok
 test config::tests::adds_scheme_and_keeps_port ... ok
 test config::tests::strips_trailing_slash_query_and_fragment ... ok
-test detect::tests::windows_and_snapping ... ok
-test downloads::tests::audio_mode ... ok
+test config::tests::rejects_bad_input ... ok
 test detect::tests::chapters_with_names_are_used ... ok
+test detect::tests::windows_and_snapping ... ok
 test downloads::tests::builds_safe_arguments ... ok
+test downloads::tests::audio_mode ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
 test downloads::tests::plain_error_text ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
+test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::search_targets_and_results ... ok
 test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
 test downloads::tests::summarizes_playlists ... ok
-test downloads::tests::reads_progress_and_checksums ... ok
 test fingerprint::tests::fft_matches_a_plain_dft ... ok
 test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
 test fingerprint::tests::silence_does_not_match ... ok
@@ -56,6 +56,10 @@ test jellyfin::tests::finds_segment_endpoints_in_the_api_description ... ok
 test jellyfin::tests::id_and_image_kind_checks ... ok
 test jellyfin::tests::missing_null_and_value_are_different ... ok
 test jellyfin::tests::parses_a_jellyfin_page ... ok
+test library::tests::best_version_wins_on_resolution_then_hdr ... ok
+test library::tests::merging_genres ... ok
+test library::tests::missing_skips_unaired_and_counts_specials ... ok
+test library::tests::today_looks_like_a_date ... ok
 test local::tests::relative_paths_use_forward_slashes ... ok
 test media_tools::tests::learns_and_reuses_the_path_map ... ok
 test media_tools::tests::splits_both_separator_styles ... ok
@@ -92,6 +96,7 @@ test player::tests::playlists_stay_inside_the_session ... ok
 test player::tests::splits_folder_and_file ... ok
 test seg_cmds::tests::reads_jellyfin_segments ... ok
 test seg_cmds::tests::span_checks ... ok
+test sources::tests::episode_lists_parse ... ok
 test sources::tests::language_is_sanitised ... ok
 test sources::tests::ranking_puts_best_first ... ok
 test sources::tests::titles_compare_sensibly ... ok
@@ -125,9 +130,9 @@ test updater::tests::versions_compare ... ok
 test fingerprint::tests::unrelated_audio_has_no_match ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 106 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.47s
+test result: ok. 111 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.64s
 
-[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-a5d6ae60232bdd9c)
+[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-8f729baee2f5be63)
 
 running 0 tests
 
@@ -142,12 +147,12 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         Info Looking up installed tauri packages to check mismatched versions...
      Running beforeBuildCommand `npm run build`
 
-> media-hub@0.10.0 build
+> media-hub@0.11.0 build
 > tsc && vite build
 
 [36mvite v5.4.21 [32mbuilding for production...[36m[39m
 transforming...
-[32m✓[39m 71 modules transformed.
+[32m✓[39m 76 modules transformed.
 rendering chunks...
 computing gzip size...
 [2mdist/[22m[32mindex.html                                                 [39m[1m[2m  0.39 kB[22m[1m[22m[2m │ gzip:   0.27 kB[22m
@@ -175,8 +180,8 @@ computing gzip size...
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-ext-400-normal-Bc8Ftmh3.woff2  [39m[1m[2m  7.34 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-400-normal-BMzJvInZ.woff2          [39m[1m[2m  7.84 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-700-normal-Dw_fZAg2.woff2          [39m[1m[2m  7.85 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-DvRl3Mj-.woff2          [39m[1m[2m  7.87 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-500-normal-B1OEZity.woff2          [39m[1m[2m  7.87 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-DvRl3Mj-.woff2          [39m[1m[2m  7.87 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-dm74KBQw.woff2         [39m[1m[2m  8.19 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-700-normal-DYOwVNan.woff2         [39m[1m[2m  8.28 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-400-normal-CMDvPJRp.woff2         [39m[1m[2m  8.29 kB[22m[1m[22m
@@ -186,8 +191,8 @@ computing gzip size...
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-400-normal-Dvx59UGC.woff           [39m[1m[2m 10.03 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-It4mZcQk.woff           [39m[1m[2m 10.06 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-ext-400-normal-fXTG6kC5.woff   [39m[1m[2m 10.13 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-600-normal-u5Pl7hTU.woff          [39m[1m[2m 11.25 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-EtoS1VaI.woff          [39m[1m[2m 11.25 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-600-normal-u5Pl7hTU.woff          [39m[1m[2m 11.25 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-400-normal-C-X6QNXX.woff          [39m[1m[2m 11.32 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-700-normal-eVCcYqtJ.woff          [39m[1m[2m 11.35 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-500-normal-BYYD-dBL.woff2             [39m[1m[2m 14.04 kB[22m[1m[22m
@@ -200,15 +205,15 @@ computing gzip size...
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-700-normal-DGRFkw-m.woff              [39m[1m[2m 18.41 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-400-normal-V6pRDFza.woff2      [39m[1m[2m 21.17 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-400-normal-6-qcROiO.woff       [39m[1m[2m 27.50 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[35mindex-DjcVXVKu.css                                  [39m[1m[2m 83.66 kB[22m[1m[22m[2m │ gzip:  31.70 kB[22m
-[2mdist/[22m[2massets/[22m[36mindex-D4l6O2LY.js                                   [39m[1m[33m955.86 kB[39m[22m[2m │ gzip: 295.28 kB[22m
+[2mdist/[22m[2massets/[22m[35mindex-B8Iv4pq3.css                                  [39m[1m[2m 90.61 kB[22m[1m[22m[2m │ gzip:  32.89 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-eB8eeJ5C.js                                   [39m[1m[33m999.55 kB[39m[22m[2m │ gzip: 308.00 kB[22m
 [33m
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 1.50s[39m
-[1m[92m   Compiling[0m media-hub v0.10.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
+[32m✓ built in 3.73s[39m
+[1m[92m   Compiling[0m media-hub v0.11.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
 [1m[33mwarning[0m[1m: method `candidate_ids` is never used[0m
    [1m[94m--> [0msrc/store.rs:375:12
     [1m[94m|[0m
@@ -221,7 +226,7 @@ computing gzip size...
     [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 [1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 2m 19s
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 3m 40s
        Built application at: /Users/runner/work/media-hub/media-hub/src-tauri/target/release/media-hub
     Bundling Media Hub.app (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app)
      Signing with identity "-"
@@ -232,9 +237,9 @@ Signing with identity "-"
 Signing /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app
 /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app: replacing existing signature
         Warn skipping app notarization, no APPLE_ID & APPLE_PASSWORD & APPLE_TEAM_ID or APPLE_API_KEY & APPLE_API_ISSUER & APPLE_API_KEY_PATH environment variables found
-    Bundling Media Hub_0.10.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.10.0_aarch64.dmg)
+    Bundling Media Hub_0.11.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.11.0_aarch64.dmg)
      Running bundle_dmg.sh
     Finished 2 bundles at:
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app (12.58 MiB)
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.10.0_aarch64.dmg (6.01 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app (13.05 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.11.0_aarch64.dmg (6.20 MiB)
 
