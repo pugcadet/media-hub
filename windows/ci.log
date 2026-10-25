@@ -1,39 +1,187 @@
 
-added 74 packages in 6s
+added 74 packages in 5s
 [1m[92m    Updating[0m crates.io index
-[1m[92m   Compiling[0m media-hub v0.9.0 (D:\a\media-hub\media-hub\src-tauri)
-[1m[91merror[E0609][0m[1m[97m: no field `new_value` on type `ChangeFull`[0m
-   [1m[96m--> [0msrc\meta_cmds.rs:447:73
+[1m[92m   Compiling[0m media-hub v0.10.0 (D:\a\media-hub\media-hub\src-tauri)
+[1m[93mwarning[0m[1m[97m: method `candidate_ids` is never used[0m
+   [1m[96m--> [0msrc\store.rs:375:12
     [1m[96m|[0m
-[1m[96m447[0m [1m[96m|[0m             crate::collections::undo(&w, &ch.target, &ch.old_value, &ch.new_value).await?;
-    [1m[96m|[0m                                                                         [1m[91m^^^^^^^^^[0m [1m[91munknown field[0m
-    [1m[96m|[0m
-[1m[96mhelp[0m: a field with a similar name exists
-    [1m[96m|[0m
-[1m[96m447[0m [91m- [0m            crate::collections::undo(&w, &ch.target, &ch.old_value, &ch.[91mnew_value[0m).await?;
-[1m[96m447[0m [92m+ [0m            crate::collections::undo(&w, &ch.target, &ch.old_value, &ch.[92mold_value[0m).await?;
-    [1m[96m|[0m
-
-[1m[91merror[E0382][0m[1m[97m: borrow of moved value: `tok`[0m
-   [1m[96m--> [0msrc\player.rs:391:40
-    [1m[96m|[0m
-[1m[96m311[0m [1m[96m|[0m     let tok = token()?;
-    [1m[96m|[0m         [1m[96m---[0m [1m[96mmove occurs because `tok` has type `std::string::String`, which does not implement the `Copy` trait[0m
+[1m[96m211[0m [1m[96m|[0m impl Store {
+    [1m[96m|[0m [1m[96m----------[0m [1m[96mmethod in this implementation[0m
 [1m[96m...[0m
-[1m[96m381[0m [1m[96m|[0m         token: tok,
-    [1m[96m|[0m                [1m[96m---[0m [1m[96mvalue moved here[0m
-[1m[96m...[0m
-[1m[96m391[0m [1m[96m|[0m         trickplay: trickplay_of(&item, &tok),
-    [1m[96m|[0m                                        [1m[91m^^^^[0m [1m[91mvalue borrowed here after move[0m
+[1m[96m375[0m [1m[96m|[0m     pub fn candidate_ids(&self, kind: &str) -> Result<Vec<String>> {
+    [1m[96m|[0m            [1m[93m^^^^^^^^^^^^^[0m
     [1m[96m|[0m
-    [1m[96m= [0m[1m[97mnote[0m: borrow occurs due to deref coercion to `str`
-[1m[96mhelp[0m: consider cloning the value if the performance cost is acceptable
-    [1m[96m|[0m
-[1m[96m381[0m [1m[96m| [0m        token: tok[92m.clone()[0m,
-    [1m[96m|[0m                   [92m++++++++[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
-[1m[97mSome errors have detailed explanations: E0382, E0609.[0m
-[1m[97mFor more information about an error, try `rustc --explain E0382`.[0m
-[1m[91merror[0m: could not compile `media-hub` (lib) due to 2 previous errors
-[1m[93mwarning[0m: build failed, waiting for other jobs to finish...
-[1m[91merror[0m: could not compile `media-hub` (lib test) due to 2 previous errors
+[1m[93mwarning[0m: `media-hub` (lib) generated 1 warning
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 52.44s
+[1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-03c501ce5acdde31.exe)
+
+running 106 tests
+test config::tests::key_validation ... ok
+test config::tests::rejects_bad_input ... ok
+test config::tests::adds_scheme_and_keeps_port ... ok
+test config::tests::strips_trailing_slash_query_and_fragment ... ok
+test collections::tests::episode_cards_point_at_the_show ... ok
+test detect::tests::windows_and_snapping ... ok
+test detect::tests::chapters_with_names_are_used ... ok
+test downloads::tests::audio_mode ... ok
+test downloads::tests::builds_safe_arguments ... ok
+test downloads::tests::helper_programs_and_cookies ... ok
+test downloads::tests::plain_error_text ... ok
+test downloads::tests::rejects_non_web_addresses ... ok
+test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
+test downloads::tests::reads_progress_and_checksums ... ok
+test downloads::tests::search_targets_and_results ... ok
+test downloads::tests::summarizes_playlists ... ok
+test fingerprint::tests::fft_matches_a_plain_dft ... ok
+test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
+test fingerprint::tests::silence_does_not_match ... ok
+test fingerprint::tests::survives_noise_like_a_different_encode ... ok
+test fsops::tests::apply_then_undo_restores_everything ... ok
+test fsops::tests::case_only_rename_works ... ok
+test fsops::tests::folders_are_renamed_after_their_files_and_undo_reverses_it ... ok
+test fsops::tests::scan_skips_hidden_and_nas_folders ... ok
+test fsops::tests::unsafe_paths_are_refused ... ok
+test images::tests::reads_width ... ok
+test images::tests::remote_hosts_are_allow_listed ... ok
+test import::tests::describes_a_show_folder ... ok
+test import::tests::folder_names ... ok
+test jellyfin::tests::bad_edits_are_refused ... ok
+test jellyfin::tests::client_rejects_odd_keys ... ok
+test jellyfin::tests::edits_touch_only_what_changed ... ok
+test jellyfin::tests::episode_titles_cover_double_episodes ... ok
+test jellyfin::tests::finds_segment_endpoints_in_the_api_description ... ok
+test jellyfin::tests::id_and_image_kind_checks ... ok
+test jellyfin::tests::missing_null_and_value_are_different ... ok
+test jellyfin::tests::parses_a_jellyfin_page ... ok
+test local::tests::relative_paths_use_forward_slashes ... ok
+test media_tools::tests::learns_and_reuses_the_path_map ... ok
+test media_tools::tests::splits_both_separator_styles ... ok
+test meta_cmds::tests::best_picture_prefers_language_then_rating ... ok
+test meta_cmds::tests::recognises_pictures_by_content ... ok
+test naming::tests::bad_templates_are_rejected ... ok
+test naming::tests::episode_formats ... ok
+test naming::tests::names_with_years_and_ids ... ok
+test naming::tests::resolution_is_not_an_episode ... ok
+test naming::tests::sanitizing ... ok
+test naming::tests::seasons_from_folders ... ok
+test naming::tests::templates_fill_in_and_skip_optional_parts ... ok
+test naming::tests::titles_after_marker ... ok
+test naming_check::tests::already_right_has_no_reasons ... ok
+test naming_check::tests::problems_are_counted ... ok
+test naming_check::tests::sure_only_when_identified_and_every_episode_known ... ok
+test picks::tests::date_check ... ok
+test picks::tests::different_days_differ ... ok
+test picks::tests::handles_small_and_empty_lists ... ok
+test picks::tests::no_duplicates ... ok
+test picks::tests::same_day_same_picks_even_if_input_order_changes ... ok
+test planner::tests::conflicts_and_unreadable_names ... ok
+test planner::tests::detects_shows_and_movies ... ok
+test planner::tests::episodes_can_be_moved_into_season_folders_on_request ... ok
+test planner::tests::find_replace_only_touches_file_names ... ok
+test planner::tests::movies_rename_their_own_folder ... ok
+test planner::tests::online_movie_matches_fix_titles ... ok
+test planner::tests::renames_in_place_including_folders ... ok
+test planner::tests::running_twice_finds_nothing_to_do ... ok
+test planner::tests::titles_from_the_internet_win ... ok
+test planner::tests::year_and_name_come_from_files_and_folder_is_kept_when_unrelated ... ok
+test player::tests::keys_are_removed ... ok
+test player::tests::playlists_stay_inside_the_session ... ok
+test player::tests::splits_folder_and_file ... ok
+test seg_cmds::tests::reads_jellyfin_segments ... ok
+test seg_cmds::tests::span_checks ... ok
+test sources::tests::language_is_sanitised ... ok
+test sources::tests::ranking_puts_best_first ... ok
+test sources::tests::titles_compare_sensibly ... ok
+test sources::tests::year_breaks_ties ... ok
+test storage::tests::containers ... ok
+test storage::tests::hevc_arguments_copy_everything_but_video ... ok
+test storage::tests::loudness_gain_respects_peaks ... ok
+test storage::tests::reads_ebur128_summary ... ok
+test storage::tests::reads_ffprobe_output ... ok
+test storage::tests::undo_puts_the_original_back ... ok
+test store::tests::changes_are_listed_per_item ... ok
+test store::tests::empty_answer_keeps_old_list ... ok
+test store::tests::journal_records_batches ... ok
+test store::tests::search_is_literal_and_filters_kind ... ok
+test store::tests::sync_replaces_and_removes_old_items ... ok
+test store::tests::unknown_sort_falls_back_and_candidates_need_poster ... ok
+test sub_cmds::tests::built_in_subtitles_without_a_tag_count_by_name ... ok
+test sub_cmds::tests::forced_subtitles_do_not_count_as_having_the_language ... ok
+test sub_cmds::tests::language_lists_are_checked ... ok
+test sub_cmds::tests::reads_streams_and_file_name ... ok
+test subs::tests::hash_match_wins ... ok
+test subs::tests::language_codes ... ok
+test subs::tests::machine_translation_is_penalised ... ok
+test subs::tests::parses_jellyfin_json ... ok
+test subs::tests::ranking_sorts_and_drops_empty_ids ... ok
+test subs::tests::same_release_beats_other_release ... ok
+test subs::tests::wrong_episode_is_zero ... ok
+test updater::tests::checksums_and_assets ... ok
+test updater::tests::swap_keeps_old_when_new_is_missing ... ok
+test updater::tests::versions_compare ... ok
+test fingerprint::tests::unrelated_audio_has_no_match ... ok
+test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
+test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
+
+test result: ok. 106 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.00s
+
+[1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-2c6b866b488c3cb7.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+[1m[92m   Doc-tests[0m media_hub_lib
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm run build`
+
+> media-hub@0.10.0 build
+> tsc && vite build
+
+src/Downloads.tsx(5,8): error TS1192: Module '"D:/a/media-hub/media-hub/src/nav"' has no default export.
+src/Downloads.tsx(5,17): error TS1149: File name 'D:/a/media-hub/media-hub/src/Nav.ts' differs from already included file name 'D:/a/media-hub/media-hub/src/nav.ts' only in casing.
+  The file is in the program because:
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/AddMedia.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/ui.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Renamer.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Renamer.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Settings.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Player.tsx'
+    Imported via "./Nav" from file 'D:/a/media-hub/media-hub/src/Downloads.tsx'
+    Imported via "./Nav" from file 'D:/a/media-hub/media-hub/src/Storage.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/ItemPage.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Sidebar.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Home.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Collections.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Watch.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/App.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/App.tsx'
+    Matched by include pattern 'src' in 'D:/a/media-hub/media-hub/tsconfig.json'
+src/Storage.tsx(5,8): error TS1192: Module '"D:/a/media-hub/media-hub/src/nav"' has no default export.
+src/Storage.tsx(5,17): error TS1149: File name 'D:/a/media-hub/media-hub/src/Nav.ts' differs from already included file name 'D:/a/media-hub/media-hub/src/nav.ts' only in casing.
+  The file is in the program because:
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/AddMedia.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/ui.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Renamer.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Renamer.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Settings.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Player.tsx'
+    Imported via "./Nav" from file 'D:/a/media-hub/media-hub/src/Downloads.tsx'
+    Imported via "./Nav" from file 'D:/a/media-hub/media-hub/src/Storage.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/ItemPage.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Sidebar.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Home.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Collections.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/Watch.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/App.tsx'
+    Imported via "./nav" from file 'D:/a/media-hub/media-hub/src/App.tsx'
+    Matched by include pattern 'src' in 'D:/a/media-hub/media-hub/tsconfig.json'
+beforeBuildCommand `npm run build` failed with exit code 2
+       Error beforeBuildCommand `npm run build` failed with exit code 2
