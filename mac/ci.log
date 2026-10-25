@@ -1,37 +1,29 @@
 
 added 74 packages in 3s
 [1m[92m    Updating[0m crates.io index
-[1m[92m   Compiling[0m media-hub v0.11.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[33mwarning[0m[1m: method `candidate_ids` is never used[0m
-   [1m[94m--> [0msrc/store.rs:375:12
-    [1m[94m|[0m
-[1m[94m211[0m [1m[94m|[0m impl Store {
-    [1m[94m|[0m [1m[94m----------[0m [1m[94mmethod in this implementation[0m
-[1m[94m...[0m
-[1m[94m375[0m [1m[94m|[0m     pub fn candidate_ids(&self, kind: &str) -> Result<Vec<String>> {
-    [1m[94m|[0m            [1m[33m^^^^^^^^^^^^^[0m
-    [1m[94m|[0m
-    [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+[1m[92m   Compiling[0m media-hub v0.14.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 37.57s
+[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-83be56641f6d1aee)
 
-[1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 37.51s
-[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-4c87248f1f0144fb)
-
-running 111 tests
-test config::tests::key_validation ... ok
+running 121 tests
+test backend::tests::versions ... ok
+test backend::tests::schedules_read_nicely ... ok
+test backend::tests::library_rows_compare_with_recommended ... ok
 test collections::tests::episode_cards_point_at_the_show ... ok
+test cancel::tests::stop_and_restart ... ok
+test config::tests::key_validation ... ok
 test config::tests::adds_scheme_and_keeps_port ... ok
 test config::tests::strips_trailing_slash_query_and_fragment ... ok
 test config::tests::rejects_bad_input ... ok
-test detect::tests::chapters_with_names_are_used ... ok
 test detect::tests::windows_and_snapping ... ok
+test detect::tests::chapters_with_names_are_used ... ok
 test downloads::tests::builds_safe_arguments ... ok
 test downloads::tests::audio_mode ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
 test downloads::tests::plain_error_text ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
-test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::search_targets_and_results ... ok
+test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
 test downloads::tests::summarizes_playlists ... ok
 test fingerprint::tests::fft_matches_a_plain_dft ... ok
@@ -62,9 +54,11 @@ test library::tests::missing_skips_unaired_and_counts_specials ... ok
 test library::tests::today_looks_like_a_date ... ok
 test local::tests::relative_paths_use_forward_slashes ... ok
 test media_tools::tests::learns_and_reuses_the_path_map ... ok
+test media_tools::tests::maps_back_to_the_server ... ok
 test media_tools::tests::splits_both_separator_styles ... ok
 test meta_cmds::tests::best_picture_prefers_language_then_rating ... ok
 test meta_cmds::tests::recognises_pictures_by_content ... ok
+test music::tests::tracks_borrow_the_album_picture ... ok
 test naming::tests::bad_templates_are_rejected ... ok
 test naming::tests::episode_formats ... ok
 test naming::tests::names_with_years_and_ids ... ok
@@ -89,6 +83,7 @@ test planner::tests::movies_rename_their_own_folder ... ok
 test planner::tests::online_movie_matches_fix_titles ... ok
 test planner::tests::renames_in_place_including_folders ... ok
 test planner::tests::running_twice_finds_nothing_to_do ... ok
+test planner::tests::show_year_can_be_optional ... ok
 test planner::tests::titles_from_the_internet_win ... ok
 test planner::tests::year_and_name_come_from_files_and_folder_is_kept_when_unrelated ... ok
 test player::tests::keys_are_removed ... ok
@@ -124,15 +119,18 @@ test subs::tests::parses_jellyfin_json ... ok
 test subs::tests::ranking_sorts_and_drops_empty_ids ... ok
 test subs::tests::same_release_beats_other_release ... ok
 test subs::tests::wrong_episode_is_zero ... ok
+test subsync::tests::finds_a_shift ... ok
+test subsync::tests::reads_and_writes_srt_and_vtt ... ok
+test subsync::tests::speech_detection_follows_loudness ... ok
 test updater::tests::checksums_and_assets ... ok
 test updater::tests::swap_keeps_old_when_new_is_missing ... ok
 test updater::tests::versions_compare ... ok
 test fingerprint::tests::unrelated_audio_has_no_match ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 111 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.64s
+test result: ok. 121 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.10s
 
-[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-8f729baee2f5be63)
+[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-6c5973155ecb0d94)
 
 running 0 tests
 
@@ -147,86 +145,74 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         Info Looking up installed tauri packages to check mismatched versions...
      Running beforeBuildCommand `npm run build`
 
-> media-hub@0.11.0 build
+> media-hub@0.14.0 build
 > tsc && vite build
 
 [36mvite v5.4.21 [32mbuilding for production...[36m[39m
 transforming...
-[32m✓[39m 76 modules transformed.
+[32m✓[39m 79 modules transformed.
 rendering chunks...
 computing gzip size...
-[2mdist/[22m[32mindex.html                                                 [39m[1m[2m  0.39 kB[22m[1m[22m[2m │ gzip:   0.27 kB[22m
-[2mdist/[22m[2massets/[22m[32mjetbrains-mono-greek-400-normal-C190GLew.woff2      [39m[1m[2m  4.23 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-500-normal-DCXiE_xi.woff2        [39m[1m[2m  4.32 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-400-normal-DHb3EETF.woff2        [39m[1m[2m  4.46 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-600-normal-C1J5PCl_.woff2        [39m[1m[2m  4.47 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-700-normal-CUqMx5-1.woff2        [39m[1m[2m  4.55 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-greek-600-normal-BoRV6lzK.woff2             [39m[1m[2m  5.23 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-greek-700-normal-CHUG9PD8.woff2             [39m[1m[2m  5.24 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-greek-500-normal-GeMIHyWm.woff2             [39m[1m[2m  5.25 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-greek-400-normal-CM4qok81.woff2             [39m[1m[2m  5.28 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mjetbrains-mono-cyrillic-400-normal-BEIGL1Tu.woff2   [39m[1m[2m  5.33 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mjetbrains-mono-vietnamese-400-normal-CqNFfHCs.woff  [39m[1m[2m  5.37 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mjetbrains-mono-greek-400-normal-B9oWc5Lo.woff       [39m[1m[2m  5.66 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-500-normal-DaZ8i3XM.woff         [39m[1m[2m  6.06 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-400-normal-D7E_mLGF.woff         [39m[1m[2m  6.11 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-600-normal-lA7a_7Ok.woff         [39m[1m[2m  6.14 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-700-normal-pt65Fn2Z.woff         [39m[1m[2m  6.36 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-greek-600-normal-CF2i9ZRY.woff              [39m[1m[2m  6.74 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-greek-700-normal-DyfsrCpP.woff              [39m[1m[2m  6.74 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-greek-500-normal-DyxYGEtJ.woff              [39m[1m[2m  6.76 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-greek-400-normal-DuX9RsAR.woff              [39m[1m[2m  6.77 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mjetbrains-mono-cyrillic-400-normal-ugxPyKxw.woff    [39m[1m[2m  6.98 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-ext-400-normal-Bc8Ftmh3.woff2  [39m[1m[2m  7.34 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-400-normal-BMzJvInZ.woff2          [39m[1m[2m  7.84 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-700-normal-Dw_fZAg2.woff2          [39m[1m[2m  7.85 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-500-normal-B1OEZity.woff2          [39m[1m[2m  7.87 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-DvRl3Mj-.woff2          [39m[1m[2m  7.87 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-dm74KBQw.woff2         [39m[1m[2m  8.19 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-700-normal-DYOwVNan.woff2         [39m[1m[2m  8.28 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-400-normal-CMDvPJRp.woff2         [39m[1m[2m  8.29 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-600-normal-_gBojHdJ.woff2         [39m[1m[2m  8.30 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-700-normal-7JNVKxyl.woff           [39m[1m[2m 10.00 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-500-normal-CNwnNrRC.woff           [39m[1m[2m 10.01 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-400-normal-Dvx59UGC.woff           [39m[1m[2m 10.03 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-It4mZcQk.woff           [39m[1m[2m 10.06 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-ext-400-normal-fXTG6kC5.woff   [39m[1m[2m 10.13 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-EtoS1VaI.woff          [39m[1m[2m 11.25 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-600-normal-u5Pl7hTU.woff          [39m[1m[2m 11.25 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-400-normal-C-X6QNXX.woff          [39m[1m[2m 11.32 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-700-normal-eVCcYqtJ.woff          [39m[1m[2m 11.35 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-500-normal-BYYD-dBL.woff2             [39m[1m[2m 14.04 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-400-normal-PaqtzbVb.woff2             [39m[1m[2m 14.11 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-600-normal-4f0koTD-.woff2             [39m[1m[2m 14.17 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-700-normal-BZp_XxE4.woff2             [39m[1m[2m 14.21 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-500-normal-DMZssgOp.woff              [39m[1m[2m 18.24 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-400-normal-8tf8FM3T.woff              [39m[1m[2m 18.29 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-600-normal-BqgrALkZ.woff              [39m[1m[2m 18.38 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-700-normal-DGRFkw-m.woff              [39m[1m[2m 18.41 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-400-normal-V6pRDFza.woff2      [39m[1m[2m 21.17 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-400-normal-6-qcROiO.woff       [39m[1m[2m 27.50 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[35mindex-B8Iv4pq3.css                                  [39m[1m[2m 90.61 kB[22m[1m[22m[2m │ gzip:  32.89 kB[22m
-[2mdist/[22m[2massets/[22m[36mindex-eB8eeJ5C.js                                   [39m[1m[33m999.55 kB[39m[22m[2m │ gzip: 308.00 kB[22m
+[2mdist/[22m[32mindex.html                                                 [39m[1m[2m    0.39 kB[22m[1m[22m[2m │ gzip:   0.27 kB[22m
+[2mdist/[22m[2massets/[22m[32mjetbrains-mono-greek-400-normal-C190GLew.woff2      [39m[1m[2m    4.23 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-500-normal-DCXiE_xi.woff2        [39m[1m[2m    4.32 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-400-normal-DHb3EETF.woff2        [39m[1m[2m    4.46 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-600-normal-C1J5PCl_.woff2        [39m[1m[2m    4.47 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-700-normal-CUqMx5-1.woff2        [39m[1m[2m    4.55 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-greek-600-normal-BoRV6lzK.woff2             [39m[1m[2m    5.23 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-greek-700-normal-CHUG9PD8.woff2             [39m[1m[2m    5.24 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-greek-500-normal-GeMIHyWm.woff2             [39m[1m[2m    5.25 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-greek-400-normal-CM4qok81.woff2             [39m[1m[2m    5.28 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mjetbrains-mono-cyrillic-400-normal-BEIGL1Tu.woff2   [39m[1m[2m    5.33 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mjetbrains-mono-vietnamese-400-normal-CqNFfHCs.woff  [39m[1m[2m    5.37 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mjetbrains-mono-greek-400-normal-B9oWc5Lo.woff       [39m[1m[2m    5.66 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-500-normal-DaZ8i3XM.woff         [39m[1m[2m    6.06 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-400-normal-D7E_mLGF.woff         [39m[1m[2m    6.11 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-600-normal-lA7a_7Ok.woff         [39m[1m[2m    6.14 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-vietnamese-700-normal-pt65Fn2Z.woff         [39m[1m[2m    6.36 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-greek-600-normal-CF2i9ZRY.woff              [39m[1m[2m    6.74 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-greek-700-normal-DyfsrCpP.woff              [39m[1m[2m    6.74 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-greek-500-normal-DyxYGEtJ.woff              [39m[1m[2m    6.76 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-greek-400-normal-DuX9RsAR.woff              [39m[1m[2m    6.77 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mjetbrains-mono-cyrillic-400-normal-ugxPyKxw.woff    [39m[1m[2m    6.98 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-ext-400-normal-Bc8Ftmh3.woff2  [39m[1m[2m    7.34 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-400-normal-BMzJvInZ.woff2          [39m[1m[2m    7.84 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-700-normal-Dw_fZAg2.woff2          [39m[1m[2m    7.85 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-500-normal-B1OEZity.woff2          [39m[1m[2m    7.87 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-DvRl3Mj-.woff2          [39m[1m[2m    7.87 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-dm74KBQw.woff2         [39m[1m[2m    8.19 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-700-normal-DYOwVNan.woff2         [39m[1m[2m    8.28 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-400-normal-CMDvPJRp.woff2         [39m[1m[2m    8.29 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-600-normal-_gBojHdJ.woff2         [39m[1m[2m    8.30 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-700-normal-7JNVKxyl.woff           [39m[1m[2m   10.00 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-500-normal-CNwnNrRC.woff           [39m[1m[2m   10.01 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-400-normal-Dvx59UGC.woff           [39m[1m[2m   10.03 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-It4mZcQk.woff           [39m[1m[2m   10.06 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-ext-400-normal-fXTG6kC5.woff   [39m[1m[2m   10.13 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-EtoS1VaI.woff          [39m[1m[2m   11.25 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-600-normal-u5Pl7hTU.woff          [39m[1m[2m   11.25 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-400-normal-C-X6QNXX.woff          [39m[1m[2m   11.32 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-700-normal-eVCcYqtJ.woff          [39m[1m[2m   11.35 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-500-normal-BYYD-dBL.woff2             [39m[1m[2m   14.04 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-400-normal-PaqtzbVb.woff2             [39m[1m[2m   14.11 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-600-normal-4f0koTD-.woff2             [39m[1m[2m   14.17 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-700-normal-BZp_XxE4.woff2             [39m[1m[2m   14.21 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-500-normal-DMZssgOp.woff              [39m[1m[2m   18.24 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-400-normal-8tf8FM3T.woff              [39m[1m[2m   18.29 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-600-normal-BqgrALkZ.woff              [39m[1m[2m   18.38 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-700-normal-DGRFkw-m.woff              [39m[1m[2m   18.41 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-400-normal-V6pRDFza.woff2      [39m[1m[2m   21.17 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-400-normal-6-qcROiO.woff       [39m[1m[2m   27.50 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[35mindex-CdtY30C9.css                                  [39m[1m[2m  116.26 kB[22m[1m[22m[2m │ gzip:  37.78 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-Bq__NAZd.js                                   [39m[1m[33m1,067.26 kB[39m[22m[2m │ gzip: 328.15 kB[22m
 [33m
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 3.73s[39m
-[1m[92m   Compiling[0m media-hub v0.11.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[33mwarning[0m[1m: method `candidate_ids` is never used[0m
-   [1m[94m--> [0msrc/store.rs:375:12
-    [1m[94m|[0m
-[1m[94m211[0m [1m[94m|[0m impl Store {
-    [1m[94m|[0m [1m[94m----------[0m [1m[94mmethod in this implementation[0m
-[1m[94m...[0m
-[1m[94m375[0m [1m[94m|[0m     pub fn candidate_ids(&self, kind: &str) -> Result<Vec<String>> {
-    [1m[94m|[0m            [1m[33m^^^^^^^^^^^^^[0m
-    [1m[94m|[0m
-    [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-[1m[33mwarning[0m: `media-hub` (lib) generated 1 warning
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 3m 40s
+[32m✓ built in 2.41s[39m
+[1m[92m   Compiling[0m media-hub v0.14.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 4m 29s
        Built application at: /Users/runner/work/media-hub/media-hub/src-tauri/target/release/media-hub
     Bundling Media Hub.app (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app)
      Signing with identity "-"
@@ -237,9 +223,9 @@ Signing with identity "-"
 Signing /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app
 /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app: replacing existing signature
         Warn skipping app notarization, no APPLE_ID & APPLE_PASSWORD & APPLE_TEAM_ID or APPLE_API_KEY & APPLE_API_ISSUER & APPLE_API_KEY_PATH environment variables found
-    Bundling Media Hub_0.11.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.11.0_aarch64.dmg)
+    Bundling Media Hub_0.14.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.14.0_aarch64.dmg)
      Running bundle_dmg.sh
     Finished 2 bundles at:
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app (13.05 MiB)
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.11.0_aarch64.dmg (6.20 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/macos/Media Hub.app (13.42 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/release/bundle/dmg/Media Hub_0.14.0_aarch64.dmg (6.36 MiB)
 
