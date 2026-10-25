@@ -1,3 +1,5 @@
+mod backend;
+mod cancel;
 mod collections;
 mod commands;
 mod config;
@@ -10,6 +12,8 @@ mod images;
 mod import;
 mod jellyfin;
 mod library;
+mod music;
+mod subsync;
 mod local;
 mod media_tools;
 mod meta_cmds;
@@ -80,6 +84,13 @@ pub fn run() {
             library::sync_picks_playlist,
             library::journal_all,
             library::segment_summary,
+            library::set_favorite,
+            library::library_languages,
+            library::set_library_language,
+            subsync::subtitle_sync,
+            music::music_list,
+            music::music_play,
+            music::music_stop,
             updater::check_update,
             updater::install_update,
             rename_cmds::pick_library_root,
@@ -114,6 +125,14 @@ pub fn run() {
             local::reveal_rel,
             local::item_folder,
             local::library_scan,
+            backend::backend_tuning,
+            backend::backend_set,
+            backend::backend_apply_recommended,
+            backend::backend_run_task,
+            backend::set_lock_edits,
+            backend::lock_all,
+            backend::scan_folders,
+            cancel::cancel_job,
             naming_check::naming_check,
             naming_check::naming_check_last,
             naming_check::naming_check_cancel,

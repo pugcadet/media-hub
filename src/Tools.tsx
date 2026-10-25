@@ -3,7 +3,7 @@ import { api, AutoResult, codesFor, cultures, Culture, errorText, imageUrl, Item
 import type { Route } from "./App";
 import { track, useEpoch } from "./activity";
 import { prefs, setPrefs, subSkipped, usePrefs } from "./prefs";
-import { itemMenu, openMenu } from "./ui";
+import { itemMenu, openMenu, SettingsLink } from "./ui";
 
 /** Metadata and art: titles that need a match or a poster. */
 export function MetadataTool({ onOpen, onRoute }: { onOpen: (id: string) => void; onRoute: (r: Route) => void }) {
@@ -131,8 +131,8 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
           )}
         </div>
       </div>
-      <p className="muted">{total} videos have no subtitles at all{total > items.length ? ` (showing the first ${items.length})` : ""}. Only matches scoring at least {minScore} are downloaded; 100 means made for exactly that file. Subtitle sites limit downloads per day.{skipped > 0 ? ` ${skipped} in skipped folders are left out (Settings → Subtitle downloads).` : ""}</p>
-      {status.readOnly && <p className="note">Downloading needs changes to Jellyfin switched on in Settings.</p>}
+      <p className="muted">{total} videos have no subtitles at all{total > items.length ? ` (showing the first ${items.length})` : ""}. Only matches scoring at least {minScore} are downloaded; 100 means made for exactly that file. Subtitle sites limit downloads per day.{skipped > 0 ? ` ${skipped} in folders you switched off are left out.` : ""} <SettingsLink section="subtitles">Subtitle settings (languages, folders, score)</SettingsLink></p>
+      {status.readOnly && <p className="note">Downloading needs changes to Jellyfin switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
       {error && <p className="error">{error}</p>}
       <div className="card list-card">
         {items.map((e) => (

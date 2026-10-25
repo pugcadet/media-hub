@@ -1,13 +1,14 @@
 // The Player side of Media Hub: browse and watch, like Infuse or Netflix. No editing here;
 // the hub switcher (top left) goes back to the media manager.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, Card, cleanTitle, Details, imageUrl, JfChild, Library, Sort, Status } from "./api";
+import { api, Card, cleanTitle, Details, imageUrl, JfChild, Library, Pick, Sort, Status } from "./api";
 import { useEpoch } from "./activity";
 import { nav } from "./nav";
 import { HubSwitcher } from "./Sidebar";
-import Home, { itemToCard } from "./Home";
+import Home, { Billboard, featured, itemToCard } from "./Home";
 import Collections from "./Collections";
-import { CardTile, Icon, itemMenu, openMenu, Row } from "./ui";
+import { MediaInfo } from "./ItemPage";
+import { CardTile, Icon, itemMenu, openMenu, playTitle, Row } from "./ui";
 
 type Tab = "home" | "movies" | "shows" | "collections";
 
@@ -16,10 +17,14 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
   const [query, setQuery] = useState("");
   const [collection, setCollection] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  // Like Netflix: the top bar floats over the picture and turns solid once you scroll.
+  const [solid, setSolid] = useState(false);
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: 0 });
+    setSolid(false);
   }, [item?.id, tab]);
+  const hasHero = !!item || (!query && tab !== "collections");
 
   // Collections open inside the player instead of switching to the manager.
   useEffect(() => {
@@ -45,7 +50,7 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
 
   return (
     <div className="watch">
-      <header className="w-top">
+      <header className={`w-top ${solid || !hasHero ? "solid" : ""}`}>
         <HubSwitcher />
         <nav className="w-tabs">
           {(["home", "movies", "shows", "collections"] as Tab[]).map((t) => (
@@ -58,7 +63,7 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
           <input placeholder="Search" value={query} onChange={(e) => { setQuery(e.target.value); if (item && e.target.value) onBack(); }} />
         </label>
       </header>
-      <div className="w-page" ref={scroller}>
+      <div className={`w-page ${hasHero ? "has-hero" : ""}`} ref={scroller} onScroll={(e) => setSolid((e.target as HTMLDivElement).scrollTop > 40)}>
         {item ? (
           <WatchItem key={item.id} id={item.id} onBack={onBack} />
         ) : query ? (
@@ -85,6 +90,7 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
   const [genre, setGenre] = useState<string | null>(null);
   const [genres, setGenres] = useState<string[]>([]);
   const [onlyNew, setOnlyNew] = useState(false);
+  const [hero, setHero] = useState<Pick | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const busy = useRef(false);
   const all = useRef<{ card: Card; genres: string[] }[]>([]);
@@ -95,6 +101,7 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
     try {
       const rows = await api.list(kind, query, sort, offset, 120);
       if (offset === 0) {
+        if (!query) api.list(kind, "", "rating", 0, 200).then((top) => setHero(featured(top, kind === "movie" ? "Movie of the day" : "Show of the day"))).catch(() => setHero(null));
         const g = new Map<string, number>();
         rows.forEach((r) => r.genres.forEach((x) => g.set(x, (g.get(x) ?? 0) + 1)));
         setGenres([...g.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14).map(([x]) => x));
@@ -123,6 +130,7 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
 
   return (
     <div className="pg">
+      {hero && !query && <Billboard pick={hero} full onPlay={() => void playTitle(hero.id)} />}
       <div className="pg-head">
         <h1>{query ? `Results for “${query}”` : kind === "movie" ? "Movies" : "Shows"}</h1>
         <div className="pg-actions">
@@ -192,7 +200,7 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
         <img className="w-hero-art" src={isEpisode ? imageUrl(id, "Primary", 1920) : imageUrl(artId, "Backdrop", 1920)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
         <div className="w-hero-shade" />
         <div className="w-hero-body">
-          <button className="link small" onClick={onBack}>← Back</button>
+          <button className="w-back" onClick={onBack} aria-label="Back"><span className="flip"><Icon name="chevron" size={18} /></span> Back</button>
           {logo && !isEpisode ? <img className="w-logo" src={imageUrl(artId, "Logo", 800)} alt={title} onError={() => setLogo(false)} /> : <h1 className="w-title">{isEpisode && it.SeriesName ? cleanTitle(it.SeriesName) : title}</h1>}
           {isEpisode && <div className="w-epname">{epCode(it.ParentIndexNumber, it.IndexNumber).trim()}{epCode(it.ParentIndexNumber, it.IndexNumber) ? " — " : ""}{it.Name}</div>}
           <div className="hero-meta">
@@ -205,14 +213,14 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
           {it.Overview && <p className="w-overview">{it.Overview}</p>}
           <div className="row">
             {playId && (
-              <button className="primary bb-btn" onClick={() => nav.play(playId)}>
-                ▶ {resumeAt > 0 ? "Resume" : "Play"}{it.Type === "Series" && next ? epCode(next.ParentIndexNumber ?? d.seasons.find((x) => x.Id === season)?.IndexNumber, next.IndexNumber) : ""}
+              <button className="bb-play" onClick={() => nav.play(playId)}>
+                <Icon name="play" size={20} /> {resumeAt > 0 ? "Resume" : "Play"}{it.Type === "Series" && next ? epCode(next.ParentIndexNumber ?? d.seasons.find((x) => x.Id === season)?.IndexNumber, next.IndexNumber) : ""}
               </button>
             )}
-            <button className="bb-btn ghost" onClick={() => void api.setPlayed(id, !it.UserData?.Played).then(() => api.details(id).then(setD)).catch(() => undefined)}>
-              {it.UserData?.Played ? "✓ Watched" : "Mark as watched"}
+            <button className="bb-round" title={it.UserData?.Played ? "Watched (click to undo)" : "Mark as watched"} aria-label="Watched" onClick={() => void api.setPlayed(id, !it.UserData?.Played).then(() => api.details(id).then(setD)).catch(() => undefined)}>
+              <Icon name={it.UserData?.Played ? "check" : "plus"} size={20} />
             </button>
-            {isEpisode && it.SeriesId && <button className="bb-btn ghost" onClick={() => nav.open(it.SeriesId!)}>Go to show</button>}
+            {isEpisode && it.SeriesId && <button className="bb-more" onClick={() => nav.open(it.SeriesId!)}>Go to show</button>}
           </div>
           {people.length > 0 && <div className="muted small w-cast-line">With {people.slice(0, 5).map((p) => p.Name).join(", ")}</div>}
         </div>
@@ -221,15 +229,21 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
       <div className="pg">
         {(it.Type === "Series") && d.seasons.length > 0 && (
           <section className="stack">
-            <div className="chips">
-              {d.seasons.map((s) => <button key={s.Id} className={`chip ${season === s.Id ? "on" : ""}`} onClick={() => setSeason(s.Id)}>{cleanTitle(s.Name)}</button>)}
+            <div className="row between w-eps-head">
+              <h2 className="big">Episodes</h2>
+              {d.seasons.length > 1 ? (
+                <select className="w-season" value={season ?? ""} onChange={(e) => setSeason(e.target.value)}>
+                  {d.seasons.map((s) => <option key={s.Id} value={s.Id}>{cleanTitle(s.Name)}{s.ChildCount ? ` (${s.ChildCount} episodes)` : ""}</option>)}
+                </select>
+              ) : <span className="muted">{cleanTitle(d.seasons[0].Name)}</span>}
             </div>
-            <div className="w-eps">
+            <div className="w-eps list">
               {eps === null && <p className="muted">Loading episodes…</p>}
               {eps?.map((e) => {
                 const pos = e.UserData?.PlaybackPositionTicks ?? 0;
                 return (
-                  <div key={e.Id} className="w-ep" onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: "episode", title: e.Name, seriesId: id, seasonId: season, played: e.UserData?.Played }, false))}>
+                  <div key={e.Id} className={`w-ep ${e.Id === next?.Id ? "next" : ""}`} onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: "episode", title: e.Name, seriesId: id, seasonId: season, played: e.UserData?.Played }, false))}>
+                    <span className="w-ep-num">{e.IndexNumber}</span>
                     <button className="art wide cover tile-art" onClick={() => nav.play(e.Id)} aria-label={`Play ${e.Name}`}>
                       {e.ImageTags?.Primary ? <img src={imageUrl(e.Id, "Primary", 480, 0, e.ImageTags.Primary)} alt="" loading="lazy" /> : <div className="noart">E{e.IndexNumber}</div>}
                       <span className="tile-play"><Icon name="play" size={20} /></span>
@@ -237,8 +251,7 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
                       {pos > 0 && e.RunTimeTicks ? <span className="tile-progress"><span style={{ width: `${Math.min(100, (pos / e.RunTimeTicks) * 100)}%` }} /></span> : null}
                     </button>
                     <button className="w-ep-text tile-text" onClick={() => nav.open(e.Id)}>
-                      <div className="strong">{e.IndexNumber}. {e.Name}</div>
-                      <div className="muted small">{e.RunTimeTicks ? `${Math.round(e.RunTimeTicks / 600_000_000)} min` : ""}{e.PremiereDate ? ` · ${new Date(e.PremiereDate).toLocaleDateString()}` : ""}</div>
+                      <div className="row between w-ep-title"><span className="strong">{e.Name}</span><span className="muted small">{e.RunTimeTicks ? `${Math.round(e.RunTimeTicks / 600_000_000)} min` : ""}</span></div>
                       {e.Overview && <div className="small muted w-ep-ov">{e.Overview}</div>}
                     </button>
                   </div>
@@ -247,6 +260,7 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
             </div>
           </section>
         )}
+        {(it.Type === "Movie" || isEpisode) && <MediaInfo item={it} />}
         {people.length > 0 && (
           <section className="hrow">
             <div className="section-head"><h2>Cast</h2></div>

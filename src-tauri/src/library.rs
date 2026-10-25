@@ -39,11 +39,11 @@ fn check_id(id: &str) -> Result<()> {
 
 /* ------------------------------------------------------------------ health */
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthRow {
     id: String,
-    kind: &'static str,
+    kind: String,
     name: String,
     year: Option<i64>,
     identified: bool,
@@ -73,9 +73,40 @@ fn identified(v: &Value) -> bool {
         .unwrap_or(false)
 }
 
-/// Every show and movie with what it has and what it lacks, in one pass.
+#[derive(Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthResult {
+    at: u64,
+    rows: Vec<HealthRow>,
+}
+
+fn health_path(state: &AppState) -> PathBuf {
+    state.dir.join("health.json")
+}
+
+/// The last health check (instant), or a new one when `fresh` (sends "health-progress").
 #[tauri::command]
-pub async fn library_health(state: State<'_, AppState>) -> Result<Vec<HealthRow>> {
+pub async fn library_health(app: AppHandle, state: State<'_, AppState>, fresh: bool) -> Result<HealthResult> {
+    if !fresh {
+        if let Some(r) = std::fs::read(health_path(&state)).ok().and_then(|b| serde_json::from_slice::<HealthResult>(&b).ok()) {
+            return Ok(r);
+        }
+    }
+    let rows = health_rows(&app, &state).await?;
+    let r = HealthResult { at: now_secs(), rows };
+    if let Ok(b) = serde_json::to_vec(&r) {
+        let _ = std::fs::write(health_path(&state), b);
+    }
+    Ok(r)
+}
+
+fn progress(app: &AppHandle, done: u32, total: u32, label: &str) {
+    let _ = app.emit("health-progress", serde_json::json!({ "done": done, "total": total, "label": label }));
+}
+
+async fn health_rows(app: &AppHandle, state: &AppState) -> Result<Vec<HealthRow>> {
+    crate::cancel::begin("health");
+    progress(app, 0, 3, "Reading shows and movies");
     let c = state.reader().await?;
     let titles = c
         .items_query(
@@ -84,10 +115,14 @@ pub async fn library_health(state: State<'_, AppState>) -> Result<Vec<HealthRow>
                 ("Recursive", "true".into()),
                 ("Fields", "ProviderIds,Path,RecursiveItemCount,ProductionYear".into()),
                 ("SortBy", "SortName".into()),
+                ("EnableUserData", "false".into()),
+                ("ImageTypeLimit", "1".into()),
             ],
             20_000,
         )
         .await?;
+    crate::cancel::check("health")?;
+    progress(app, 1, 3, "Finding videos without subtitles");
     let no_subs = c
         .items_query(
             vec![
@@ -95,6 +130,8 @@ pub async fn library_health(state: State<'_, AppState>) -> Result<Vec<HealthRow>
                 ("Recursive", "true".into()),
                 ("HasSubtitles", "false".into()),
                 ("Fields", "SeriesId".into()),
+                ("EnableImages", "false".into()),
+                ("EnableUserData", "false".into()),
             ],
             100_000,
         )
@@ -105,8 +142,11 @@ pub async fn library_health(state: State<'_, AppState>) -> Result<Vec<HealthRow>
         let key = if s(e, "Type") == "Episode" { clean_id(s(e, "SeriesId")) } else { clean_id(s(e, "Id")) };
         *count.entry(key).or_default() += 1;
     }
+    crate::cancel::check("health")?;
+    progress(app, 2, 3, "Putting it together");
     let root = state.settings()?.library_root;
-    let rows = titles
+    let map = state.settings()?.path_map;
+    let rows: Vec<HealthRow> = titles
         .iter()
         .filter_map(|v| {
             let id = clean_id(s(v, "Id"));
@@ -118,12 +158,14 @@ pub async fn library_health(state: State<'_, AppState>) -> Result<Vec<HealthRow>
             // The folder right under the library root ("TV", "Movies", "Kids" …).
             let lib = root
                 .as_deref()
-                .and_then(|_| local::to_local(&state, path).ok())
-                .and_then(|p| root.as_deref().and_then(|r| local::rel_to_root(Path::new(r), &p)))
+                // Only with a known path mapping: guessing one would touch the NAS for every title.
+                .filter(|_| map.is_some())
+                .and_then(|r| media_tools::map_path(path, map.as_ref(), Some(Path::new(r))).map(|(p, _)| (r, p)))
+                .and_then(|(r, p)| local::rel_to_root(Path::new(r), &p))
                 .and_then(|rel| rel.split('/').next().map(String::from))
                 .unwrap_or_default();
             Some(HealthRow {
-                kind: if series { "series" } else { "movie" },
+                kind: if series { "series".into() } else { "movie".into() },
                 name: s(v, "Name").to_string(),
                 year: v.get("ProductionYear").and_then(Value::as_i64),
                 identified: identified(v),
@@ -139,6 +181,7 @@ pub async fn library_health(state: State<'_, AppState>) -> Result<Vec<HealthRow>
             })
         })
         .collect();
+    progress(app, 3, 3, "");
     Ok(rows)
 }
 
@@ -528,7 +571,11 @@ pub async fn tags_merge(app: AppHandle, state: State<'_, AppState>, kind: String
         .collect();
     let total = targets.len();
     let mut done = 0;
+    crate::cancel::begin("bulk");
     for (i, id) in targets.iter().enumerate() {
+        if crate::cancel::stopped("bulk") {
+            break;
+        }
         let _ = app.emit("bulk-progress", serde_json::json!({ "done": i, "total": total }));
         let old = w.reader().item_json(id).await?;
         let list: Vec<String> = old.get(field).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
@@ -582,7 +629,11 @@ pub async fn make_episode_stills(app: AppHandle, state: State<'_, AppState>, par
     let todo: Vec<&Value> = eps.iter().filter(|e| !has_img(e, "Primary") && !s(e, "Path").is_empty()).collect();
     let total = todo.len();
     let mut added = 0;
+    crate::cancel::begin("bulk");
     for (i, e) in todo.into_iter().enumerate() {
+        if crate::cancel::stopped("bulk") {
+            break;
+        }
         let id = clean_id(s(e, "Id"));
         if !valid_item_id(&id) {
             continue;
@@ -619,10 +670,12 @@ pub struct Alert {
     level: &'static str,
     title: String,
     detail: String,
+    /// Where to fix it: "settings:<section>" or a screen name.
+    fix: String,
 }
 
-fn alert(level: &'static str, title: &str, detail: &str) -> Alert {
-    Alert { level, title: title.into(), detail: detail.into() }
+fn alert_fix(level: &'static str, title: &str, detail: &str, fix: &str) -> Alert {
+    Alert { level, title: title.into(), detail: detail.into(), fix: fix.into() }
 }
 
 /// Problems worth knowing about, instead of things failing quietly.
@@ -631,20 +684,20 @@ pub async fn health_alerts(state: State<'_, AppState>) -> Result<Vec<Alert>> {
     let mut out = Vec::new();
     let st = state.settings()?;
     match st.library_root.as_deref() {
-        None => out.push(alert("warn", "No library folder chosen", "The renamer, intro detection and adding new titles need it (Settings → Library folder).")),
-        Some(r) if !Path::new(r).is_dir() => out.push(alert("error", "The NAS isn't connected", &format!("{r} can't be reached. Mount the share, then press reload."))),
+        None => out.push(alert_fix("warn", "No library folder chosen", "The renamer, intro detection and adding new titles need it.", "settings:folder")),
+        Some(r) if !Path::new(r).is_dir() => out.push(alert_fix("error", "The NAS isn't connected", &format!("{r} can't be reached. Mount the share, then press reload."), "settings:folder")),
         _ => {}
     }
     let c: Option<Client> = match state.reader().await {
         Ok(c) => match c.ping().await {
             Ok(()) => Some(c),
             Err(e) => {
-                out.push(alert("error", "Jellyfin can't be reached", &e.to_string()));
+                out.push(alert_fix("error", "Jellyfin can't be reached", &e.to_string(), "settings:jellyfin"));
                 None
             }
         },
         Err(e) => {
-            out.push(alert("error", "Not connected to Jellyfin", &e.to_string()));
+            out.push(alert_fix("error", "Not connected to Jellyfin", &e.to_string(), "settings:jellyfin"));
             None
         }
     };
@@ -655,27 +708,51 @@ pub async fn health_alerts(state: State<'_, AppState>) -> Result<Vec<Alert>> {
                 words.iter().any(|w| n.contains(w)) && status != "Disabled"
             });
             if !has(&["mediasegment"]) {
-                out.push(alert("warn", "Skip markers can't be saved", "Install the “MediaSegments API” plugin in Jellyfin (Dashboard → Plugins → Catalog) and restart Jellyfin."));
+                out.push(alert_fix("warn", "Skip markers can't be saved", "Install the “MediaSegments API” plugin in Jellyfin (Dashboard → Plugins → Catalog) and restart Jellyfin.", "settings:plugins"));
             }
             if !has(&["opensubtitles"]) {
-                out.push(alert("warn", "Subtitle downloads are off", "Install the “Open Subtitles” plugin in Jellyfin and sign in to it."));
+                out.push(alert_fix("warn", "Subtitle downloads are off", "Install the “Open Subtitles” plugin in Jellyfin and sign in to it.", "settings:plugins"));
             }
             if !has(&["fanart"]) {
-                out.push(alert("info", "Few banners, clear art and disc pictures", "Install the “Fanart” plugin in Jellyfin and turn it on in the library's image fetchers."));
+                out.push(alert_fix("info", "Few banners, clear art and disc pictures", "Install the “Fanart” plugin in Jellyfin and turn it on in the library's image fetchers.", "settings:plugins"));
             }
             if !has(&["tvdb"]) {
-                out.push(alert("info", "No TheTVDB plugin", "TheTVDB adds banners and better episode data for shows."));
+                out.push(alert_fix("info", "No TheTVDB plugin", "TheTVDB adds banners and better episode data for shows.", "settings:plugins"));
+            }
+        }
+        if let Ok(views) = c.all_views().await {
+            if !views.iter().any(|(_, _, t)| t == "playlists") {
+                out.push(alert_fix(
+                    "info",
+                    "Picks of the day aren't in Infuse yet",
+                    "Media Hub keeps them as a Jellyfin playlist. Sync picks once, then in Infuse pin the Playlists folder: Settings → Shares → your Jellyfin server → Add Favorite.",
+                    "settings:picks",
+                ));
+            }
+        }
+        if let Ok(info) = c.system_info().await {
+            if !crate::backend::version_at_least(&info.version, 10, 10) {
+                out.push(alert_fix("warn", "Infuse can't read your skip markers", &format!("Infuse reads intro and credits markers from Jellyfin 10.10 or newer; this server runs {}.", info.version), "settings:backend"));
+            }
+        }
+        if let Ok(folders) = c.virtual_folders().await {
+            let rows = crate::backend::lib_rows(&folders);
+            let refreshes = rows.iter().any(|r| !r.is_ok() && r.is_key("AutomaticRefreshIntervalDays"));
+            if refreshes {
+                out.push(alert_fix("warn", "Jellyfin may overwrite your edits", "A library refreshes details on its own. Let Media Hub set Jellyfin up as its backend.", "settings:backend"));
+            } else if rows.iter().any(|r| !r.is_ok()) {
+                out.push(alert_fix("info", "Jellyfin could be faster", "Some library settings slow down scans or Infuse's sync.", "settings:backend"));
             }
         }
     }
     if media_tools::locate_ffmpeg(st.ffmpeg_path.as_deref()).is_none() {
-        out.push(alert("info", "ffmpeg isn't installed", "Needed for intro detection, episode stills and storage tools (Settings → Tools)."));
+        out.push(alert_fix("info", "ffmpeg isn't installed", "Needed for intro detection, episode stills, subtitle timing and storage tools.", "settings:tools"));
     }
     if st.read_only {
-        out.push(alert("info", "Read-only", "Media Hub can't change anything in Jellyfin until you allow changes in Settings."));
+        out.push(alert_fix("info", "Read-only", "Media Hub can't change anything in Jellyfin until you allow changes.", "settings:changes"));
     }
     if !st.has_tmdb {
-        out.push(alert("info", "No TMDB key", "Missing-episode checks and matching work better with a free TMDB key (Settings → Online metadata)."));
+        out.push(alert_fix("info", "No TMDB key", "Missing-episode checks and matching work better with a free TMDB key.", "settings:metadata"));
     }
     Ok(out)
 }
@@ -855,4 +932,77 @@ mod tests {
         assert!(quality(&mk(1080, true, "h264")) > quality(&mk(1080, false, "hevc")));
         assert!(quality(&mk(1080, false, "hevc")) > quality(&mk(1080, false, "h264")));
     }
+}
+
+/* ------------------------------------------------------- favourites, languages */
+
+#[tauri::command]
+pub async fn set_favorite(state: State<'_, AppState>, id: String, favorite: bool) -> Result<()> {
+    check_id(&id)?;
+    state.writer().await?.set_favorite(&id, favorite).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryLang {
+    id: String,
+    name: String,
+    kind: String,
+    language: String,
+    country: String,
+}
+
+#[tauri::command]
+pub async fn library_languages(state: State<'_, AppState>) -> Result<Vec<LibraryLang>> {
+    let folders = state.reader().await?.virtual_folders().await?;
+    Ok(folders
+        .iter()
+        .filter_map(|f| {
+            let id = clean_id(s(f, "ItemId"));
+            valid_item_id(&id).then(|| LibraryLang {
+                name: s(f, "Name").to_string(),
+                kind: s(f, "CollectionType").to_string(),
+                language: f.pointer("/LibraryOptions/PreferredMetadataLanguage").and_then(Value::as_str).unwrap_or("").to_string(),
+                country: f.pointer("/LibraryOptions/MetadataCountryCode").and_then(Value::as_str).unwrap_or("").to_string(),
+                id,
+            })
+        })
+        .collect())
+}
+
+/// Sets the language (and country) titles and summaries are fetched in for one library,
+/// and optionally fetches them again for everything in it. Undo puts the old setting back.
+#[tauri::command]
+pub async fn set_library_language(state: State<'_, AppState>, id: String, language: String, country: String, refresh: bool) -> Result<()> {
+    check_id(&id)?;
+    let ok = |x: &str, n: usize| x.len() <= n && x.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if !ok(&language, 10) || !ok(&country, 3) {
+        return Err(Error::msg("bad language"));
+    }
+    let w = state.writer().await?;
+    let folder = w
+        .reader()
+        .virtual_folders()
+        .await?
+        .into_iter()
+        .find(|f| clean_id(s(f, "ItemId")) == id)
+        .ok_or_else(|| Error::msg("That library isn't there."))?;
+    let old = folder.get("LibraryOptions").cloned().unwrap_or(Value::Null);
+    let mut new = old.clone();
+    new["PreferredMetadataLanguage"] = Value::String(language.clone());
+    new["MetadataCountryCode"] = Value::String(country.clone());
+    let entry = state.store()?.journal_add("library_options", &id, &old.to_string(), &new.to_string())?;
+    if let Err(e) = w.set_library_options(&id, &new).await {
+        state.store()?.journal_delete(entry)?;
+        return Err(e);
+    }
+    if refresh {
+        w.refresh_library_metadata(&id).await?;
+    }
+    Ok(())
+}
+
+pub async fn undo_library_options(w: &crate::jellyfin::Writer, id: &str, old_json: &str) -> Result<()> {
+    let old: Value = serde_json::from_str(old_json).map_err(|_| Error::msg("bad journal entry"))?;
+    w.set_library_options(id, &old).await
 }

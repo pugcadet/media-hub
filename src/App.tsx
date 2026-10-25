@@ -16,6 +16,8 @@ import AddMedia from "./AddMedia";
 import Watch from "./Watch";
 import Player from "./Player";
 import { ActivityBar } from "./ui";
+import { UpdateToast } from "./Updates";
+import Music from "./Music";
 import { setNav, type OpenOpts, type Route, type View } from "./nav";
 import { useEpoch } from "./activity";
 import { usePrefs } from "./prefs";
@@ -101,6 +103,15 @@ export default function App() {
       <>
         <Watch status={status} libraries={libraries} item={top ?? null} onBack={back} />
         {player}
+        <UpdateToast />
+      </>
+    );
+  }
+  if (mode === "music") {
+    return (
+      <>
+        <Music status={status} />
+        <UpdateToast />
       </>
     );
   }
@@ -166,7 +177,7 @@ export default function App() {
         page = <Downloads onNav={navTo} />;
         break;
       case "settings":
-        page = <Settings status={status} onChanged={refresh} onNav={navTo} />;
+        page = <Settings status={status} onChanged={refresh} onNav={navTo} section={route.section} />;
         break;
       default:
         page = (
@@ -189,9 +200,10 @@ export default function App() {
       <Sidebar status={status} libraries={libraries} attention={attention} route={route} onRoute={go} />
       <div className="main-col">
         <ActivityBar />
-        <div className="page" key={`${route.view}-${route.n ?? 0}`}>{page}</div>
+        <div className="page" key={`${route.view}-${route.n ?? 0}-${top?.id ?? ""}`}>{page}</div>
       </div>
       {player}
+      <UpdateToast />
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, Attention, errorText, Item, Kind, Library as Lib, Sort, Status } from "./api";
-import Poster from "./Poster";
+import Wall, { type Problem } from "./Wall";
 import type { Route } from "./App";
 import { useEpoch } from "./activity";
+import { scanLibrary } from "./ui";
 
 const PAGE = 120;
 
@@ -27,7 +28,7 @@ interface Props {
   onOpen: (id: string) => void;
 }
 
-export default function Library({ status, libraries, attention, route, onRoute, onChanged, onOpen }: Props) {
+export default function Library({ status, libraries, route, onChanged }: Props) {
   const lib = libraries.find((l) => l.id === route.library) ?? null;
   const [kind, setKind] = useState<Kind>(null);
   const [query, setQuery] = useState("");
@@ -41,6 +42,8 @@ export default function Library({ status, libraries, attention, route, onRoute, 
   const loading = useRef(false);
   const flag = route.flag ?? null;
   const epoch = useEpoch();
+  // The old "unmatched" / "no poster" links open the wall with that problem picked.
+  const [problem, setProblem] = useState<Problem>(flag === "unmatched" ? "id" : flag === "noposter" ? "art" : "");
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query), 200);
@@ -52,7 +55,7 @@ export default function Library({ status, libraries, attention, route, onRoute, 
       if (loading.current) return;
       loading.current = true;
       try {
-        const rows = await api.list(kind, debounced, sort, offset, PAGE, route.library ?? null, flag);
+        const rows = await api.list(kind, debounced, sort, offset, PAGE, route.library ?? null, flag === "unwatched" ? flag : null);
         setItems((prev) => (offset === 0 ? rows : [...prev, ...rows]));
         setMore(rows.length === PAGE);
       } catch (e) {
@@ -85,7 +88,7 @@ export default function Library({ status, libraries, attention, route, onRoute, 
     setSyncing(true);
     setMessage(null);
     try {
-      await api.sync();
+      await scanLibrary();
       onChanged();
     } catch (e) {
       setMessage(errorText(e));
@@ -122,27 +125,6 @@ export default function Library({ status, libraries, attention, route, onRoute, 
       {message && <p className="error" role="alert">{message}</p>}
 
 
-      {!flag && attention && (attention.unmatched > 0 || attention.noPoster > 0 || (attention.noSubtitles ?? 0) > 0) && (
-        <section className="attention">
-          <span className="muted small">Needs attention</span>
-          {attention.unmatched > 0 && (
-            <button className="att amber" onClick={() => onRoute({ view: "library", flag: "unmatched" })}>{attention.unmatched} unmatched titles</button>
-          )}
-          {attention.noPoster > 0 && (
-            <button className="att" onClick={() => onRoute({ view: "library", flag: "noposter" })}>{attention.noPoster} without a poster</button>
-          )}
-          {(attention.noSubtitles ?? 0) > 0 && (
-            <button className="att" onClick={() => onRoute({ view: "subtitles" })}>{attention.noSubtitles} videos without subtitles</button>
-          )}
-          <button className="att" onClick={() => onRoute({ view: "intros" })}>Check intros and credits</button>
-        </section>
-      )}
-      {flag && (
-        <p className="muted small">
-          <button className="link" onClick={() => onRoute({ view: "library" })}>← Back to the whole library</button>
-        </p>
-      )}
-
       <div className="toolbar">
         <div className="chips">
           {mixed && (
@@ -165,9 +147,7 @@ export default function Library({ status, libraries, attention, route, onRoute, 
       </div>
 
       {items.length === 0 && !syncing && <p className="muted">{total === 0 ? "Nothing here yet. Press Scan library." : "Nothing matches."}</p>}
-      <div className="grid">
-        {items.map((i) => <Poster key={i.id} item={i} onOpen={(x) => onOpen(x.id)} canEdit={!status.readOnly} />)}
-      </div>
+      <Wall items={items} status={status} problem={problem} onProblem={setProblem} query={debounced} kind={kind} />
       <div ref={sentinel} style={{ height: 1 }} />
     </div>
   );

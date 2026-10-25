@@ -119,9 +119,13 @@ fn req(template: &str, folder: &str) -> PlanRequest {
         find_replace: Vec::new(),
         rename_folder: None,
         season_folders: false,
+        year_optional: YEAR_OPTIONAL.load(Ordering::SeqCst),
         ids: HashMap::new(),
     }
 }
+
+/// Set for the length of one check: shows whose names differ only by a year are fine.
+static YEAR_OPTIONAL: AtomicBool = AtomicBool::new(true);
 
 fn args(mode: &str, template: &str, folder: &str, match_id: Option<String>, only_file: Option<String>, item_id: Option<String>) -> PlanArgs {
     PlanArgs {
@@ -190,10 +194,11 @@ pub fn naming_check_cancel() {
 
 /// Checks every show and movie (or only `ids`). Sends "naming-progress" events while it runs.
 #[tauri::command]
-pub async fn naming_check(app: AppHandle, tv_template: String, movie_template: String, ids: Option<Vec<String>>) -> Result<CheckResult> {
+pub async fn naming_check(app: AppHandle, tv_template: String, movie_template: String, ids: Option<Vec<String>>, year_optional: Option<bool>) -> Result<CheckResult> {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Err(Error::msg("A check is already running."));
     }
+    YEAR_OPTIONAL.store(year_optional.unwrap_or(true), Ordering::SeqCst);
     CANCEL.store(false, Ordering::SeqCst);
     let out = run(&app, &tv_template, &movie_template, ids).await;
     RUNNING.store(false, Ordering::SeqCst);

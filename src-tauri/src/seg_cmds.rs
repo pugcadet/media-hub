@@ -129,7 +129,9 @@ pub async fn detect_season(
     let mut credits: Vec<Option<Window>> = Vec::new();
     let mut out: Vec<Suggestion> = Vec::new();
 
+    crate::cancel::begin("detect");
     for (n, e) in episodes.iter().enumerate() {
+        crate::cancel::check("detect")?;
         let id = e.get("Id").and_then(Value::as_str).unwrap_or("").to_string();
         let name = e.get("Name").and_then(Value::as_str).unwrap_or("").to_string();
         let _ = app.emit("detect-progress", Progress { done: n, total, label: format!("Listening to {name}") });

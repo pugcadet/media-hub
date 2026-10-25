@@ -371,15 +371,6 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Ids of titles that have a poster, for the daily picks.
-    pub fn candidate_ids(&self, kind: &str) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id FROM items WHERE kind=?1 AND has_poster=1")?;
-        let rows = stmt.query_map(params![kind], |r| r.get::<_, String>(0))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-
     /// Returns rows in the order of `ids`.
     pub fn get_many(&self, ids: &[String]) -> Result<Vec<ItemRow>> {
         let mut out = Vec::with_capacity(ids.len());
@@ -459,11 +450,23 @@ impl Store {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// The newest non-empty "before" value recorded for this action and target.
+    pub fn last_old_value(&self, action: &str, target: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT old_value FROM undo_journal WHERE action = ?1 AND target = ?2 AND old_value NOT IN ('', '[]') ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![action, target])?;
+        Ok(match rows.next()? {
+            Some(r) => Some(r.get(0)?),
+            None => None,
+        })
+    }
+
     /// Jellyfin changes for one item (pictures use "itemid|Kind|index" as target).
     pub fn changes_for(&self, item_id: &str, limit: i64) -> Result<Vec<Change>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, CAST(at AS INTEGER), action, target, undone FROM undo_journal
-             WHERE action IN ('item_update','identify','image','image_removed','collection','subtitle','segment','file_trashed') AND (target = ?1 OR target LIKE ?1 || '|%')
+             WHERE action IN ('item_update','identify','image','image_removed','collection','subtitle','segment','file_trashed','subtitle_timing') AND (target = ?1 OR target LIKE ?1 || '|%')
              ORDER BY id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![item_id, limit.clamp(1, 100)], |r| {
@@ -687,7 +690,7 @@ mod tests {
         s.replace_all(&[item("a", "movie", "A", true), item("b", "movie", "B", false)], &[("lib".into(), "Films".into(), "movies".into())], 1).unwrap();
         assert_eq!(s.list(None, None, Some("x; DROP"), None, "x; DROP TABLE items", 0, 10).unwrap().len(), 2);
         assert_eq!(s.list(None, None, Some("noposter"), None, "name", 0, 10).unwrap().len(), 1);
-        assert_eq!(s.candidate_ids("movie").unwrap(), vec!["a".to_string()]);
+        assert_eq!(s.pick_rows().unwrap().iter().filter(|r| r.kind == "movie").map(|r| r.id.clone()).collect::<Vec<_>>(), vec!["a".to_string()]);
         assert_eq!(s.libraries().unwrap()[0].count, 2);
         assert_eq!(s.attention().unwrap().no_poster, 1);
         let row = &s.get_many(&["a".to_string()]).unwrap()[0];

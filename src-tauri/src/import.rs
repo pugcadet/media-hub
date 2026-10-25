@@ -170,6 +170,11 @@ fn copy_with_progress(app: &AppHandle, from: &Path, to: &Path, done: &mut u64, t
     let mut buf = vec![0u8; 4 * 1024 * 1024];
     let mut last = std::time::Instant::now();
     loop {
+        if crate::cancel::stopped("import") {
+            drop(dst);
+            let _ = std::fs::remove_file(&tmp); // our own partial file only
+            return Err(Error::Stopped);
+        }
         let n = src.read(&mut buf)?;
         if n == 0 {
             break;
@@ -230,7 +235,12 @@ pub async fn import_run(app: AppHandle, state: State<'_, AppState>, dest: String
         let total = info.total_bytes.max(1);
         let mut done = 0u64;
         let (mut moved, mut copied, mut skipped) = (0usize, 0usize, Vec::new());
+        crate::cancel::begin("import");
         for f in &info.files {
+            if crate::cancel::stopped("import") {
+                skipped.push("Stopped: the rest was not added".to_string());
+                break;
+            }
             let rel = safe_rel(&f.rel)?;
             let from = base.join(&rel);
             let to = target.join(&rel);
@@ -250,6 +260,10 @@ pub async fn import_run(app: AppHandle, state: State<'_, AppState>, dest: String
             }
             match copy_with_progress(&app2, &from, &to, &mut done, total, &f.rel) {
                 Ok(()) => copied += 1,
+                Err(Error::Stopped) => {
+                    skipped.push("Stopped: the rest was not added".to_string());
+                    break;
+                }
                 Err(e) => skipped.push(format!("{}: {e}", f.rel)),
             }
         }

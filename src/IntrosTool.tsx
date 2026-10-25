@@ -112,7 +112,7 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
       <div className="pg-head">
         <div>
           <h1>{show ? cleanTitle(show.name, show.year) : "Intros and credits"}</h1>
-          {!show && <div className="muted small">Media Hub listens to the start and end of each episode, finds the parts that repeat, and saves them to Jellyfin as “Skip intro” and “Skip credits” markers that Infuse uses too.</div>}
+          {!show && <div className="muted small">Media Hub listens to the start and end of each episode, finds the parts that repeat, and saves them to Jellyfin as “Skip intro” and “Skip credits” markers. The counts below are read the same way Infuse reads them (Jellyfin 10.10+, Infuse 8.0.4+), so a marker shown here is a skip button in Infuse.</div>}
         </div>
         {show && <div className="pg-actions"><button onClick={() => setShow(null)}>← All shows</button></div>}
       </div>

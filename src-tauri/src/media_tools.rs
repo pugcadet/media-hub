@@ -136,10 +136,36 @@ pub fn map_path(server_path: &str, map: Option<&PathMap>, root: Option<&Path>) -
     None
 }
 
+/// The other way round: a path on this computer (inside the mapped folder) as the server
+/// sees it. None when it isn't under the mapped folder.
+pub fn to_server(map: &PathMap, local: &Path) -> Option<String> {
+    let rest = local.strip_prefix(Path::new(&map.local)).ok()?;
+    let sep = if map.server.contains('\\') && !map.server.contains('/') { "\\" } else { "/" };
+    let mut out = map.server.trim_end_matches(['/', '\\']).to_string();
+    for c in rest.components() {
+        let part = c.as_os_str().to_string_lossy();
+        if part == ".." {
+            return None;
+        }
+        out.push_str(sep);
+        out.push_str(&part);
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn maps_back_to_the_server() {
+        let m = PathMap { server: "/volume1/media".into(), local: "/Volumes/media".into() };
+        assert_eq!(to_server(&m, Path::new("/Volumes/media/TV/Bluey")).as_deref(), Some("/volume1/media/TV/Bluey"));
+        assert_eq!(to_server(&m, Path::new("/Users/x")), None);
+        let w = PathMap { server: "D:\\Media".into(), local: "/Volumes/media".into() };
+        assert_eq!(to_server(&w, Path::new("/Volumes/media/TV")).as_deref(), Some("D:\\Media\\TV"));
+    }
 
     #[test]
     fn learns_and_reuses_the_path_map() {

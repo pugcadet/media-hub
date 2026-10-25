@@ -2,7 +2,7 @@
 // and the activity bar at the top of the window.
 import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Alert, api, Card, errorText, imageUrl } from "./api";
-import { dismiss, reloadAll, track, useEpoch, useJobs } from "./activity";
+import { dismiss, followEvent, isStopped, reloadAll, track, useEpoch, useJobs } from "./activity";
 import { nav } from "./nav";
 
 /* ------------------------------------------------------------------ store */
@@ -275,22 +275,87 @@ export function Hosts() {
 
 /* -------------------------------------------------------------- icons */
 
-export function Icon({ name, size = 16 }: { name: "reload" | "expand" | "folder" | "play" | "plus" | "check" | "x" | "search" | "more" | "bell"; size?: number }) {
-  const p: Record<string, ReactNode> = {
-    reload: <><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></>,
-    expand: <><path d="M14 4h6v6" /><path d="M10 20H4v-6" /><path d="M20 4l-7 7" /><path d="M4 20l7-7" /></>,
-    folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
-    play: <path d="M7 4.5v15l13-7.5z" fill="currentColor" />,
-    plus: <><path d="M12 5v14" /><path d="M5 12h14" /></>,
-    check: <path d="M5 12l5 5 9-10" />,
-    x: <><path d="M6 6l12 12" /><path d="M18 6L6 18" /></>,
-    search: <><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></>,
-    bell: <><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></>,
-    more: <><circle cx="5" cy="12" r="1.5" fill="currentColor" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /><circle cx="19" cy="12" r="1.5" fill="currentColor" /></>,
-  };
+export type IconName =
+  | "reload" | "expand" | "folder" | "play" | "plus" | "check" | "x" | "search" | "more" | "bell"
+  | "home" | "tv" | "film" | "stack" | "heart" | "inbox" | "rename" | "image" | "subtitles" | "skip"
+  | "missing" | "copy" | "tag" | "disk" | "history" | "settings" | "music" | "info" | "warn" | "pause"
+  | "next" | "prev" | "shuffle" | "volume" | "clock" | "wand" | "download" | "list" | "grid" | "trash" | "external"
+  | "undo" | "lock" | "server" | "stop" | "chevron" | "infuse";
+
+const ICONS: Record<IconName, ReactNode> = {
+  reload: <><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></>,
+  expand: <><path d="M14 4h6v6" /><path d="M10 20H4v-6" /><path d="M20 4l-7 7" /><path d="M4 20l7-7" /></>,
+  folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+  play: <path d="M7 4.5v15l13-7.5z" fill="currentColor" />,
+  pause: <><rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor" /><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor" /></>,
+  plus: <><path d="M12 5v14" /><path d="M5 12h14" /></>,
+  check: <path d="M5 12l5 5 9-10" />,
+  x: <><path d="M6 6l12 12" /><path d="M18 6L6 18" /></>,
+  search: <><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></>,
+  more: <><circle cx="5" cy="12" r="1.5" fill="currentColor" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /><circle cx="19" cy="12" r="1.5" fill="currentColor" /></>,
+  bell: <><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></>,
+  home: <><path d="M3 11l9-7 9 7" /><path d="M5 10v10h14V10" /></>,
+  tv: <><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M8 3l4 3 4-3" /></>,
+  film: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4" /></>,
+  stack: <><path d="M12 3l9 5-9 5-9-5z" /><path d="M3 13l9 5 9-5" /></>,
+  heart: <path d="M12 20s-7-4.5-9-9a5 5 0 0 1 9-3 5 5 0 0 1 9 3c-2 4.5-9 9-9 9z" />,
+  inbox: <><path d="M3 13l3-8h12l3 8" /><path d="M3 13v6h18v-6h-5l-1 2h-6l-1-2z" /></>,
+  rename: <><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M14 6l4 4" /></>,
+  image: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="M21 17l-5-5-9 8" /></>,
+  subtitles: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 14h4M13 14h4M7 10h10" /></>,
+  skip: <><path d="M5 5l9 7-9 7z" fill="currentColor" /><path d="M18 5v14" /></>,
+  missing: <><circle cx="12" cy="12" r="9" /><path d="M9 9h.01M15 9h.01M8 16c2-2 6-2 8 0" /></>,
+  copy: <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M4 16V6a2 2 0 0 1 2-2h10" /></>,
+  tag: <><path d="M3 12V4h8l10 10-8 8z" /><circle cx="7.5" cy="8.5" r="1.5" /></>,
+  disk: <><ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>,
+  history: <><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /><path d="M12 8v4l3 2" /></>,
+  settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></>,
+  music: <><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></>,
+  info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></>,
+  warn: <><path d="M12 3l10 18H2z" /><path d="M12 10v5M12 18v.5" /></>,
+  next: <><path d="M5 5l10 7-10 7z" fill="currentColor" /><path d="M19 5v14" /></>,
+  prev: <><path d="M19 5L9 12l10 7z" fill="currentColor" /><path d="M5 5v14" /></>,
+  shuffle: <><path d="M3 6h4l10 12h4" /><path d="M3 18h4l3-3.6M14 9.6L17 6h4" /><path d="M19 4l2 2-2 2M19 16l2 2-2 2" /></>,
+  volume: <><path d="M4 9v6h4l5 4V5L8 9z" /><path d="M16 9a4 4 0 0 1 0 6" /></>,
+  clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+  wand: <><path d="M4 20L16 8" /><path d="M15 4v3M18 6h3M19 9v2M13 7h-2" /></>,
+  download: <><path d="M12 4v11" /><path d="M7 10l5 5 5-5" /><path d="M5 20h14" /></>,
+  list: <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />,
+  grid: <><rect x="4" y="4" width="7" height="7" rx="1" /><rect x="13" y="4" width="7" height="7" rx="1" /><rect x="4" y="13" width="7" height="7" rx="1" /><rect x="13" y="13" width="7" height="7" rx="1" /></>,
+  trash: <><path d="M4 7h16" /><path d="M10 11v6M14 11v6" /><path d="M6 7l1 13h10l1-13" /><path d="M9 7V4h6v3" /></>,
+  undo: <><path d="M9 14L4 9l5-5" /><path d="M4 9h10a6 6 0 0 1 0 12h-3" /></>,
+  lock: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
+  server: <><rect x="3" y="4" width="18" height="7" rx="2" /><rect x="3" y="13" width="18" height="7" rx="2" /><path d="M7 7.5h.01M7 16.5h.01" /></>,
+  stop: <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />,
+  chevron: <path d="M9 6l6 6-6 6" />,
+  infuse: <><path d="M4 18l8-13 8 13z" /><path d="M9 14h6" /></>,
+  external: <><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></>,
+};
+
+export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{p[name]}</svg>
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="ico-svg">{ICONS[name]}</svg>
   );
+}
+
+/** A link to one section of Settings, e.g. <SettingsLink section="subtitles">Subtitle settings</SettingsLink>. */
+export function SettingsLink({ section, children }: { section: string; children: ReactNode }) {
+  return <button className="link settings-link" onClick={() => nav.route({ view: "settings", section })}><Icon name="settings" size={12} /> {children}</button>;
+}
+
+/** Scans the Jellyfin library into Media Hub's list, with progress. */
+export function scanLibrary(): Promise<void> {
+  return track("Scanning the library", async (job) => {
+    const un = await followEvent(job, "sync-progress");
+    try {
+      const r = await api.sync();
+      job.update(`${r.movies} movies · ${r.series} shows`, 1);
+    } finally {
+      un();
+    }
+  }, { stop: "sync" }).catch((e) => {
+    if (!isStopped(e)) throw e;
+  });
 }
 
 /* --------------------------------------------------------- cards & rows */
@@ -345,29 +410,49 @@ export function CardTile({ c, wide, canEdit = true, inCollection, onOpen, menuEx
   );
 }
 
-/** A titled, horizontally scrolling row of cards. */
-export function Row({ title, cards, wide, action, canEdit, inCollection, menuExtra }: { title: string; cards: Card[]; wide?: boolean; action?: ReactNode; canEdit?: boolean; inCollection?: string; menuExtra?: (c: Card) => MenuItem[] }) {
+/**
+ * A titled, horizontally scrolling row of cards. Like Netflix: the arrows sit on the row's
+ * edges and show on hover; `ranked` puts big numbers in front of the first ten.
+ */
+export function Row({ title, cards, wide, action, canEdit, inCollection, menuExtra, ranked }: { title: string; cards: Card[]; wide?: boolean; action?: ReactNode; canEdit?: boolean; inCollection?: string; menuExtra?: (c: Card) => MenuItem[]; ranked?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [edge, setEdge] = useState({ left: false, right: true });
+  if (ranked) cards = cards.slice(0, 10);
+  const update = () => {
+    const el = ref.current;
+    if (el) setEdge({ left: el.scrollLeft > 4, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4 });
+  };
+  useEffect(update, [cards.length]);
   if (!cards.length) return null;
   const scroll = (d: number) => ref.current?.scrollBy({ left: d * ref.current.clientWidth * 0.85, behavior: "smooth" });
   return (
-    <section className="hrow">
+    <section className={`hrow ${ranked ? "ranked" : ""}`}>
       <div className="section-head">
         <h2>{title}</h2>
-        <div className="row end">
-          {action}
-          <button className="p-round sm" onClick={() => scroll(-1)} aria-label="Scroll left">‹</button>
-          <button className="p-round sm" onClick={() => scroll(1)} aria-label="Scroll right">›</button>
-        </div>
+        <div className="row end">{action}</div>
       </div>
-      <div ref={ref} className={`hrow-scroll ${wide ? "wide" : ""}`}>
-        {cards.map((c) => <CardTile key={`${c.id}-${c.kind}`} c={c} wide={wide} canEdit={canEdit} inCollection={inCollection} menuExtra={menuExtra} />)}
+      <div className="hrow-wrap">
+        {edge.left && <button className="hrow-arrow left" onClick={() => scroll(-1)} aria-label="Scroll left"><Icon name="chevron" size={22} /></button>}
+        <div ref={ref} className={`hrow-scroll ${wide ? "wide" : ""}`} onScroll={update}>
+          {cards.map((c, i) => (
+            ranked && i < 10 ? (
+              <div key={`${c.id}-${c.kind}`} className="rank-tile"><span className="rank-num" aria-hidden="true">{i + 1}</span><CardTile c={c} wide={wide} canEdit={canEdit} inCollection={inCollection} menuExtra={menuExtra} /></div>
+            ) : <CardTile key={`${c.id}-${c.kind}`} c={c} wide={wide} canEdit={canEdit} inCollection={inCollection} menuExtra={menuExtra} />
+          ))}
+        </div>
+        {edge.right && <button className="hrow-arrow right" onClick={() => scroll(1)} aria-label="Scroll right"><Icon name="chevron" size={22} /></button>}
       </div>
     </section>
   );
 }
 
 /* ------------------------------------------------------------ activity */
+
+function goFix(fix: string) {
+  if (!fix) return;
+  if (fix.startsWith("settings:")) nav.route({ view: "settings", section: fix.slice(9) });
+  else nav.route({ view: fix as "settings" });
+}
 
 function Alerts() {
   const epoch = useEpoch();
@@ -397,10 +482,11 @@ function Alerts() {
           <div className="strong">Alerts</div>
           {list.length === 0 && <div className="muted small">All good.</div>}
           {list.map((a, i) => (
-            <div key={i} className={`alert-row ${a.level}`}>
-              <span className={`dot ${a.level === "error" ? "bad" : a.level === "warn" ? "warn" : ""}`} />
-              <div><div className="strong small">{a.title}</div><div className="muted small">{a.detail}</div></div>
-            </div>
+            <button key={i} className={`alert-row ${a.level}`} disabled={!a.fix} onClick={() => { setOpen(false); goFix(a.fix); }}>
+              <span className={a.level === "error" ? "bad" : a.level === "warn" ? "warn" : "muted"}><Icon name={a.level === "info" ? "info" : "warn"} /></span>
+              <div className="grow"><div className="strong small">{a.title}</div><div className="muted small">{a.detail}</div></div>
+              {a.fix && <span className="accent small">Fix ›</span>}
+            </button>
           ))}
         </div>
       )}
@@ -422,8 +508,9 @@ export function ActivityBar() {
             {j.done && !j.error && <span className="ok"><Icon name="check" size={14} /></span>}
             <span className="strong small">{j.label}</span>
             <span className={`small ellipsis ${j.error ? "bad" : "muted"}`}>{j.error ?? j.detail}</span>
-            {j.progress != null && !j.done && <span className="job-bar"><span style={{ width: `${Math.round(j.progress * 100)}%` }} /></span>}
-            {j.cancel && !j.done && <button className="link small" onClick={j.cancel}>Stop</button>}
+            {!j.done && j.progress != null && <span className="job-pct mono small">{Math.round(j.progress * 100)}%</span>}
+            {!j.done && <span className={`job-bar ${j.progress == null ? "busy" : ""}`}><span style={{ width: j.progress == null ? undefined : `${Math.round(j.progress * 100)}%` }} /></span>}
+            {j.cancel && !j.done && <button className="job-stop" onClick={j.cancel} title="Stop" aria-label="Stop"><Icon name="stop" size={10} /> Stop</button>}
             {j.error && <button className="link-plain small" onClick={() => dismiss(j.id)} aria-label="Dismiss"><Icon name="x" size={12} /></button>}
           </div>
         ))}
@@ -443,5 +530,95 @@ export function ActivityBar() {
         <Icon name="reload" />
       </button>
     </div>
+  );
+}
+
+/* --------------------------------------------------- tri-state selection */
+
+export type TriState = "all" | "some" | "none";
+
+export function triOf(total: number, picked: number): TriState {
+  return picked === 0 || total === 0 ? "none" : picked >= total ? "all" : "some";
+}
+
+/** A checkbox that shows a stripe when only part of what it stands for is selected. */
+export function TriCheck({ state, onChange, label, disabled, title }: { state: TriState; onChange: (on: boolean) => void; label?: ReactNode; disabled?: boolean; title?: string }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === "some";
+  }, [state]);
+  const box = (
+    <input
+      ref={ref}
+      type="checkbox"
+      className={`tri ${state}`}
+      checked={state === "all"}
+      disabled={disabled}
+      title={title}
+      aria-checked={state === "some" ? "mixed" : state === "all"}
+      // A striped box becomes fully checked on click (like Finder and Gmail).
+      onChange={() => onChange(state !== "all")}
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
+  return label == null ? box : <label className="check tri-label">{box}<span>{label}</span></label>;
+}
+
+/** A set of selected keys with Undo for bulk changes (select all / none / a folder). */
+export function useUndoableSet<K>(initial: Iterable<K> = []) {
+  const [set, setSet] = useState<Set<K>>(() => new Set(initial));
+  const [history, setHistory] = useState<Set<K>[]>([]);
+  const push = (next: Set<K>) => {
+    setHistory((h) => [...h.slice(-19), set]);
+    setSet(next);
+  };
+  return {
+    set,
+    has: (k: K) => set.has(k),
+    size: set.size,
+    toggle: (k: K) => {
+      const n = new Set(set);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
+      setSet(n);
+    },
+    /** Turns many on or off at once (can be undone). */
+    setMany: (keys: Iterable<K>, on: boolean) => {
+      const n = new Set(set);
+      for (const k of keys) {
+        if (on) n.add(k);
+        else n.delete(k);
+      }
+      push(n);
+    },
+    /** Replaces the whole selection (can be undone). */
+    replace: (keys: Iterable<K>) => push(new Set(keys)),
+    /** Starts over without an undo step (new data loaded). */
+    reset: (keys: Iterable<K> = []) => {
+      setHistory([]);
+      setSet(new Set(keys));
+    },
+    canUndo: history.length > 0,
+    undo: () => {
+      const prev = history[history.length - 1];
+      if (!prev) return;
+      setHistory(history.slice(0, -1));
+      setSet(prev);
+    },
+    state: (keys: K[]): TriState => triOf(keys.length, keys.filter((k) => set.has(k)).length),
+  };
+}
+
+/** "Select all · Select none · Undo" for a list. */
+export function BulkSelect<K>({ sel, keys, noun = "" }: { sel: ReturnType<typeof useUndoableSet<K>>; keys: K[]; noun?: string }) {
+  const picked = keys.filter((k) => sel.has(k)).length;
+  return (
+    <span className="bulk-select">
+      <TriCheck state={triOf(keys.length, picked)} onChange={(on) => sel.setMany(keys, on)} title={picked === keys.length ? "Select none" : "Select all"} />
+      <span className="muted small">{picked} of {keys.length}{noun ? ` ${noun}` : ""} selected</span>
+      <button className="link small" disabled={picked === keys.length} onClick={() => sel.setMany(keys, true)}>All</button>
+      <button className="link small" disabled={picked === 0} onClick={() => sel.setMany(keys, false)}>None</button>
+      {sel.canUndo && <button className="link small" onClick={sel.undo} title="Undo the last bulk change"><Icon name="undo" size={12} /> Undo</button>}
+    </span>
   );
 }

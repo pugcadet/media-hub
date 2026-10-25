@@ -94,6 +94,10 @@ pub async fn save_metadata(state: State<'_, AppState>, id: String, edits: ItemEd
     if new == old {
         return Ok(());
     }
+    // Your edit wins from now on: lock it (unless you just chose to unlock it).
+    if edits.lock_data.is_none() && state.settings()?.lock_edits {
+        new["LockData"] = Value::Bool(true);
+    }
     // Journal first: if saving fails halfway we still know the old state.
     let entry = state
         .store()?
@@ -145,6 +149,7 @@ pub async fn identify_apply(state: State<'_, AppState>, id: String, result: Valu
     let entry = state
         .store()?
         .journal_add("identify", &id, &old.to_string(), &result.to_string())?;
+    unlock_for_refresh(&w, &id).await?;
     if let Err(e) = w.apply_remote(&id, &result, replace_images).await {
         state.store()?.journal_delete(entry)?;
         return Err(e);
@@ -159,6 +164,29 @@ pub async fn identify_apply(state: State<'_, AppState>, id: String, result: Valu
                 break;
             }
         }
+    }
+    Ok(())
+}
+
+/// After a picture you chose by hand: lock the title so Jellyfin keeps it (Settings).
+pub(crate) async fn lock_after_edit(state: &AppState, w: &crate::jellyfin::Writer, id: &str) {
+    if !state.settings().map(|s| s.lock_edits).unwrap_or(false) {
+        return;
+    }
+    if let Ok(mut item) = w.reader().item_json(id).await {
+        if item.get("LockData").and_then(Value::as_bool) != Some(true) {
+            item["LockData"] = Value::Bool(true);
+            let _ = w.update_item(id, &item).await;
+        }
+    }
+}
+
+/// Before asking Jellyfin to fetch again: a locked title would be skipped, so unlock it.
+async fn unlock_for_refresh(w: &crate::jellyfin::Writer, id: &str) -> Result<()> {
+    let mut item = w.reader().item_json(id).await?;
+    if item.get("LockData").and_then(Value::as_bool) == Some(true) {
+        item["LockData"] = Value::Bool(false);
+        w.update_item(id, &item).await?;
     }
     Ok(())
 }
@@ -241,6 +269,7 @@ pub async fn upload_image_file(app: tauri::AppHandle, state: State<'_, AppState>
         state.store()?.journal_delete(entry)?;
         return Err(e);
     }
+    lock_after_edit(&state, &w, &id).await;
     Ok(true)
 }
 
@@ -266,6 +295,7 @@ pub async fn set_image(state: State<'_, AppState>, id: String, kind: String, url
         if after > before && before > 0 {
             w.move_image(&id, kind, after - 1, 0).await?;
         }
+        lock_after_edit(&state, &w, &id).await;
         resync(&state, &id).await;
         return Ok(());
     }
@@ -278,6 +308,7 @@ pub async fn set_image(state: State<'_, AppState>, id: String, kind: String, url
         state.store()?.journal_delete(entry)?;
         return Err(e);
     }
+    lock_after_edit(&state, &w, &id).await;
     resync(&state, &id).await;
     Ok(())
 }
@@ -297,7 +328,10 @@ pub async fn main_backdrop(state: State<'_, AppState>, id: String, index: u32) -
     if index > 50 {
         return Err(Error::msg("bad index"));
     }
-    state.writer().await?.move_image(&id, "Backdrop", index, 0).await
+    let w = state.writer().await?;
+    w.move_image(&id, "Backdrop", index, 0).await?;
+    lock_after_edit(&state, &w, &id).await;
+    Ok(())
 }
 
 /// Removes one picture. A copy is kept so it can be put back with Undo.
@@ -327,6 +361,7 @@ pub async fn remove_image(state: State<'_, AppState>, id: String, kind: String, 
         state.store()?.journal_delete(entry)?;
         return Err(e);
     }
+    lock_after_edit(&state, &w, &id).await;
     resync(&state, &id).await;
     Ok(())
 }
@@ -409,6 +444,14 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
         state.store()?.journal_mark_undone(change_id)?;
         return Ok(());
     }
+    if ch.action == "subtitle_timing" {
+        crate::subsync::undo_timing(&ch.old_value)?;
+        state.store()?.journal_mark_undone(change_id)?;
+        if let (Ok(w), true) = (state.writer().await, valid_item_id(&ch.target)) {
+            let _ = w.refresh_light(&ch.target).await;
+        }
+        return Ok(());
+    }
     if ch.action == "file_trashed" {
         crate::library::undo_trash(&ch.old_value)?;
         state.store()?.journal_mark_undone(change_id)?;
@@ -451,6 +494,13 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
             // Index 0 replaces the main picture; for backdrops Jellyfin adds it back at the end.
             w.upload_image(id, kind, 0, &bytes, ct).await?;
         }
+        "library_options" => {
+            check_id(&ch.target)?;
+            crate::library::undo_library_options(&w, &ch.target, &ch.old_value).await?;
+        }
+        "task_triggers" => {
+            crate::backend::undo_task_triggers(&w, &ch.target, &ch.old_value).await?;
+        }
         "collection" => {
             crate::collections::undo(&w, &ch.target, &ch.old_value, &ch.new_value).await?;
         }
@@ -471,7 +521,9 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
 #[tauri::command]
 pub async fn refresh_item(state: State<'_, AppState>, id: String, replace_all: bool) -> Result<()> {
     check_id(&id)?;
-    state.writer().await?.refresh(&id, replace_all).await
+    let w = state.writer().await?;
+    unlock_for_refresh(&w, &id).await?;
+    w.refresh(&id, replace_all).await
 }
 
 #[tauri::command]

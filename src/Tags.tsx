@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, errorText, Status, TagStat } from "./api";
 import { track, useEpoch } from "./activity";
-import { askChoice, Icon } from "./ui";
+import { askChoice, BulkSelect, Icon, SettingsLink, useUndoableSet } from "./ui";
 import { askConfirm } from "./confirm";
 
 /** "sci-fi", "Sci Fi", "Science Fiction" → the same key, to suggest merges. */
@@ -15,14 +15,15 @@ export default function Tags({ status }: { status: Status }) {
   const [stats, setStats] = useState<TagStat[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<"genre" | "tag">("genre");
-  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const sel = useUndoableSet<string>();
+  const picked = sel.set;
   const [query, setQuery] = useState("");
   const canEdit = !status.readOnly;
 
   useEffect(() => {
     api.tagStats().then(setStats).catch((e) => setError(errorText(e)));
   }, [epoch]);
-  useEffect(() => setPicked(new Set()), [kind]);
+  useEffect(() => sel.reset(), [kind]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const list = (stats ?? []).filter((t) => t.kind === kind);
   const suggestions = useMemo(() => {
@@ -45,9 +46,9 @@ export default function Tags({ status }: { status: Status }) {
 
   async function run(from: string[], to: string | null) {
     try {
-      const n = await track(to ? `Merging into “${to}”` : `Removing ${from.length} ${kind}${from.length === 1 ? "" : "s"}`, () => api.tagsMerge(kind, from, to));
+      const n = await track(to ? `Merging into “${to}”` : `Removing ${from.length} ${kind}${from.length === 1 ? "" : "s"}`, () => api.tagsMerge(kind, from, to), { stop: "bulk" });
       void n;
-      setPicked(new Set());
+      sel.reset();
     } catch (e) {
       setError(errorText(e));
     }
@@ -66,7 +67,7 @@ export default function Tags({ status }: { status: Status }) {
         </div>
       </div>
       {error && <p className="error">{error}</p>}
-      {!canEdit && <p className="note">Changing genres needs changes switched on in Settings.</p>}
+      {!canEdit && <p className="note">Changing genres needs changes switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
       {suggestions.length > 0 && (
         <section className="card form">
           <h2>Look-alikes</h2>
@@ -83,7 +84,7 @@ export default function Tags({ status }: { status: Status }) {
       )}
       <div className="toolbar">
         <div className="row">
-          <span className="muted small">{list.length} {kind}s{picked.size ? ` · ${picked.size} selected` : ""}</span>
+          <BulkSelect sel={sel} keys={shown.map((t) => t.name)} noun={`${kind}s`} />
           {picked.size > 0 && (
             <>
               <button disabled={!canEdit} onClick={() => void mergeInto([...picked])}>{picked.size > 1 ? "Merge…" : "Rename…"}</button>
@@ -97,7 +98,7 @@ export default function Tags({ status }: { status: Status }) {
       <div className="tag-grid">
         {shown.map((t) => (
           <label key={t.name} className={`tag-cell ${picked.has(t.name) ? "on" : ""}`}>
-            <input type="checkbox" checked={picked.has(t.name)} onChange={() => setPicked((p) => { const n = new Set(p); if (n.has(t.name)) n.delete(t.name); else n.add(t.name); return n; })} />
+            <input type="checkbox" checked={picked.has(t.name)} onChange={() => sel.toggle(t.name)} />
             <span className="grow ellipsis">{t.name}</span>
             <span className="muted small">{t.count}</span>
           </label>

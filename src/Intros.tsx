@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SettingsLink } from "./ui";
 import { listen } from "@tauri-apps/api/event";
 import Hls from "hls.js";
 import { api, errorText, SegEpisode, SegOverview, Span } from "./api";
@@ -31,7 +32,7 @@ export async function autoDetectSeason(seasonId: string, seasonLabel: string): P
       un();
     }
     job.update(saved ? `Markers saved for ${saved} episodes` : "Nothing sure enough to save", 1);
-  }, { reload: false }).catch(() => undefined);
+  }, { reload: false, stop: "detect" }).catch(() => undefined);
 }
 
 /** Removes every marker of `kinds` ("Intro" | "Outro" | "Recap") in the given seasons. */
@@ -125,8 +126,8 @@ interface Flag {
   actions: { label: string; danger?: boolean; run: () => void }[];
 }
 
-export function IntrosTab({ seasonId, seasonName, canEdit, onSettings, show }: {
-  seasonId: string; seasonName?: string; canEdit: boolean; onSettings: () => void;
+export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
+  seasonId: string; seasonName?: string; canEdit: boolean; onSettings?: () => void;
   /** When opened for a whole show: offers removing markers in every season. */
   show?: { name: string; seasonIds: string[]; onChanged?: () => void };
 }) {
@@ -382,11 +383,11 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings, show }: {
             <button onClick={() => shift(1)} aria-label="Later">+</button>
           </div>
           <button className="outline" disabled={!!progress || !ov.ffmpeg} onClick={() => void detect()}>{progress ? "Listening…" : "Auto-detect this season"}</button>
-          {!ov.ffmpeg && <p className="muted small">Auto-detect needs ffmpeg. <button className="link" onClick={onSettings}>How to install</button></p>}
+          {!ov.ffmpeg && <p className="muted small">Auto-detect needs ffmpeg. <SettingsLink section="tools">How to install</SettingsLink></p>}
           <button className="primary" disabled={!changes.length || saving || !canEdit || !ov.canWriteSegments} onClick={() => void saveAll()}>
             {saving ? "Saving…" : `Save ${changes.length || ""} change${changes.length === 1 ? "" : "s"} to Jellyfin`}
           </button>
-          {!canEdit && <p className="muted small">Saving needs changes to Jellyfin switched on in Settings.</p>}
+          {!canEdit && <p className="muted small">Saving needs changes to Jellyfin switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
           {canEdit && !ov.canWriteSegments && <p className="muted small">To save, install the “MediaSegments API” plugin in Jellyfin (Dashboard → Plugins → Catalog) and restart Jellyfin.</p>}
         </div>
 
@@ -410,7 +411,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings, show }: {
             <div className="seg wide3">
               {([["Recap", "recaps"], ["Intro", "intros"], ["Outro", "credits"]] as const).map(([k, label]) => (
                 <button key={k} disabled={!canEdit} onClick={() => void askConfirm(`Remove all ${label} in every season of ${show.name}?`, { okLabel: `Remove ${label}`, danger: true }).then((ok) => {
-                  if (ok) void track(`Removing ${label}`, (job) => removeSegments(show.seasonIds, [k], job)).then(() => { show.onChanged?.(); void load(); });
+                  if (ok) void track(`Removing ${label}`, (job) => removeSegments(show.seasonIds, [k], job), { cancellable: true }).catch(() => undefined).then(() => { show.onChanged?.(); void load(); });
                 })}>Remove {label}</button>
               ))}
             </div>

@@ -5,6 +5,7 @@ import { api, cleanTitle, errorText, imageUrl, PlayInfo, ScoredSub, Status, SubT
 import { autoDetectSeason, fmt } from "./Intros";
 import { prefs, setPrefs, subCss, usePrefs, type SubStyle } from "./prefs";
 import { nav } from "./nav";
+import { Icon, SettingsLink } from "./ui";
 
 const TICKS = 10_000_000;
 
@@ -54,6 +55,8 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   const [error, setError] = useState<string | null>(null);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+  // "start": stream not ready yet (show the title card); "buffer": waiting for data while playing.
+  const [loadState, setLoadState] = useState<"start" | "buffer" | "ok">("start");
   const [pausedLong, setPausedLong] = useState(false);
   const [sub, setSub] = useState<number>(-1);
   const [subUrls, setSubUrls] = useState<Record<number, string>>({});
@@ -101,6 +104,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     let token: string | null = null;
     let cancelled = false;
     setError(null);
+    setLoadState((s) => (s === "start" ? s : "buffer"));
     api
       .playStart(id, 0, session.audio)
       .then(async (pi) => {
@@ -417,6 +421,36 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     }
   }
 
+  /** Lines the shown subtitle up with the speech, fixes the file, and reloads it here. */
+  async function autoTiming() {
+    if (sub < 0) return;
+    setOnlineBusy("timing");
+    try {
+      const d = await api.details(id);
+      const stream = (d.item.MediaStreams ?? []).find((m) => m.Type === "Subtitle" && m.Index === sub);
+      if (!stream?.IsExternal) {
+        say("This subtitle is built into the video; use − and + to shift it.", 3000);
+        return;
+      }
+      say("Listening to the audio…", 20000);
+      const r = await api.subtitleSync(id, sub, true);
+      if (!r.applied) {
+        say(r.fit.after - r.fit.before < 0.02 ? "Timing already looks right" : "Not sure enough to change it; use − and +", 3000);
+        return;
+      }
+      const t = tracks.find((x) => x.index === sub);
+      if (t) {
+        const u = await loadTrack(t);
+        if (u) setSubUrls((m) => ({ ...m, [sub]: u }));
+      }
+      say(`Timing fixed (${r.fit.offset > 0 ? "+" : ""}${r.fit.offset.toFixed(1)} s)`, 2500);
+    } catch (e) {
+      say(errorText(e), 3500);
+    } finally {
+      setOnlineBusy(null);
+    }
+  }
+
   /** Shift+C: Off → each subtitle → Off. */
   function cycleSubtitles() {
     if (!loadedTracks.length) return void toggleMainSubs();
@@ -506,12 +540,17 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   const subBottom = controls || !playing ? Math.max(p.subStyle.bottom, 19) : p.subStyle.bottom;
 
   return (
-    <div className={`player ${controls ? "" : "hide"}`} onMouseMove={wake}>
+    <div className={`player ${controls && loadState !== "start" ? "" : "hide"} ${loadState === "start" ? "starting" : ""}`} onMouseMove={wake}>
       <video
         ref={video}
         onClick={toggle}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onPlay={() => setPlaying(true)}
+        onWaiting={() => setLoadState((s) => (s === "start" ? s : "buffer"))}
+        onPlaying={() => setLoadState("ok")}
+        onCanPlay={() => setLoadState((s) => (s === "start" ? "ok" : s))}
+        onSeeking={() => setLoadState((s) => (s === "start" ? s : "buffer"))}
+        onSeeked={() => setLoadState((s) => (s === "buffer" ? "ok" : s))}
         onPause={() => setPlaying(false)}
         onEnded={() => {
           if (tokenRef.current) void api.playProgress(tokenRef.current, 0, true).catch(() => undefined);
@@ -520,7 +559,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
         }}
         crossOrigin="anonymous"
       >
-        {Object.entries(subUrls).map(([idx, u]) => <track key={`${session.n}-${idx}`} kind="subtitles" src={u} label={idx} />)}
+        {Object.entries(subUrls).map(([idx, u]) => <track key={`${session.n}-${idx}-${u}`} kind="subtitles" src={u} label={idx} />)}
       </video>
 
       {cue && (
@@ -573,6 +612,19 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
         </div>
       </div>
 
+      {loadState === "start" && !error && (
+        <div className="p-starting">
+          {info?.about && <img className="p-pause-art" src={imageUrl(info.about.artId, "Backdrop", 1600)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />}
+          <div className="p-pause-shade" />
+          <div className="p-starting-body">
+            {info?.about ? <PauseLogo artId={info.about.artId} title={info.title} /> : null}
+            {info?.subtitle && <div className="p-pause-sub">{info.subtitle}</div>}
+            <div className="p-loader"><span className="spinner big" /> {info ? "Starting the stream…" : "Getting ready…"}</div>
+            <button className="link small" onClick={onClose}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {loadState === "buffer" && !error && <div className="p-buffer"><span className="spinner big" /></div>}
       {error && <div className="p-error">{error}</div>}
       {toast && <div className="p-toast">{toast}</div>}
       {askResume !== null && (
@@ -621,8 +673,11 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
                   <span className={`small strong ${o.score >= 85 ? "ok" : o.score >= 60 ? "warn" : "bad"}`}>{onlineBusy === o.sub.Id ? "…" : `${o.score}${o.score === 100 ? " · Best match" : ""}`}</span>
                 </button>
               ))}
-              {status?.readOnly && <div className="small muted">Downloading needs changes switched on in Settings.</div>}
+              {status?.readOnly && <div className="small muted">Downloading needs changes switched on. <SettingsLink section="changes">Turn them on</SettingsLink></div>}
             </>
+          )}
+          {sub >= 0 && !status?.readOnly && (
+            <button className="p-opt" disabled={!!onlineBusy} onClick={() => void autoTiming()}><span><Icon name="wand" size={14} /> Fix timing automatically</span><span className="small muted">{onlineBusy === "timing" ? "Listening…" : ""}</span></button>
           )}
           <div className="p-timing">
             <span className="muted small">Timing</span>

@@ -120,9 +120,12 @@ pub fn disconnect(state: State<'_, AppState>) -> Result<()> {
 }
 
 #[tauri::command]
-pub async fn sync_library(state: State<'_, AppState>) -> Result<SyncResult> {
+pub async fn sync_library(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<SyncResult> {
+    use tauri::Emitter;
     let client = state.reader().await?;
     let views = client.views().await.unwrap_or_default();
+    let names: std::collections::HashMap<String, String> = views.iter().map(|(id, n, _)| (id.clone(), n.clone())).collect();
+    let n_libs = views.len().max(1);
 
     let mut items = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -132,11 +135,18 @@ pub async fn sync_library(state: State<'_, AppState>) -> Result<SyncResult> {
     } else {
         views.iter().map(|(id, _, _)| (Some(id.clone()), id.clone())).collect()
     };
-    for (parent, lib) in &parents {
+    crate::cancel::begin("sync");
+    for (li, (parent, lib)) in parents.iter().enumerate() {
         let mut start = 0u64;
         loop {
+            crate::cancel::check("sync")?;
             let page = client.items_page(parent.as_deref(), start, PAGE).await?;
             let got = page.items.len() as u64;
+            let part = if page.total_record_count > 0 { ((start + got) as f64 / page.total_record_count as f64).min(1.0) } else { 1.0 };
+            let _ = app.emit("sync-progress", serde_json::json!({
+                "progress": (li as f64 + part) / n_libs as f64,
+                "label": names.get(lib).cloned().unwrap_or_default(),
+            }));
             for it in page.items.into_iter().filter_map(|i| i.into_new(lib)) {
                 if seen.insert(it.id.clone()) {
                     items.push(it);

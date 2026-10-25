@@ -14,6 +14,9 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("Key storage problem: {0}")]
     Keyring(String),
+    /// The user pressed Stop. The app shows this quietly, not as a problem.
+    #[error("Stopped.")]
+    Stopped,
 }
 
 impl Serialize for Error {

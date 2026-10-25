@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, Card, errorText, imageUrl, Status } from "./api";
 import { track, useEpoch } from "./activity";
 import { nav } from "./nav";
-import { askChoice, CardTile } from "./ui";
+import { askChoice, CardTile, SettingsLink } from "./ui";
 
 /** Jellyfin collections (box sets): browse, make new ones, add and remove titles. */
 export default function Collections({ status, selected }: { status: Status; selected: string | null }) {
@@ -68,13 +68,27 @@ export default function Collections({ status, selected }: { status: Status; sele
     );
   }
 
+  const day = Math.floor(Date.now() / 86_400_000);
+  const spot = list && list.length ? list[day % list.length] : null;
   return (
     <div className="pg">
+      {spot && (
+        <section className="billboard" onClick={() => nav.route({ view: "collections", collection: spot.id })}>
+          <img className="bb-art" src={imageUrl(spot.artId, "Backdrop", 1600)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+          <div className="bb-shade" />
+          <div className="bb-text">
+            <div className="bb-why">Collection of the day</div>
+            <div className="bb-title">{spot.title}</div>
+            <div className="bb-meta">{spot.subtitle}</div>
+            <div className="row"><button className="primary bb-btn">Open collection</button></div>
+          </div>
+        </section>
+      )}
       <div className="pg-head">
         <h1>Collections</h1>
         <div className="pg-actions"><button className="primary" disabled={!canEdit} onClick={() => void create()}>+ New collection</button></div>
       </div>
-      {!canEdit && <p className="note">Making and changing collections needs changes switched on in Settings.</p>}
+      {!canEdit && <p className="note">Making and changing collections needs changes switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
       {error && <p className="error">{error}</p>}
       {list === null && !error && <p className="muted">Loading…</p>}
       {list && list.length === 0 && (

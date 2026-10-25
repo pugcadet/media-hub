@@ -28,7 +28,7 @@ export default function Duplicates({ status }: { status: Status }) {
     setBusy(true);
     setError(null);
     try {
-      setGroups(await track("Looking for duplicates", () => api.findDuplicates(), { reload: false }));
+      setGroups(await track("Looking for duplicates", () => api.findDuplicates(), { reload: false, cancellable: true }));
     } catch (e) {
       setError(errorText(e));
     } finally {

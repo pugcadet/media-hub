@@ -22,7 +22,7 @@ export interface Schedule {
 }
 
 export interface Prefs {
-  mode: "manage" | "watch";
+  mode: "manage" | "watch" | "music";
   subStyle: SubStyle;
   /** Language C switches on (3-letter code). */
   subLang: string;
@@ -35,12 +35,28 @@ export interface Prefs {
   minSubScore: number;
   schedule: Schedule;
   lastRun: Record<string, string>;
-  /** Shows (series ids) hidden from "Next up" in Media Hub. */
+  /** Shows (series ids) hidden from "Watching". */
   hiddenNextUp: string[];
+  /** Series id → episode Media Hub marked as watched to take the show off Jellyfin's Next Up. */
+  nextUpMarks: Record<string, string>;
+  /** Also mark today's picks as favourites (they show on Infuse's home screen). */
+  picksAsFavorites: boolean;
+  /** Picks Media Hub made a favourite (only these are unmarked again). */
+  pickFavs: string[];
+  /** Subtitle languages that must be there; the others are only fetched when a perfect match exists. */
+  subRequired: string[];
+  /** The first-run checklist on Home was closed. */
+  setupDone: boolean;
   /** Library folders (names or path parts) the subtitle downloader leaves alone. */
   subSkipFolders: string[];
   /** Run intro detection in the background when you play a season without markers. */
   autoDetectIntros: boolean;
+  /**
+   * Year in show names. "folder": "Bluey (2018)/Season 01/Bluey - S01E01.mkv" (what Jellyfin
+   * recommends; existing names are never changed just for a year). "everywhere": also in
+   * every episode file. "never": no year for shows at all. Movies always get the year.
+   */
+  showYear: "folder" | "everywhere" | "never";
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -55,8 +71,14 @@ export const DEFAULT_PREFS: Prefs = {
   schedule: { enabled: false, hour: 4, subtitles: true, art: true, picks: true, scan: true },
   lastRun: {},
   hiddenNextUp: [],
+  nextUpMarks: {},
+  picksAsFavorites: false,
+  pickFavs: [],
+  subRequired: ["eng"],
+  setupDone: false,
   subSkipFolders: [],
   autoDetectIntros: true,
+  showYear: "folder",
 };
 
 const KEY = "mediahub.prefs.v1";
@@ -73,6 +95,9 @@ function load(): Prefs {
       schedule: { ...DEFAULT_PREFS.schedule, ...(p.schedule ?? {}) },
       lastRun: { ...(p.lastRun ?? {}) },
       hiddenNextUp: p.hiddenNextUp ?? [],
+      nextUpMarks: p.nextUpMarks ?? {},
+      pickFavs: p.pickFavs ?? [],
+      subRequired: p.subRequired ?? ["eng"],
       subSkipFolders: p.subSkipFolders ?? [],
     };
   } catch {
@@ -108,6 +133,20 @@ export function usePrefs(): Prefs {
   );
 }
 
+/** A TV naming pattern with the year where the "show year" setting wants it. */
+export function withShowYear(template: string, mode: Prefs["showYear"] = current.showYear): string {
+  if (mode === "everywhere") return template;
+  if (mode === "never") return template.split("< ({year})>").join("");
+  const i = template.indexOf("/");
+  if (i < 0) return template.split("< ({year})>").join("");
+  return template.slice(0, i) + template.slice(i).split("< ({year})>").join("");
+}
+
+/** Shows: leave names that only differ by a year alone (all modes but "everywhere"). */
+export function yearOptional(): boolean {
+  return current.showYear !== "everywhere";
+}
+
 const FONTS: Record<SubStyle["font"], string> = {
   sans: '"Manrope", -apple-system, "Helvetica Neue", Arial, sans-serif',
   serif: 'Georgia, "Times New Roman", serif',
@@ -140,5 +179,15 @@ export function subSkipped(path: string | undefined): boolean {
   return prefs().subSkipFolders.some((f) => {
     const x = f.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").toLowerCase();
     return !!x && p.includes(`/${x}/`);
+  });
+}
+
+/** Languages to fetch for, with the lowest score each may have: needed ones use your
+ * minimum score, "if available" ones only a perfect match. */
+export function subPlan(subLangs: string[]): { lang: string; minScore: number; needed: boolean }[] {
+  const p = prefs();
+  return subLangs.map((l) => {
+    const needed = p.subRequired.includes(l);
+    return { lang: l, minScore: needed ? p.minSubScore : 100, needed };
   });
 }

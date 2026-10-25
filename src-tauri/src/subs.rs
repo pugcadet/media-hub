@@ -132,8 +132,11 @@ pub fn score(file_stem: &str, sub: &SubInfo) -> (u32, Vec<String>) {
         points -= 10.0;
         reasons.push("Forced only (partial)".into());
     }
-    if sub.hearing_impaired == Some(true) {
-        reasons.push("For hearing impaired".into());
+    let name_l = name.to_lowercase();
+    let sdh_name = name_l.contains("sdh") || name_l.contains(".hi.") || name_l.contains("[hi]") || name_l.contains("hearing");
+    if sub.hearing_impaired == Some(true) || sdh_name {
+        points -= 8.0;
+        reasons.push("For hearing impaired (sound descriptions)".into());
     }
     (points.round().clamp(1.0, 99.0) as u32, reasons)
 }
@@ -148,9 +151,12 @@ pub fn rank(file_stem: &str, subs: Vec<SubInfo>) -> Vec<Scored> {
             Scored { sub, score, reasons }
         })
         .collect();
+    // Same score: plain subtitles before ones with sound descriptions, then more downloaded.
+    let hi = |s: &Scored| s.sub.hearing_impaired == Some(true) || s.reasons.iter().any(|r| r.starts_with("For hearing impaired"));
     out.sort_by(|a, b| {
         b.score
             .cmp(&a.score)
+            .then(hi(a).cmp(&hi(b)))
             .then(b.sub.download_count.unwrap_or(0).cmp(&a.sub.download_count.unwrap_or(0)))
     });
     out

@@ -112,9 +112,40 @@ export interface PlanArgs {
   matchId: string | null;
   renameFolder: boolean | null;
   seasonFolders: boolean;
+  /** Shows: names that differ only by a "(2018)" year are left as they are. */
+  yearOptional?: boolean;
   /** Movies: only this file (and its subtitles), matched to the Jellyfin item `itemId`. */
   onlyFile?: string | null;
   itemId?: string | null;
+}
+
+export interface TuneRow {
+  scope: "library" | "task";
+  target: string;
+  targetName: string;
+  key: string;
+  label: string;
+  detail: string;
+  current: unknown;
+  recommended: unknown;
+  ok: boolean;
+}
+
+export interface Tuning {
+  rows: TuneRow[];
+  version: string;
+  markersOk: boolean;
+  lockEdits: boolean;
+}
+
+/**
+ * After renaming: tells Jellyfin to look at the folders around these (their parents, so
+ * renamed folders are seen too). Falls back to a full scan for top-level folders.
+ */
+export async function scanAround(folders: string[]): Promise<void> {
+  const parents = [...new Set(folders.map((f) => f.split("/").slice(0, -1).join("/")))];
+  const list = parents.some((p) => p === "") ? [] : parents;
+  await api.scanFolders(list).catch(() => api.libraryScan().catch(() => undefined));
 }
 
 export interface Batch {
@@ -125,7 +156,7 @@ export interface Batch {
   example: string;
 }
 
-export type ImageKind = "Primary" | "Backdrop" | "Logo" | "Thumb" | "Banner" | "Art" | "Disc";
+export type ImageKind = "Primary" | "Backdrop" | "Logo" | "Thumb" | "Banner" | "Art" | "Disc" | "Chapter";
 
 export interface Change {
   id: number;
@@ -161,7 +192,10 @@ export interface JfItem {
   Path?: string;
   ChildCount?: number;
   PreferredMetadataLanguage?: string;
-  UserData?: { Played?: boolean; PlaybackPositionTicks?: number };
+  UserData?: { Played?: boolean; PlaybackPositionTicks?: number; IsFavorite?: boolean };
+  MediaSources?: { Container?: string; Size?: number; Bitrate?: number; Path?: string; MediaStreams?: JfStream[] }[];
+  MediaStreams?: JfStream[];
+  Chapters?: { Name?: string; StartPositionTicks: number; ImageTag?: string }[];
   SeriesId?: string;
   SeriesName?: string;
   SeasonId?: string;
@@ -174,8 +208,25 @@ export interface JfItem {
   Status?: string;
 }
 
+export interface JfStream {
+  Type: string;
+  Index?: number;
+  Language?: string;
+  IsForced?: boolean;
+  IsExternal?: boolean;
+  IsHearingImpaired?: boolean;
+  Codec?: string;
+  DisplayTitle?: string;
+  Title?: string;
+  Width?: number;
+  Height?: number;
+  VideoRange?: string;
+  Channels?: number;
+  BitRate?: number;
+  Path?: string;
+}
+
 export interface JfChild extends JfItem {
-  MediaStreams?: { Type: string; Language?: string; IsForced?: boolean }[];
   SeriesId?: string;
 }
 
@@ -459,6 +510,40 @@ export interface Alert {
   level: "error" | "warn" | "info";
   title: string;
   detail: string;
+  /** "settings:<section>" or a screen name */
+  fix: string;
+}
+
+export interface MusicItem {
+  id: string;
+  kind: "album" | "artist" | "track" | "playlist";
+  name: string;
+  artist: string;
+  album: string;
+  albumId: string | null;
+  year: number | null;
+  index: number | null;
+  disc: number | null;
+  duration: number;
+  artId: string;
+  hasArt: boolean;
+  count: number | null;
+  favorite: boolean;
+}
+
+export interface LibraryLang {
+  id: string;
+  name: string;
+  kind: string;
+  language: string;
+  country: string;
+}
+
+export interface SyncFit {
+  offset: number;
+  scale: number;
+  before: number;
+  after: number;
 }
 
 export interface JournalRow {
@@ -642,8 +727,17 @@ export const api = {
   revealRel: (rel: string) => invoke<void>("reveal_rel", { rel }),
   itemFolder: (id: string) => invoke<string>("item_folder", { id }),
   libraryScan: () => invoke<void>("library_scan"),
-  namingCheck: (tvTemplate: string, movieTemplate: string, ids: string[] | null = null) =>
-    invoke<CheckResult>("naming_check", { tvTemplate, movieTemplate, ids }),
+  namingCheck: (tvTemplate: string, movieTemplate: string, ids: string[] | null = null, yearOptional = true) =>
+    invoke<CheckResult>("naming_check", { tvTemplate, movieTemplate, ids, yearOptional }),
+  backendTuning: () => invoke<Tuning>("backend_tuning"),
+  backendSet: (scope: "library" | "task", target: string, key: string, value: unknown) => invoke<void>("backend_set", { scope, target, key, value }),
+  backendApplyRecommended: () => invoke<number>("backend_apply_recommended"),
+  backendRunTask: (taskId: string) => invoke<void>("backend_run_task", { taskId }),
+  setLockEdits: (value: boolean) => invoke<void>("set_lock_edits", { value }),
+  lockAll: (lock: boolean, ids: string[] | null = null) => invoke<number>("lock_all", { lock, ids }),
+  /** Asks Jellyfin to look only at these folders (relative to the library folder); "" or none = everything. */
+  scanFolders: (folders: string[]) => invoke<"folders" | "all">("scan_folders", { folders }),
+  cancelJob: (kind: string) => invoke<void>("cancel_job", { kind }),
   namingCheckLast: () => invoke<CheckResult | null>("naming_check_last"),
   namingCheckCancel: () => invoke<void>("naming_check_cancel"),
   playSubtitles: (token: string) => invoke<SubTrack[]>("play_subtitles", { token }),
@@ -655,7 +749,17 @@ export const api = {
   inboxPick: () => invoke<string | null>("inbox_pick"),
   inboxList: () => invoke<[string | null, InboxEntry[]]>("inbox_list"),
   inboxSelect: (name: string) => invoke<ImportSource>("inbox_select", { name }),
-  libraryHealth: () => invoke<HealthRow[]>("library_health"),
+  libraryHealth: (fresh: boolean) => invoke<{ at: number; rows: HealthRow[] }>("library_health", { fresh }),
+  setFavorite: (id: string, favorite: boolean) => invoke<void>("set_favorite", { id, favorite }),
+  libraryLanguages: () => invoke<LibraryLang[]>("library_languages"),
+  setLibraryLanguage: (id: string, language: string, country: string, refresh: boolean) =>
+    invoke<void>("set_library_language", { id, language, country, refresh }),
+  subtitleSync: (id: string, index: number, apply: boolean) =>
+    invoke<{ fit: SyncFit; sure: boolean; applied: boolean; file: string }>("subtitle_sync", { id, index, apply }),
+  musicList: (view: string, parent: string | null, query: string | null, start: number, limit: number) =>
+    invoke<MusicItem[]>("music_list", { view, parent, query, start, limit }),
+  musicPlay: (id: string) => invoke<string>("music_play", { id }),
+  musicStop: (token: string) => invoke<void>("music_stop", { token }),
   missingEpisodes: (seriesId: string) => invoke<MissingReport>("missing_episodes", { seriesId }),
   findDuplicates: () => invoke<DupGroup[]>("find_duplicates"),
   mergeVersions: (ids: string[]) => invoke<void>("merge_versions", { ids }),
@@ -672,6 +776,8 @@ export const api = {
 
 /** Tauri reports errors from Rust as plain strings. */
 export function errorText(e: unknown): string {
+  // Stopping a job isn't a problem: nothing to show.
+  if (e === "Stopped." || (e instanceof Error && e.message === "Stopped.")) return "";
   return typeof e === "string" ? e : e instanceof Error ? e.message : "Something went wrong.";
 }
 

@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { SettingsLink } from "./ui";
 import { listen } from "@tauri-apps/api/event";
 import { api, errorText, ImportSource, InboxEntry, remoteImageUrl, SearchResult, Status } from "./api";
 import { track, useEpoch } from "./activity";
 import { nav } from "./nav";
+import { withShowYear, yearOptional } from "./prefs";
 
 const STYLE = {
   tv: "{show}< ({year})>/{seasondir}/{show}< ({year})> - {sxe}< - {title}>.{ext}",
@@ -135,16 +137,16 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
         // Name the files inside, like the renamer would.
         job.update("Naming the files", null);
         const plan = await api.plan({
-          mode: kind, folder, template: STYLE[kind], show: kind === "tv" ? name : null, year: y,
+          mode: kind, folder, template: kind === "tv" ? withShowYear(STYLE.tv) : STYLE.movie, show: kind === "tv" ? name : null, year: y, yearOptional: yearOptional(),
           findReplace: [], recursive: true, source: "auto", matchId: null, renameFolder: false, seasonFolders: true,
         });
         const ok = plan.ops.filter((o) => o.status === "ok").map((o) => o.from);
         if (ok.length) await api.apply(plan.planId, true, ok);
         // Tell Jellyfin, then wait for it to show up.
         job.update("Asking Jellyfin to scan", null);
-        await api.libraryScan().catch(() => undefined);
+        await api.scanFolders([folder]).catch(() => undefined);
         let found: string | null = null;
-        for (let i = 0; i < 24 && !found; i++) {
+        for (let i = 0; i < 24 && !found && !job.cancelled; i++) {
           await sleep(i === 0 ? 4000 : 5000);
           job.update(`Waiting for Jellyfin to find it (${(i + 1) * 5} s)`);
           await api.sync().catch(() => undefined);
@@ -166,7 +168,7 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
         setDone(null);
         onChanged();
         nav.open(found);
-      });
+      }, { stop: "import" });
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -296,7 +298,7 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
           <div className="applybar">
             <div className="grow muted small">
               Nothing is overwritten; files that are already there are skipped.
-              {status.readOnly ? " Linking and artwork need changes switched on in Settings; the files are still put in place." : " After Jellyfin finds it, the match is linked and missing artwork is filled in."}
+              {status.readOnly ? <> Linking and artwork need changes switched on (<SettingsLink section="changes">turn them on</SettingsLink>); the files are still put in place.</> : " After Jellyfin finds it, the match is linked and missing artwork is filled in."}
             </div>
             <button className="primary" disabled={!!busy || !title.trim() || !dest} onClick={() => void run()}>{busy ?? `Add ${kind === "tv" ? "show" : "movie"}`}</button>
           </div>

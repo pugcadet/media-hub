@@ -15,6 +15,8 @@ export interface Route {
   /** renamer: start on this folder / item */
   folder?: string;
   item?: string;
+  /** settings: section to scroll to */
+  section?: string;
   /** Changes on every menu click, so the screen starts fresh. */
   n?: number;
 }

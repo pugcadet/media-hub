@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api, AutoResult, codesFor, cultures, Culture, errorText, JfChild, languageName, SubOptions } from "./api";
 import { track } from "./activity";
 import { prefs, setPrefs, subSkipped } from "./prefs";
+import { SettingsLink } from "./ui";
+import { askConfirm } from "./confirm";
 
 function useCultures(): Culture[] {
   const [list, setList] = useState<Culture[]>([]);
@@ -49,6 +51,23 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, lang]);
 
+  async function fixTiming(index: number) {
+    setNote(null);
+    try {
+      const r = await track("Checking subtitle timing", () => api.subtitleSync(id, index, false), { reload: false });
+      const shift = `${r.fit.offset > 0 ? "+" : ""}${r.fit.offset.toFixed(1)} s${Math.abs(r.fit.scale - 1) > 0.001 ? " (and a different speed)" : ""}`;
+      if (!r.sure) {
+        setNote(r.fit.after - r.fit.before < 0.02 ? "The timing already looks right." : `It might be off by ${shift}, but not clearly enough to change it automatically. Use the timing buttons in the player instead.`);
+        return;
+      }
+      if (!(await askConfirm(`The subtitle is off by ${shift}. Speech under the text goes from ${Math.round(r.fit.before * 100)}% to ${Math.round(r.fit.after * 100)}%. Fix the file? The original is kept, so you can undo it.`, { okLabel: "Fix it" }))) return;
+      await track("Fixing subtitle timing", () => api.subtitleSync(id, index, true));
+      setNote(`Fixed: shifted ${shift}.`);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
   async function download(subId: string) {
     setBusy(subId);
     setNote(null);
@@ -77,8 +96,9 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
           <div className="chips">
             {opts.current.length === 0 && <span className="muted small">No subtitles yet.</span>}
             {opts.current.map((s) => (
-              <span className="chip static" key={s.index}>
-                {languageName(s.language, list) || "Unknown"}{s.forced ? " (forced)" : ""}{s.external ? "" : " · built in"}
+              <span className="chip static sub-have" key={s.index}>
+                {languageName(s.language, list) || "Unknown"}{s.forced ? " (forced)" : ""}{s.external ? "" : " · built in"}{/sdh|hearing/i.test(s.title) ? " · SDH" : ""}
+                {s.external && canEdit && <button className="link small" title="Line it up with the speech in the video (needs ffmpeg)" onClick={() => void fixTiming(s.index)}>Fix timing</button>}
               </span>
             ))}
           </div>
@@ -105,7 +125,7 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
           </div>
         ))}
       </div>
-      {!canEdit && <p className="muted small">Downloading needs changes to Jellyfin switched on in Settings.</p>}
+      {!canEdit && <p className="muted small">Downloading needs changes to Jellyfin switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
     </section>
   );
 }
@@ -184,7 +204,7 @@ export function EpisodesTab({ id, canEdit, subLangs, onOpen }: { id: string; can
         )}
       </div>
       <p className="muted small">
-        Takes the best match per episode only when it scores at least {minScore} (100 = made for exactly this file). Episodes with built-in subtitles in this language are skipped. Subtitle sites limit downloads per day, so large batches may stop early.{skippedHere ? ` This season is in a folder you skip (Settings), so ${skippedHere} are left out.` : ""}
+        Takes the best match per episode only when it scores at least {minScore} (100 = made for exactly this file). Episodes with built-in subtitles in this language are skipped. Subtitle sites limit downloads per day, so large batches may stop early.{skippedHere ? ` This season is in a folder you switched off, so ${skippedHere} are left out.` : ""} <SettingsLink section="subtitles">Subtitle settings</SettingsLink>
       </p>
       {error && <p className="error">{error}</p>}
       <div className="table">

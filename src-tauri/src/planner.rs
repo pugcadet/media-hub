@@ -44,6 +44,10 @@ pub struct PlanRequest {
     /// Move episodes that sit directly in the show folder into season folders.
     #[serde(default)]
     pub season_folders: bool,
+    /// Shows: a name that only differs by a "(2018)" year is left as it is (renaming a
+    /// show in Jellyfin loses its watched status and markers, so a year alone isn't worth it).
+    #[serde(default)]
+    pub year_optional: bool,
     /// Ids of the matched show (tmdb/tvdb), used for {tmdbtag}/{tvdbtag}. Filled by the app.
     #[serde(default, skip_deserializing)]
     pub ids: HashMap<String, String>,
@@ -179,6 +183,13 @@ fn unparsed(f: &str, why: String, season: Option<u32>, eps: Vec<u32>) -> PlanOp 
     o.episodes = eps;
     o.verified = false;
     o
+}
+
+/// The name with any " (2018)" year taken out, to compare names that differ only by it.
+pub fn without_year(name: &str) -> String {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"\s*\((?:19|20)\d{2}\)").expect("year pattern"));
+    re.replace_all(name, "").to_string()
 }
 
 /// Sets ok / unchanged / conflict. Files are checked on their own step (inside their
@@ -389,7 +400,10 @@ pub fn plan_tv(
             }
         };
         let parts = parts_of(&rendered, true);
-        let new_name = name_with_rules(&parts.file, &rules);
+        let mut new_name = name_with_rules(&parts.file, &rules);
+        if req.year_optional && without_year(name) == without_year(&new_name) {
+            new_name = name.to_string();
+        }
         if top_name.is_none() {
             top_name = parts.top.clone();
         }
@@ -459,7 +473,7 @@ pub fn plan_tv(
     };
     let mut top_map: Option<(String, String)> = None;
     if let (true, Some(top)) = (rename_top && !folder.is_empty(), &top_name) {
-        if folder_name != top {
+        if folder_name != top && !(req.year_optional && without_year(folder_name) == without_year(top)) {
             let parent = split_path(folder).0;
             let new_full = join(parent, top);
             top_map = Some((folder.to_string(), new_full.clone()));
@@ -607,6 +621,7 @@ mod tests {
             find_replace: vec![],
             rename_folder: None,
             season_folders: false,
+            year_optional: false,
             ids: HashMap::new(),
         }
     }
@@ -697,6 +712,27 @@ mod tests {
         assert_eq!(ops[0].status, "unchanged");
         assert_eq!(guess_show("Downloads", &f), ("Bluey".to_string(), Some(2018)));
         assert_eq!(guess_show("TV/Season 1", &f).0, "Bluey");
+    }
+
+    #[test]
+    fn show_year_can_be_optional() {
+        // Folder has the year, files don't: with the year optional nothing changes.
+        let f = files(&["TV/Bluey (2018)/Season 01/Bluey - S01E01 - Magic Xylophone.mkv", "TV/Bluey/Season 01/x.txt"]);
+        let mut r = req("TV/Bluey (2018)", TV);
+        r.year = Some(2018);
+        let ops = plan_tv(&f[..1], &r, &HashMap::new(), &nothing_exists).unwrap();
+        assert_eq!(ops[0].status, "ok", "strict: the year is added to the file");
+        r.year_optional = true;
+        let ops = plan_tv(&f[..1], &r, &HashMap::new(), &nothing_exists).unwrap();
+        assert!(ops.iter().all(|o| o.status == "unchanged"), "{ops:#?}");
+        // A show folder without the year isn't renamed only to add it.
+        let f = files(&["TV/Bluey/Season 01/Bluey - S01E01 - Magic Xylophone.mkv"]);
+        let mut r = req("TV/Bluey", TV);
+        r.year = Some(2018);
+        r.year_optional = true;
+        let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
+        assert!(ops.iter().all(|o| o.status == "unchanged"), "{ops:#?}");
+        assert_eq!(without_year("Bluey (2018) - S01E01.mkv"), "Bluey - S01E01.mkv");
     }
 
     #[test]

@@ -420,8 +420,9 @@ impl Client {
         if !valid_item_id(id) {
             return Err(Error::msg("bad id"));
         }
-        let kind = image_kind(kind).ok_or_else(|| Error::msg("bad image kind"))?;
-        Ok(if index == 0 {
+        // Chapter pictures can be read (never written).
+        let kind = if kind == "Chapter" { "Chapter" } else { image_kind(kind).ok_or_else(|| Error::msg("bad image kind"))? };
+        Ok(if index == 0 && kind != "Chapter" {
             format!("/Items/{id}/Images/{kind}")
         } else {
             format!("/Items/{id}/Images/{kind}/{index}")
@@ -590,7 +591,8 @@ impl Client {
     /// Only paths under /videos/ are allowed, so a stream token can't be used for anything else.
     pub async fn raw_get(&self, path_query: &str) -> Result<(Vec<u8>, String)> {
         let path = path_query.split('?').next().unwrap_or("");
-        if !path.to_lowercase().starts_with("/videos/") || path.contains("..") || path_query.contains("://") {
+        let low = path.to_lowercase();
+        if !(low.starts_with("/videos/") || low.starts_with("/audio/")) || path.contains("..") || path_query.contains("://") {
             return Err(Error::msg("bad stream path"));
         }
         let resp = self.send(self.http.get(self.url(path_query))).await?;
@@ -1225,8 +1227,9 @@ impl Client {
     /// Any /Items query as the chosen user (all pages up to `max`).
     pub async fn items_query(&self, mut q: Vec<(&'static str, String)>, max: usize) -> Result<Vec<serde_json::Value>> {
         let mut out = Vec::new();
-        let page = 500usize;
+        let page = 1000usize.min(max.max(1));
         q.push(("Limit", page.to_string()));
+        q.push(("EnableTotalRecordCount", "false".to_string()));
         loop {
             let mut qq = q.clone();
             qq.push(("StartIndex", out.len().to_string()));
@@ -1307,5 +1310,122 @@ impl Writer {
         let clean: Vec<String> = entry_ids.iter().filter(|e| e.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).cloned().collect();
         let req = self.c.http.delete(self.c.url(&format!("/Playlists/{id}/Items"))).query(&[("entryIds", clean.join(","))]);
         self.c.send(req).await.map(|_| ())
+    }
+}
+
+// ------------------------------------------------------------- 0.12 additions
+
+impl Client {
+    /// All user views with their kind ("movies", "tvshows", "boxsets", "playlists", "music" …).
+    pub async fn all_views(&self) -> Result<Vec<(String, String, String)>> {
+        let v: serde_json::Value = self.get_json("/UserViews", &self.with_user(vec![])).await?;
+        Ok(v.get("Items")
+            .and_then(|i| i.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| {
+                        let kind = x.get("CollectionType").and_then(|c| c.as_str()).unwrap_or("mixed").to_string();
+                        Some((x.get("Id")?.as_str()?.replace('-', ""), x.get("Name")?.as_str()?.to_string(), kind))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Libraries as the server sets them up (with their options).
+    pub async fn virtual_folders(&self) -> Result<Vec<serde_json::Value>> {
+        let v: serde_json::Value = self.get_json("/Library/VirtualFolders", &[]).await?;
+        Ok(v.as_array().cloned().unwrap_or_default())
+    }
+
+    /// Album artists, sorted by name.
+    pub async fn album_artists(&self, query: &str, start: u64, limit: u64) -> Result<serde_json::Value> {
+        let mut q = vec![
+            ("SortBy", "SortName".to_string()),
+            ("StartIndex", start.to_string()),
+            ("Limit", limit.min(500).to_string()),
+            ("Fields", "ChildCount".to_string()),
+        ];
+        if !query.is_empty() {
+            q.push(("SearchTerm", query.chars().take(100).collect()));
+        }
+        self.get_json("/Artists/AlbumArtists", &self.with_user(q)).await
+    }
+}
+
+impl Writer {
+    pub async fn set_favorite(&self, id: &str, favorite: bool) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let user = self.c.user.clone().ok_or_else(|| Error::msg("Choose a user in Settings first."))?;
+        let url = self.c.url(&format!("/UserFavoriteItems/{id}"));
+        let req = if favorite { self.c.http.post(url).header("Content-Length", "0") } else { self.c.http.delete(url) };
+        if self.c.send(req.query(&[("userId", user.as_str())])).await.is_ok() {
+            return Ok(());
+        }
+        // Jellyfin before 10.9
+        let url = self.c.url(&format!("/Users/{user}/FavoriteItems/{id}"));
+        let req = if favorite { self.c.http.post(url).header("Content-Length", "0") } else { self.c.http.delete(url) };
+        self.c.send(req).await.map(|_| ())
+    }
+
+    pub async fn set_library_options(&self, id: &str, options: &serde_json::Value) -> Result<()> {
+        let body = serde_json::json!({ "Id": id, "LibraryOptions": options });
+        let req = self.c.http.post(self.c.url("/Library/VirtualFolders/LibraryOptions")).json(&body);
+        self.c.send(req).await.map(|_| ())
+    }
+
+    /// Fetches titles and summaries again for everything in a library (pictures stay).
+    pub async fn refresh_library_metadata(&self, id: &str) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let q = vec![
+            ("Recursive", "true".to_string()),
+            ("metadataRefreshMode", "FullRefresh".to_string()),
+            ("imageRefreshMode", "Default".to_string()),
+            ("replaceAllMetadata", "true".to_string()),
+            ("replaceAllImages", "false".to_string()),
+        ];
+        self.post(&format!("/Items/{id}/Refresh"), &q, None).await
+    }
+}
+
+// ------------------------------------------------------------- 0.13 additions
+
+impl Client {
+    /// Jellyfin's scheduled tasks (scans, chapter pictures, trickplay …) with their triggers.
+    pub async fn scheduled_tasks(&self) -> Result<Vec<serde_json::Value>> {
+        let v: serde_json::Value = self.get_json("/ScheduledTasks", &[("isHidden", "false".to_string())]).await?;
+        Ok(v.as_array().cloned().unwrap_or_default())
+    }
+
+    /// Tells Jellyfin that these folders or files changed, so it looks only there instead of
+    /// scanning every library. Paths are as the server sees them.
+    pub async fn media_updated(&self, server_paths: &[String]) -> Result<()> {
+        if server_paths.is_empty() || server_paths.len() > 200 {
+            return Err(Error::msg("bad paths"));
+        }
+        let updates: Vec<serde_json::Value> = server_paths.iter().map(|p| serde_json::json!({ "Path": p, "UpdateType": "Modified" })).collect();
+        let req = self.http.post(self.url("/Library/Media/Updated")).json(&serde_json::json!({ "Updates": updates }));
+        self.send(req).await.map(|_| ())
+    }
+}
+
+impl Writer {
+    pub async fn set_task_triggers(&self, task_id: &str, triggers: &serde_json::Value) -> Result<()> {
+        if !task_id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') || task_id.is_empty() || task_id.len() > 40 || !triggers.is_array() {
+            return Err(Error::msg("bad task"));
+        }
+        let req = self.c.http.post(self.c.url(&format!("/ScheduledTasks/{task_id}/Triggers"))).json(triggers);
+        self.c.send(req).await.map(|_| ())
+    }
+
+    pub async fn run_task(&self, task_id: &str) -> Result<()> {
+        if !task_id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') || task_id.is_empty() || task_id.len() > 40 {
+            return Err(Error::msg("bad task"));
+        }
+        self.post(&format!("/ScheduledTasks/Running/{task_id}"), &[], None).await
     }
 }

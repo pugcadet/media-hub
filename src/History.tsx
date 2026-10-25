@@ -3,7 +3,7 @@ import { api, Batch, errorText, JournalRow, Status } from "./api";
 import { track, useEpoch } from "./activity";
 import { askConfirm } from "./confirm";
 import { nav } from "./nav";
-import { Icon } from "./ui";
+import { Icon, SettingsLink } from "./ui";
 
 const KIND: Record<string, string> = {
   item_update: "Details", identify: "Identified", image: "Picture", image_removed: "Picture removed", collection: "Collection",
@@ -62,7 +62,7 @@ export default function History({ status }: { status: Status }) {
           <div className="muted small">Every change Media Hub made: details, pictures, subtitles, markers, collections, renames, files moved to the trash folder.</div>
         </div>
       </div>
-      {status.readOnly && <p className="note">Undoing changes in Jellyfin needs changes switched on in Settings.</p>}
+      {status.readOnly && <p className="note">Undoing changes in Jellyfin needs changes switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
       {error && <p className="error">{error}</p>}
       <div className="toolbar">
         <div className="chips">

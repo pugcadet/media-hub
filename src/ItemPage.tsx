@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, Card, cleanTitle, codesFor, cultures, Culture, Details, errorText, imageUrl, ImageKind, ItemEdits, JfChild, JfImage, JfItem,
+  api, Card, CheckRow, cleanTitle, HealthRow, SegSummary, codesFor, cultures, Culture, Details, errorText, imageUrl, ImageKind, ItemEdits, JfChild, JfImage, JfItem,
   languageName, remoteImageUrl, RemoteImage, SearchResult, Status,
 } from "./api";
 import { SubtitlesTab, EpisodesTab } from "./Subtitles";
@@ -10,8 +10,9 @@ import Renamer from "./Renamer";
 import { askConfirm } from "./confirm";
 import { track, useEpoch } from "./activity";
 import { nav, type View } from "./nav";
-import { Icon, itemMenu, openMenu, Row, showPicture } from "./ui";
+import { Icon, itemMenu, openMenu, playTitle, Row, showPicture, SettingsLink } from "./ui";
 import { usePrefs } from "./prefs";
+import { CORE_ART, fixTitles, FixTarget, namesToFix, safeFixes } from "./fixers";
 
 export const ART_KINDS: { kind: ImageKind; label: string; wide: boolean; hint: string }[] = [
   { kind: "Primary", label: "Poster", wide: false, hint: "The main picture in every app." },
@@ -96,9 +97,13 @@ interface Props {
   subLangs: string[];
   titleLang: string;
   status: Status;
+  /** Inside another screen (Metadata and art): no back button, small header. */
+  embedded?: boolean;
+  /** Called with the details each time they load (the studio list updates its dots). */
+  onLoaded?: (d: Details) => void;
 }
 
-export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subLangs, status }: Props) {
+export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subLangs, status, embedded, onLoaded }: Props) {
   const epoch = useEpoch();
   const [d, setD] = useState<Details | null>(null);
   const [tab, setTab] = useState<string>(initialTab ?? "main");
@@ -116,12 +121,13 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
     try {
       const det = await api.details(id);
       setD(det);
+      onLoaded?.(det);
       // Keep what you are typing when the page reloads in the background.
       if (!dirtyRef.current) setForm(toForm(det.item));
     } catch (e) {
       setMessage({ text: errorText(e), error: true });
     }
-  }, [id]);
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => void load(), [load, epoch]);
 
   async function run(label: string, f: () => Promise<void>, done: string) {
@@ -157,7 +163,6 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
   const edits = diff(toForm(item), form);
   const dirty = Object.keys(edits).length > 0;
   dirtyRef.current = dirty;
-  const linked = (k: string) => !!item.ProviderIds?.[k];
   const heroId = (isEpisode || isSeason) && item.SeriesId ? item.SeriesId : id;
   const title = cleanTitle(item.Name, item.ProductionYear);
   const hasBackdrop = isEpisode || isSeason ? true : d.images.some((i) => i.ImageType === "Backdrop");
@@ -182,51 +187,49 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
   const crumb = (label: string, to: () => void) => <button className="link" onClick={to}>{label}</button>;
 
   return (
-    <div className="pg item">
-      <div className="item-top">
-        <button onClick={onBack}>← Back</button>
-        <span className="muted small crumbs">
-          {item.SeriesName && item.SeriesId ? crumb(cleanTitle(item.SeriesName), () => nav.open(item.SeriesId!)) : null}
-          {isEpisode && item.SeasonId && item.SeriesId ? <> › {crumb(item.SeasonName ?? `Season ${item.ParentIndexNumber ?? ""}`, () => nav.open(item.SeriesId!, { tab: item.SeasonId }))}</> : null}
-          {item.SeriesName ? " › " : ""}{item.Type}
-        </span>
-        <div className="spacer" />
-        {playable && <button className="primary" onClick={() => nav.play(id)}>▶ {item.UserData?.PlaybackPositionTicks ? "Resume" : "Play"}</button>}
-        <button title="Show in Finder" onClick={() => void api.revealItem(id).catch((e) => setMessage({ text: errorText(e), error: true }))}><Icon name="folder" /> Show in Finder</button>
-        {d.canEdit && (
-          <button disabled={!!busy} onClick={() => void run("Refreshing…", () => api.refreshItem(id, false), "Jellyfin is refreshing this item from the internet; this page updates by itself.")}>Refresh from internet</button>
-        )}
-        <button className="icon-btn" aria-label="More" onClick={(e) => openMenu(e, itemMenu({ id, kind: item.Type, title, seriesId: item.SeriesId, seasonId: item.SeasonId, played: item.UserData?.Played }, d.canEdit))}><Icon name="more" /></button>
-      </div>
-
-      <section className={`hero ${hasBackdrop ? "" : "flat"} ${tab === "main" ? "" : "compact"}`} onContextMenu={(e) => openMenu(e, itemMenu({ id, kind: item.Type, title, seriesId: item.SeriesId, seasonId: item.SeasonId, played: item.UserData?.Played }, d.canEdit))}>
-        {hasBackdrop && <img className="hero-art" src={isEpisode ? imageUrl(id, "Primary", 1600, 0, item.ImageTags?.Primary ?? "") : artSrc(heroId, "Backdrop", 1600, heroId === id ? d.images : [])} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />}
-        <div className="hero-shade" />
-        <div className="hero-body">
-          {!isEpisode && !isSeason && (
+    <div className={`pg item ${embedded ? "embedded" : ""}`}>
+      <section className={`cine ${hasBackdrop ? "" : "flat"} ${tab === "main" && !embedded ? "" : "compact"}`} onContextMenu={(e) => openMenu(e, itemMenu({ id, kind: item.Type, title, seriesId: item.SeriesId, seasonId: item.SeasonId, played: item.UserData?.Played }, d.canEdit))}>
+        {hasBackdrop && <img className="cine-art" key={heroId} src={isEpisode ? imageUrl(id, "Primary", 1920, 0, item.ImageTags?.Primary ?? "") : artSrc(heroId, "Backdrop", 1920, heroId === id ? d.images : [])} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />}
+        <div className="cine-shade" />
+        <div className="cine-top">
+          {!embedded && <button className="cine-back" onClick={onBack}><span className="flip"><Icon name="chevron" size={16} /></span> Back</button>}
+          {!embedded && (
+            <span className="small crumbs">
+              {item.SeriesName && item.SeriesId ? crumb(cleanTitle(item.SeriesName), () => nav.open(item.SeriesId!)) : null}
+              {isEpisode && item.SeasonId && item.SeriesId ? <> › {crumb(item.SeasonName ?? `Season ${item.ParentIndexNumber ?? ""}`, () => nav.open(item.SeriesId!, { tab: item.SeasonId }))}</> : null}
+            </span>
+          )}
+          <div className="spacer" />
+          <button className="cine-ghost" title="Show in Finder" onClick={() => void api.revealItem(id).catch((e) => setMessage({ text: errorText(e), error: true }))}><Icon name="folder" /> Finder</button>
+          {d.canEdit && (
+            <button className="cine-ghost" disabled={!!busy} title="Fetch details and pictures again (unlocks the title)" onClick={() => void run("Refreshing…", () => api.refreshItem(id, false), "Jellyfin is refreshing this item from the internet; this page updates by itself.")}><Icon name="reload" /> Refresh</button>
+          )}
+          <button className="cine-ghost icon-only" aria-label="More" onClick={(e) => openMenu(e, itemMenu({ id, kind: item.Type, title, seriesId: item.SeriesId, seasonId: item.SeasonId, played: item.UserData?.Played }, d.canEdit))}><Icon name="more" /></button>
+        </div>
+        <div className="cine-body">
+          {embedded && !isEpisode && !isSeason && (
             <button className="hero-poster" onClick={() => showPicture(artSrc(id, "Primary", 1400, d.images), `${title} · poster`)} title="Show big">
-              {d.images.some((i) => i.ImageType === "Primary") ? <img src={artSrc(id, "Primary", 400, d.images)} alt="" /> : <div className="noart">{title}</div>}
-              <span className="expand"><Icon name="expand" size={14} /></span>
+              {d.images.some((i) => i.ImageType === "Primary") ? <img src={artSrc(id, "Primary", 300, d.images)} alt="" /> : <div className="noart">{title}</div>}
             </button>
           )}
-          <div className="hero-text">
+          <div className="cine-text">
+            {item.LockData && <span className="cine-lock" title="Locked: Jellyfin won't change these details by itself"><Icon name="lock" size={12} /> Locked</span>}
             {logoOk && !isEpisode && !isSeason && d.images.some((i) => i.ImageType === "Logo") ? (
-              <img className="hero-logo" src={artSrc(id, "Logo", 700, d.images)} alt={title} onError={() => setLogoOk(false)} />
+              <img className="cine-logo" src={artSrc(id, "Logo", 800, d.images)} alt={title} onError={() => setLogoOk(false)} />
             ) : (
-              <h1>{isSeason && item.SeriesName ? `${cleanTitle(item.SeriesName)} · ` : ""}{title}</h1>
+              <h1 className="cine-title">{isSeason && item.SeriesName ? `${cleanTitle(item.SeriesName)} · ` : ""}{isEpisode ? item.Name : title}</h1>
             )}
             <div className="hero-meta">
               {meta.map((m, i) => <span key={i}>{m}</span>)}
               {item.CommunityRating != null && <span>★ {item.CommunityRating.toFixed(1)}</span>}
               {item.UserData?.Played && <span className="ok">Watched</span>}
             </div>
-            {item.Taglines?.[0] && <div className="hero-tag">{item.Taglines[0]}</div>}
-            {item.Overview && <p className="hero-overview">{item.Overview}</p>}
-            {!isSeason && !isEpisode && (
-              <div className="badges">
-                <span className={`badge ${linked("Tmdb") ? "on" : ""}`}>{linked("Tmdb") ? "TMDB linked" : "No TMDB"}</span>
-                <span className={`badge ${linked("Tvdb") ? "on" : ""}`}>{linked("Tvdb") ? "TVDB linked" : "No TVDB"}</span>
-                <span className={`badge ${linked("Imdb") ? "on" : ""}`}>{linked("Imdb") ? "IMDb linked" : "No IMDb"}</span>
+            {item.Overview && <p className="cine-overview">{item.Overview}</p>}
+            {kind && <TitleHealth d={d} kind={kind} canEdit={d.canEdit} subLangs={subLangs} onTab={setTab} />}
+            {!kind && (
+              <div className="row bb-actions">
+                {playable && <button className="bb-play" onClick={() => nav.play(id)}><Icon name="play" size={20} /> {item.UserData?.PlaybackPositionTicks ? "Resume" : "Play"}</button>}
+                {isSeason && <button className="bb-play" onClick={() => void playTitle(id)}><Icon name="play" size={20} /> Play</button>}
               </div>
             )}
           </div>
@@ -234,7 +237,7 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
       </section>
 
       {!d.canEdit && (
-        <p className="note">Viewing only: changes to Jellyfin are switched off. <button className="link" onClick={() => onNav("settings")}>Turn them on in Settings</button>.</p>
+        <p className="note">Viewing only: changes to Jellyfin are switched off. <SettingsLink section="changes">Turn them on</SettingsLink></p>
       )}
       {message && <p className={message.error ? "error" : "note"} role="status">{message.text}</p>}
 
@@ -285,6 +288,7 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
               </div>
             </div>
           )}
+          {playable && <MediaInfo item={item} />}
           {isSeries && d.seasons.length > 0 && (
             <div className="season-strip">
               {d.seasons.map((s) => (
@@ -337,6 +341,134 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
       )}
     </div>
   );
+}
+
+/* --------------------------------------------------------- title health */
+
+interface Chip {
+  ok: boolean | null;
+  label: string;
+  go?: () => void;
+}
+
+/**
+ * What's right and what's missing for a show or movie, as chips on the picture, with Play
+ * and "Fix N things" (artwork, subtitles and 100%-sure names, done for you; the rest opens
+ * the right tab).
+ */
+function TitleHealth({ d, kind, canEdit, subLangs, onTab }: { d: Details; kind: "series" | "movie"; canEdit: boolean; subLangs: string[]; onTab: (t: string) => void }) {
+  const epoch = useEpoch();
+  const item = d.item;
+  const [check, setCheck] = useState<CheckRow | null>(null);
+  const [row, setRow] = useState<HealthRow | null>(null);
+  const [seg, setSeg] = useState<SegSummary | null>(null);
+  useEffect(() => {
+    api.namingCheckLast().then((r) => setCheck(r?.rows.find((x) => x.id === item.Id) ?? null)).catch(() => setCheck(null));
+    api.libraryHealth(false).then((h) => setRow(h.rows.find((x) => x.id === item.Id) ?? null)).catch(() => setRow(null));
+    if (kind === "series") api.segmentSummary(item.Id).then(setSeg).catch(() => setSeg(null));
+  }, [item.Id, kind, epoch]);
+
+  const has = (k: ImageKind) => d.images.some((i) => i.ImageType === k);
+  const identified = ["Tmdb", "Tvdb", "Imdb"].some((k) => !!item.ProviderIds?.[k]);
+  const missingArt = CORE_ART.filter((a) => !has(a.kind));
+  const streams = item.MediaSources?.[0]?.MediaStreams ?? item.MediaStreams ?? [];
+  const noSubs = kind === "movie" ? (streams.some((m) => m.Type === "Subtitle") ? 0 : 1) : row?.noSubs ?? 0;
+  const firstSeason = d.seasons.find((x) => (x.IndexNumber ?? 0) > 0) ?? d.seasons[0];
+  const chips: Chip[] = [
+    { ok: identified, label: identified ? "Identified" : "Not identified", go: () => onTab("identify") },
+    { ok: missingArt.length === 0, label: missingArt.length ? `No ${missingArt.map((a) => a.label).join(", ")}` : "Artwork complete", go: () => onTab("art") },
+    kind === "movie"
+      ? { ok: noSubs === 0, label: noSubs ? "No subtitles" : "Subtitles", go: () => onTab("subs") }
+      : { ok: row ? noSubs === 0 : null, label: row ? (noSubs ? `${noSubs} episode${noSubs === 1 ? "" : "s"} without subtitles` : "Subtitles") : "Subtitles not checked", go: () => firstSeason && onTab(firstSeason.Id) },
+    { ok: check ? !namesToFix(check) : null, label: !check ? "Names not checked" : namesToFix(check) ? `${check.toRename + check.folders} name${check.toRename + check.folders === 1 ? "" : "s"} to fix` : "Names right", go: () => onTab("rename") },
+  ];
+  if (kind === "series" && seg && seg.episodes > 0) {
+    chips.push({ ok: seg.intro >= seg.episodes * 0.8, label: seg.intro === 0 ? "No intro markers" : seg.intro >= seg.episodes ? "Intro markers" : `Intros in ${seg.intro} of ${seg.episodes}`, go: () => firstSeason && onTab(firstSeason.Id) });
+  }
+  const target: FixTarget = { id: item.Id, name: cleanTitle(item.Name, item.ProductionYear), kind, identified, missingArt: missingArt.map((a) => a.kind), noSubs, check };
+  const auto = safeFixes(target);
+  const todo = chips.filter((c) => c.ok === false).length;
+
+  function fix() {
+    void track(`Fixing ${target.name}`, (job) => fixTitles([target], auto, subLangs, job).then(() => undefined), { cancellable: true }).catch(() => undefined);
+  }
+
+  return (
+    <>
+      <div className="cine-chips">
+        {chips.map((c) => (
+          <button key={c.label} className={`hchip ${c.ok === null ? "" : c.ok ? "ok" : "warn"}`} onClick={c.go}>
+            {c.ok ? <Icon name="check" size={12} /> : c.ok === false ? <Icon name="warn" size={12} /> : null} {c.label}
+          </button>
+        ))}
+      </div>
+      <div className="row bb-actions">
+        <button className="bb-play" onClick={() => (kind === "movie" ? nav.play(item.Id) : void playTitle(item.Id))}>
+          <Icon name="play" size={20} /> {item.UserData?.PlaybackPositionTicks ? "Resume" : "Play"}
+        </button>
+        {auto.length > 0 && canEdit && (
+          <button className="bb-more" onClick={fix} title={`Does it for you: ${auto.map((a) => (a === "art" ? "artwork" : a === "subs" ? "subtitles" : "100% sure names")).join(", ")}. Can be undone.`}>
+            <Icon name="wand" size={18} /> Fix {auto.length} thing{auto.length === 1 ? "" : "s"}
+          </button>
+        )}
+        {todo > auto.length && <span className="muted small">{todo - auto.length} need{todo - auto.length === 1 ? "s" : ""} you: click the yellow chip</span>}
+      </div>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------- media info */
+
+function size(b?: number): string {
+  if (!b) return "";
+  return b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`;
+}
+
+/** What Jellyfin knows about the file: streams, size, chapters (with their pictures). */
+export function MediaInfo({ item }: { item: JfItem }) {
+  const src = item.MediaSources?.[0];
+  const streams = src?.MediaStreams ?? item.MediaStreams ?? [];
+  const video = streams.find((s) => s.Type === "Video");
+  const audio = streams.filter((s) => s.Type === "Audio");
+  const subs = streams.filter((s) => s.Type === "Subtitle");
+  const chapters = (item.Chapters ?? []).filter((c) => c.StartPositionTicks >= 0);
+  if (!src && !streams.length) return null;
+  const res = video?.Height ? (video.Height >= 2000 ? "4K" : video.Height >= 1000 ? "1080p" : video.Height >= 700 ? "720p" : `${video.Height}p`) : "";
+  return (
+    <section className="card form">
+      <div className="section-head"><h2>File and streams</h2><span className="muted small mono ellipsis">{src?.Path ?? item.Path ?? ""}</span></div>
+      <div className="chips">
+        {src?.Container && <span className="chip static">{src.Container.toUpperCase()}</span>}
+        {size(src?.Size) && <span className="chip static">{size(src?.Size)}</span>}
+        {src?.Bitrate ? <span className="chip static">{(src.Bitrate / 1e6).toFixed(1)} Mb/s</span> : null}
+        {video && <span className="chip static">{[res, video.Codec?.toUpperCase(), video.VideoRange && video.VideoRange !== "SDR" ? video.VideoRange : ""].filter(Boolean).join(" ")}</span>}
+      </div>
+      <div className="stream-cols">
+        <div><div className="small strong">Audio</div>{audio.map((a, i) => <div key={i} className="small muted">{a.DisplayTitle ?? a.Language ?? "Audio"}</div>)}{!audio.length && <div className="small muted">None</div>}</div>
+        <div><div className="small strong">Subtitles</div>{subs.map((x, i) => <div key={i} className="small muted">{x.DisplayTitle ?? x.Language ?? "Subtitle"}{x.IsExternal ? " · file" : " · built in"}</div>)}{!subs.length && <div className="small muted">None</div>}</div>
+      </div>
+      {chapters.length > 1 && (
+        <>
+          <div className="small strong">Chapters ({chapters.length})</div>
+          <div className="chapters">
+            {chapters.map((c, i) => (
+              <div key={i} className="chapter">
+                <div className="art wide cover">{c.ImageTag ? <img src={imageUrl(item.Id, "Chapter", 320, i, c.ImageTag)} alt="" loading="lazy" /> : <div className="noart small">{i + 1}</div>}</div>
+                <div className="small ellipsis">{c.Name || `Chapter ${i + 1}`}</div>
+                <div className="small muted mono">{fmtTicks(c.StartPositionTicks)}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function fmtTicks(t: number): string {
+  const s = Math.round(t / 10_000_000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
 }
 
 /* ---------------------------------------------------------------- artwork */
@@ -447,7 +579,7 @@ function ArtworkTab({ id, title, images, canEdit, isEpisode }: { id: string; tit
           ))}
         </div>
         {opts.length > 12 && !showAll && <button className="link small" onClick={() => setShowAll(true)}>Show all {opts.length}</button>}
-        {!canEdit && <p className="muted small">Picking pictures needs changes switched on in Settings.</p>}
+        {!canEdit && <p className="muted small">Picking pictures needs changes switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
       </section>
     </div>
   );
@@ -500,10 +632,11 @@ function ShowTools({ seriesId, seasons, canEdit }: { seriesId: string; seasons: 
       <div className="row" style={{ marginTop: 10 }}>
         <button disabled={!canEdit} onClick={() => void track("Artwork for every season", async (job) => {
           for (const [i, s] of seasons.entries()) {
+            if (job.cancelled) break;
             job.update(s.Name, i / seasons.length);
             await api.fillMissingArt(s.Id, ["Primary", "Backdrop", "Thumb", "Banner"]).catch(() => undefined);
           }
-        })}>Fill in missing season artwork</button>
+        }, { cancellable: true }).catch(() => undefined)}>Fill in missing season artwork</button>
         <button disabled={!canEdit} title="Takes a frame from the video for every episode without a picture (needs ffmpeg)" onClick={() => void stills(seriesId)}>Make episode stills from the video</button>
         <span className="muted small">Removing recaps, intros or credits for the whole show: Intros and credits → this show.</span>
       </div>
@@ -521,13 +654,13 @@ async function stills(parentId: string) {
     } finally {
       un();
     }
-  });
+  }, { stop: "bulk" }).catch(() => undefined);
 }
 
 /** A season: subtitle and intro tools on top, then the episodes. */
 function SeasonPanel({ season, canEdit, subLangs, onNav }: { season: JfItem; canEdit: boolean; subLangs: string[]; onNav: (v: View) => void }) {
   const epoch = useEpoch();
-  const { recapsOff } = usePrefs();
+  const { recapsOff, subRequired } = usePrefs();
   const [eps, setEps] = useState<JfChild[] | null>(null);
   const [langs, setLangs] = useState<Culture[]>([]);
   const [tool, setTool] = useState<"none" | "subs" | "intros">("none");
@@ -542,7 +675,8 @@ function SeasonPanel({ season, canEdit, subLangs, onNav }: { season: JfItem; can
     const have = (codes: string[]) => streams.some((s) => s.Language && codes.includes(s.Language.toLowerCase()));
     return subLangs.map((l, i) => {
       const ok = have(want[i] ?? [l]);
-      return <span key={l} className={`chip static ${ok ? "on" : ""}`}>{languageName(l, langs).slice(0, 3)} {ok ? "✓" : "–"}</span>;
+      const needed = subRequired.includes(l);
+      return <span key={l} className={`chip static ${ok ? "on" : needed ? "need" : ""}`} title={ok ? "Has subtitles" : needed ? "Missing (needed)" : "Missing (only if available)"}>{languageName(l, langs).slice(0, 3)} {ok ? "✓" : "–"}</span>;
     });
   };
 

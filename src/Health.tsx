@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, CheckRow, errorText, HealthRow, imageUrl, Status } from "./api";
-import { track, useEpoch } from "./activity";
+import { api, CheckRow, Details, errorText, HealthRow, imageUrl, Status } from "./api";
+import { followEvent, track, useEpoch } from "./activity";
 import { nav } from "./nav";
-import { prefs, subSkipped } from "./prefs";
-import { Icon, itemMenu, openMenu } from "./ui";
+import { prefs } from "./prefs";
+import { fixTitles, FixKind, targetOf } from "./fixers";
+import { Studio, StudioItem } from "./Studio";
+import ItemPage from "./ItemPage";
+import { Icon, itemMenu, openMenu, SettingsLink } from "./ui";
 import { askConfirm } from "./confirm";
 
 type Check = "name" | "identified" | "poster" | "backdrop" | "logo" | "thumb" | "banner" | "subs";
@@ -46,14 +49,36 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
   const checks: Check[] = focus === "art" ? ["identified", ...ART] : ["name", "identified", "poster", "backdrop", "logo", "subs"];
   const canEdit = !st.readOnly;
 
+  const [at, setAt] = useState<number | null>(null);
+  const [checking, setChecking] = useState(false);
+  const load = async (fresh: boolean) => {
+    try {
+      const nc = await api.namingCheckLast().catch(() => null);
+      const byId = new Map((nc?.rows ?? []).map((r) => [r.id, r]));
+      const run = () => api.libraryHealth(fresh);
+      const h = fresh
+        ? await track("Checking the whole library", async (job) => {
+            setChecking(true);
+            const un = await followEvent(job, "health-progress");
+            try {
+              return await run();
+            } finally {
+              un();
+              setChecking(false);
+            }
+          }, { reload: false, stop: "health" })
+        : await run();
+      setRows(h.rows.map((r) => ({ ...r, check: byId.get(r.id) ?? null })));
+      setAt(h.at);
+      // Older than a day: refresh in the background, the old list stays meanwhile.
+      if (!fresh && Date.now() / 1000 - h.at > 86_400) void load(true);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
   useEffect(() => {
-    Promise.all([api.libraryHealth(), api.namingCheckLast().catch(() => null)])
-      .then(([h, nc]) => {
-        const byId = new Map((nc?.rows ?? []).map((r) => [r.id, r]));
-        setRows(h.map((r) => ({ ...r, check: byId.get(r.id) ?? null })));
-      })
-      .catch((e) => setError(errorText(e)));
-  }, [epoch]);
+    void load(false);
+  }, [epoch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const score = (r: Row) => {
     const s = checks.map((c) => status(r, c)).filter((x) => x !== null) as boolean[];
@@ -77,7 +102,8 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
     void track(`${LABEL[c]} for ${r.name}`, async (job) => {
       const added = await api.fillMissingArt(r.id, [kindMap[c]]);
       job.update(added.length ? "Added" : "Nothing found online; pick or upload one on the Artwork tab");
-    });
+      if (added.length) setRows((rs) => rs?.map((x) => (x.id === r.id ? { ...x, [c]: true } : x)) ?? null);
+    }, { reload: false });
   }
 
   async function fixAll() {
@@ -89,56 +115,91 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
       focus === "all" ? "rename titles that are a 100% match" : "",
     ].filter(Boolean);
     if (!(await askConfirm(`For ${list.length} titles: ${parts.join(", ")}? Titles that need a decision (not identified, unsure names) are left for you. Everything can be undone.`, { okLabel: "Fix what's safe" }))) return;
-    await track(`Fixing ${list.length} titles`, async (job) => {
-      let art = 0, subs = 0, renamed = 0;
-      for (const [i, r] of list.entries()) {
-        if (job.cancelled) break;
-        job.update(r.name, i / list.length);
-        if (r.identified) {
-          const missing = (focus === "art" ? ART : (["poster", "backdrop", "logo"] as Check[])).filter((c) => status(r, c) === false);
-          if (missing.length) {
-            const map: Record<string, "Primary" | "Backdrop" | "Logo" | "Thumb" | "Banner"> = { poster: "Primary", backdrop: "Backdrop", logo: "Logo", thumb: "Thumb", banner: "Banner" };
-            art += (await api.fillMissingArt(r.id, missing.map((c) => map[c])).catch(() => [])).length;
+    const what: FixKind[] = focus === "art" ? ["art"] : ["art", "subs", "rename"];
+    await track(`Fixing ${list.length} titles`, (job) => fixTitles(list.map((r) => targetOf(r, r.check, focus === "art")), what, st.subLangs, job).then(() => undefined), { cancellable: true, reload: false }).catch(() => undefined);
+    void load(true);
+  }
+
+  // Metadata and art: list on the left, the title's own page (artwork tab) on the right.
+  const [sel, setSel] = useState<string | null>(null);
+  useEffect(() => {
+    if (focus === "art" && !sel && shown.length) setSel(shown[0].id);
+  }, [focus, sel, shown.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** The inspector loaded fresh details: update that title's dots right away. */
+  const patchFrom = (d: Details) => {
+    const has = (k: string) => d.images.some((i) => i.ImageType === k);
+    const ids = d.item.ProviderIds ?? {};
+    setRows((rs) => rs?.map((x) => (x.id === d.item.Id.replace(/-/g, "") || x.id === d.item.Id
+      ? { ...x, identified: !!(ids.Tmdb || ids.Tvdb || ids.Imdb), poster: has("Primary"), backdrop: has("Backdrop"), logo: has("Logo"), thumb: has("Thumb"), banner: has("Banner") }
+      : x)) ?? null);
+  };
+  if (focus === "art") {
+    const items: StudioItem[] = shown.map((r) => ({
+      id: r.id,
+      title: `${r.name}${r.year ? ` (${r.year})` : ""}`,
+      sub: `${r.kind === "series" ? "Show" : "Movie"}${r.libraryFolder ? ` · ${r.libraryFolder}` : ""}`,
+      thumb: imageUrl(r.id, "Primary", 80),
+      dots: checks.map((c) => ({ ok: status(r, c), label: LABEL[c] })),
+    }));
+    return (
+      <div className="pg studio-page">
+        <div className="pg-head">
+          <div>
+            <h1>Metadata and art</h1>
+            <div className="muted small">{rows ? `${perfect} of ${total} titles have a match and every kind of picture.` : "Checking…"} Dots: {checks.map((c) => LABEL[c]).join(" · ")}.</div>
+          </div>
+          <div className="pg-actions">
+            <button disabled={checking} onClick={() => void load(true)}><Icon name="reload" /> {checking ? "Checking…" : "Check again"}</button>
+            <button className="primary" disabled={!canEdit || !rows} onClick={() => void fixAll()}>Fill in missing art ({shown.filter((r) => score(r) < 1).length})</button>
+          </div>
+        </div>
+        {error && <p className="error">{error}</p>}
+        <Studio
+          items={items}
+          selected={sel}
+          onSelect={setSel}
+          empty={!rows ? "Reading the library…" : filter === "todo" ? "Nothing to fix here." : "Nothing here."}
+          head={
+            <>
+              <label className="searchbox"><Icon name="search" /><input placeholder="Find a title" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
+              <div className="chips">
+                <button className={`chip ${filter === "todo" ? "on" : ""}`} onClick={() => setFilter("todo")}>Needs work ({total - perfect})</button>
+                <button className={`chip ${filter === "all" ? "on" : ""}`} onClick={() => setFilter("all")}>All</button>
+                <select value={kind} onChange={(e) => setKind(e.target.value as "" | "series" | "movie")} className="chip-select">
+                  <option value="">Shows and movies</option><option value="series">Shows</option><option value="movie">Movies</option>
+                </select>
+                {folders.length > 1 && (
+                  <select value={folder} onChange={(e) => setFolder(e.target.value)} className="chip-select">
+                    <option value="">Every folder</option>
+                    {folders.map((f) => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                )}
+              </div>
+            </>
           }
-        }
-        if (focus === "all" && r.noSubs > 0 && r.kind === "movie") {
-          const lang = prefs().subLang || st.subLangs[0] || "eng";
-          const res = await api.subtitleAuto(r.id, lang, [lang], prefs().minSubScore).catch(() => null);
-          if (res?.outcome === "downloaded") subs++;
-        }
-        if (focus === "all" && r.noSubs > 0 && r.kind === "series") {
-          const lang = prefs().subLang || st.subLangs[0] || "eng";
-          const seasons = (await api.details(r.id).catch(() => null))?.seasons ?? [];
-          for (const s of seasons) {
-            if (job.cancelled) break;
-            const eps = (await api.children(s.Id).catch(() => [])).filter((e) => e.Type === "Episode" && !subSkipped(e.Path) && !(e.MediaStreams ?? []).some((m) => m.Type === "Subtitle"));
-            for (const e of eps) {
-              const res = await api.subtitleAuto(e.Id, lang, [lang], prefs().minSubScore).catch(() => null);
-              if (res?.outcome === "downloaded") subs++;
-            }
-          }
-        }
-        if (focus === "all" && r.check?.sure) {
-          renamed += await renameSure(r.check).catch(() => 0);
-        }
-      }
-      if (renamed) await api.libraryScan().catch(() => undefined);
-      job.update(`${art} pictures, ${subs} subtitles, ${renamed} files renamed`, 1);
-    }, { cancellable: true });
+        >
+          {sel && (
+            <ItemPage key={sel} id={sel} initialTab="art" embedded onBack={() => undefined} onOpen={(i) => nav.open(i)} onNav={(v) => nav.route({ view: v })}
+              subLangs={st.subLangs} titleLang={st.titleLang} status={st} onLoaded={patchFrom} />
+          )}
+        </Studio>
+      </div>
+    );
   }
 
   return (
     <div className="pg">
       <div className="pg-head">
         <div>
-          <h1>{focus === "art" ? "Metadata and art" : "Library health"}</h1>
-          <div className="muted small">{rows ? `${perfect} of ${total} titles are complete${focus === "all" ? " (names, match, artwork, subtitles)" : " (match and every kind of picture)"}.` : "Checking…"}</div>
+          <h1>Library health</h1>
+          <div className="muted small">{rows ? `${perfect} of ${total} titles are complete (names, match, artwork, subtitles).` : "Checking…"}{at ? ` Checked ${new Date(at * 1000).toLocaleString()}.` : ""}</div>
         </div>
         <div className="pg-actions">
+          <button disabled={checking} onClick={() => void load(true)}><Icon name="reload" /> {checking ? "Checking…" : "Check again"}</button>
           <button className="primary" disabled={!canEdit || !rows} onClick={() => void fixAll()}>Fix what's safe ({shown.filter((r) => score(r) < 1).length})</button>
         </div>
       </div>
-      {!canEdit && <p className="note">Fixing needs changes switched on in Settings. You can still look around.</p>}
+      {!canEdit && <p className="note">Fixing needs changes switched on (<SettingsLink section="changes">turn them on</SettingsLink>). You can still look around.</p>}
       {error && <p className="error">{error}</p>}
       {focus === "all" && rows && !rows.some((r) => r.check) && (
         <p className="note small">Names haven't been checked yet. <button className="link" onClick={() => nav.route({ view: "renamer" })}>Run the library check in the Renamer</button> to fill that column.</p>
@@ -215,17 +276,3 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
   );
 }
 
-/** Renames a 100%-sure title like the renamer's library check does. */
-export async function renameSure(r: CheckRow): Promise<number> {
-  const series = r.kind === "series";
-  const plan = await api.plan({
-    mode: series ? "tv" : "movie", folder: r.folder,
-    template: series ? "{show}< ({year})>/{seasondir}/{show}< ({year})> - {sxe}< - {title}>.{ext}" : "{title}< ({year})>/{title}< ({year})>.{ext}",
-    show: null, year: null, findReplace: [], recursive: series, source: series ? "jellyfin" : "none",
-    matchId: series ? `jellyfin:${r.id}` : null, renameFolder: null, seasonFolders: false,
-    onlyFile: series ? null : r.file, itemId: series ? null : r.id,
-  });
-  const ok = plan.ops.filter((o) => o.status === "ok").map((o) => o.from);
-  if (!ok.length) return 0;
-  return (await api.apply(plan.planId, true, ok)).done;
-}

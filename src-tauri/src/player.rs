@@ -514,6 +514,8 @@ async fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<V
         if let Some(idx) = file.strip_prefix("sub/") {
             let idx: i64 = idx.parse().map_err(|_| Error::msg("bad index"))?;
             (s.subs.get(&idx).cloned().ok_or_else(|| Error::msg("no such subtitle"))?, s.dir.clone())
+        } else if file == "song.mp3" && s.dir.starts_with("/Audio/") {
+            (format!("/Audio/{}/stream.mp3?audioCodec=mp3&audioBitRate=256000&maxAudioChannels=2&static=false", s.item_id), s.dir.clone())
         } else if let Some(rest) = file.strip_prefix("trick/") {
             // "trick/<width>/<n>.jpg": numbers only.
             let (w, n) = rest.split_once('/').ok_or_else(|| Error::msg("bad path"))?;
@@ -541,6 +543,35 @@ async fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<V
         .header("Access-Control-Allow-Origin", "*")
         .body(body)
         .map_err(|e| Error::msg(e.to_string()))
+}
+
+/// A session for one song (music). Returns the address the window plays.
+pub fn audio_session(item_id: &str) -> Result<String> {
+    if !valid_item_id(item_id) {
+        return Err(Error::msg("bad id"));
+    }
+    let tok = token()?;
+    let mut map = sessions().lock().map_err(|_| Error::msg("internal error"))?;
+    // Songs are short-lived: keep at most a few around.
+    let old: Vec<String> = map.iter().filter(|(_, s)| s.dir.starts_with("/Audio/")).map(|(k, _)| k.clone()).collect();
+    if old.len() > 4 {
+        for k in old.iter().take(old.len() - 4) {
+            map.remove(k);
+        }
+    }
+    map.insert(
+        tok.clone(),
+        Session { dir: format!("/Audio/{item_id}/"), subs: HashMap::new(), device_id: String::new(), play_session_id: String::new(), item_id: item_id.to_string() },
+    );
+    Ok(format!("{}/s/{tok}/song.mp3", media_base()))
+}
+
+pub fn end_audio_session(tok: &str) {
+    if let Ok(mut map) = sessions().lock() {
+        if map.get(tok).map(|s| s.dir.starts_with("/Audio/")).unwrap_or(false) {
+            map.remove(tok);
+        }
+    }
 }
 
 pub fn handle(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResponder) {

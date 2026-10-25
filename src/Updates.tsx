@@ -64,3 +64,32 @@ export function UpdateBadge() {
     </div>
   );
 }
+
+/** Shown once after start when a new version is out (bottom right, every part of the app). */
+export function UpdateToast() {
+  const [info, setInfo] = useState<Info | null>(null);
+  const [hidden, setHidden] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notes, setNotes] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => api.checkUpdate().then(setInfo).catch(() => setInfo(null)), 4000);
+    return () => window.clearTimeout(t);
+  }, []);
+  if (!info?.available || hidden) return null;
+  return (
+    <div className="update-toast" role="status">
+      <div className="strong">Media Hub {info.latest} is out</div>
+      <div className="muted small">You have {info.current}.{info.notes ? <> <button className="link small" onClick={() => setNotes(!notes)}>{notes ? "Hide" : "What's new"}</button></> : null}</div>
+      {notes && <div className="small update-notes">{info.notes.slice(0, 800)}</div>}
+      {error && <div className="error small">{error}</div>}
+      <div className="row end">
+        <button onClick={() => setHidden(true)}>Later</button>
+        <button className="primary" disabled={busy} onClick={() => {
+          setBusy(true);
+          install(info).catch((e) => setError(errorText(e))).finally(() => setBusy(false));
+        }}>{busy ? "Updating…" : "Update now"}</button>
+      </div>
+    </div>
+  );
+}

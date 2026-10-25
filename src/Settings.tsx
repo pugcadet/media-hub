@@ -1,25 +1,73 @@
-import { useEffect, useState } from "react";
-import { api, errorText, Status } from "./api";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Alert, api, cultures, Culture, errorText, LibraryLang, Status, Tuning, TuneRow } from "./api";
 import { askConfirm } from "./confirm";
-import { SubLangSettings } from "./Subtitles";
 import { ToolsSettings } from "./Intros";
 import { UpdateSettings } from "./Updates";
 import type { View } from "./nav";
 import { setPrefs, usePrefs } from "./prefs";
 import { SubStyleEditor } from "./Player";
-import { runDaily } from "./scheduler";
+import { runDaily, syncPicks } from "./scheduler";
+import { clearProblems, followEvent, track, useEpoch, useProblems } from "./activity";
+import { Icon, TriCheck, type IconName, type TriState } from "./ui";
 
 const TITLE_LANGS: [string, string][] = [["en-US", "English"], ["nl-NL", "Nederlands"], ["de-DE", "Deutsch"], ["fr-FR", "Français"], ["es-ES", "Español"], ["it-IT", "Italiano"]];
+const META_LANGS: [string, string, string][] = [["", "", "Server default"], ["en", "US", "English"], ["nl", "NL", "Nederlands"], ["de", "DE", "Deutsch"], ["fr", "FR", "Français"], ["es", "ES", "Español"], ["it", "IT", "Italiano"]];
 
-export default function Settings({ status, onChanged }: { status: Status; onChanged: () => void; onNav: (v: View) => void }) {
+const SECTIONS: { id: string; label: string; icon: IconName }[] = [
+  { id: "jellyfin", label: "Jellyfin", icon: "tv" },
+  { id: "changes", label: "Changes", icon: "rename" },
+  { id: "backend", label: "Jellyfin & Infuse", icon: "server" },
+  { id: "folder", label: "Library folder", icon: "folder" },
+  { id: "player", label: "Player", icon: "play" },
+  { id: "subtitles", label: "Subtitles", icon: "subtitles" },
+  { id: "metadata", label: "Titles and art", icon: "image" },
+  { id: "picks", label: "Picks of the day", icon: "heart" },
+  { id: "schedule", label: "Daily tasks", icon: "clock" },
+  { id: "plugins", label: "Jellyfin plugins", icon: "stack" },
+  { id: "tools", label: "Tools", icon: "wand" },
+  { id: "updates", label: "Updates", icon: "download" },
+  { id: "problems", label: "Problems log", icon: "warn" },
+];
+
+function Section({ id, title, icon, children, hint }: { id: string; title: string; icon: IconName; hint?: string; children: ReactNode }) {
+  return (
+    <section className="card form set-section" id={`set-${id}`}>
+      <div className="set-head"><span className="set-ico"><Icon name={icon} /></span><div><h2>{title}</h2>{hint && <div className="muted small">{hint}</div>}</div></div>
+      {children}
+    </section>
+  );
+}
+
+function Switch({ checked, onChange, children, disabled }: { checked: boolean; onChange: (v: boolean) => void; children: ReactNode; disabled?: boolean }) {
+  return (
+    <label className={`switch-row ${disabled ? "off" : ""}`}>
+      <span className="grow">{children}</span>
+      <input type="checkbox" className="switch" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+    </label>
+  );
+}
+
+export default function Settings({ status, onChanged, section }: { status: Status; onChanged: () => void; onNav: (v: View) => void; section?: string }) {
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const [users, setUsers] = useState<{ id: string; name: string; admin: boolean }[]>([]);
   const [tmdb, setTmdb] = useState("");
   const [busy, setBusy] = useState(false);
+  const [active, setActive] = useState(section ?? "jellyfin");
+  const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api.listUsers().then(setUsers).catch(() => setUsers([]));
   }, []);
+  useEffect(() => {
+    if (!section) return;
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(`set-${section}`);
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+      el?.classList.add("flash");
+      window.setTimeout(() => el?.classList.remove("flash"), 1600);
+    }, 60);
+    return () => window.clearTimeout(t);
+  }, [section]);
 
   async function run(f: () => Promise<void>, done?: string) {
     setBusy(true);
@@ -44,173 +92,467 @@ export default function Settings({ status, onChanged }: { status: Status; onChan
   }
 
   async function disconnect() {
-    if (!(await askConfirm("Disconnect from this server? The saved key and the local list are removed from this computer. Your server is not touched.", { okLabel: "Disconnect" }))) return;
+    if (!(await askConfirm("Disconnect from this server? The saved key and the local list are removed from this computer. Your server is not touched.", { okLabel: "Disconnect", danger: true }))) return;
     void run(() => api.disconnect());
   }
 
+  const go = (id: string) => {
+    setActive(id);
+    document.getElementById(`set-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   return (
-    <div className="pg settings">
+    <div className="pg settings-page" ref={scroller}>
       <div className="pg-head"><h1>Settings</h1></div>
       {message && <p className={message.error ? "error" : "note"}>{message.text}</p>}
+      <div className="set-layout">
+        <nav className="set-nav">
+          {SECTIONS.map((s) => (
+            <button key={s.id} className={`set-link ${active === s.id ? "on" : ""}`} onClick={() => go(s.id)}><Icon name={s.icon} />{s.label}</button>
+          ))}
+        </nav>
+        <div className="set-body">
+          <Section id="jellyfin" title="Jellyfin" icon="tv" hint="The server Media Hub works with.">
+            <div className="kv"><span className="muted">Server</span><span>{status.serverName ?? "—"}</span></div>
+            <div className="kv"><span className="muted">Address</span><span className="mono">{status.serverUrl ?? "—"}</span></div>
+            <div className="kv"><span className="muted">Library</span><span>{status.movies} movies · {status.series} shows</span></div>
+            <label className="wide-label">Watch as this user (resume points, watched status, picks)
+              <select value={status.userId ?? ""} onChange={(e) => void run(() => api.setUser(e.target.value), "User changed. Scan the library to refresh watched status.")} disabled={!users.length || busy}>
+                {users.map((u) => <option key={u.id} value={u.id}>{u.name}{u.admin ? " (admin)" : ""}</option>)}
+              </select>
+            </label>
+            <Switch checked={status.syncWatched} onChange={(v) => void run(() => api.setSyncWatched(v))}>Send where I stopped and what I watched back to Jellyfin, so Infuse continues at the same spot</Switch>
+            <div className="row"><button className="danger-outline" onClick={() => void disconnect()}>Disconnect</button></div>
+          </Section>
 
-      <section className="card form">
-        <h2>Jellyfin</h2>
-        <div className="kv"><span className="muted">Server</span><span>{status.serverName ?? "—"}</span></div>
-        <div className="kv"><span className="muted">Address</span><span className="mono">{status.serverUrl ?? "—"}</span></div>
-        <div className="kv"><span className="muted">Library</span><span>{status.movies} movies · {status.series} shows</span></div>
-        <label className="wide-label">Watch as this user (resume points, watched status, picks)
-          <select value={status.userId ?? ""} onChange={(e) => void run(() => api.setUser(e.target.value), "User changed. Press Scan library to refresh watched status.")} disabled={!users.length || busy}>
-            {users.map((u) => <option key={u.id} value={u.id}>{u.name}{u.admin ? " (admin)" : ""}</option>)}
-          </select>
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={status.syncWatched} onChange={(e) => void run(() => api.setSyncWatched(e.target.checked))} />
-          <span>Send where I stopped and what I watched back to Jellyfin, so Infuse continues at the same spot</span>
-        </label>
-        <div className="row"><button onClick={() => void disconnect()}>Disconnect</button></div>
-      </section>
+          <Section id="changes" title="Changes to Jellyfin" icon="rename" hint={status.readOnly ? "Off: Media Hub only reads." : "On: every change can be undone in History."}>
+            <p className="muted small">With changes on, Media Hub may fix metadata, pick artwork, manage collections and playlists, download subtitles and save intro/credits markers.</p>
+            <div className="row">
+              {status.readOnly ? <button className="primary" onClick={() => void toggleChanges(true)}>Allow changes</button> : <button onClick={() => void toggleChanges(false)}>Switch back to read-only</button>}
+            </div>
+          </Section>
 
-      <section className="card form">
-        <h2>Changes to Jellyfin</h2>
-        <p className="muted">
-          {status.readOnly
-            ? "Off. Media Hub only reads from Jellyfin. Turn this on to fix metadata, pick artwork, manage collections, download subtitles and save intro/credits markers."
-            : "On. Media Hub may change metadata, pictures, collections, subtitles and skip markers in Jellyfin. Each change can be undone."}
-        </p>
-        <div className="row">
-          {status.readOnly ? (
-            <button className="primary" onClick={() => void toggleChanges(true)}>Allow changes</button>
-          ) : (
-            <button onClick={() => void toggleChanges(false)}>Switch back to read-only</button>
-          )}
+          <BackendSettings status={status} />
+
+          <Section id="folder" title="Library folder" icon="folder" hint="The NAS share as this computer sees it. Used by the renamer, adding titles, intros and subtitle timing.">
+            <p className="mono">{status.libraryRoot ?? "Not chosen yet"}</p>
+            <div className="row"><button onClick={() => void run(async () => { await api.pickRoot(); })}><Icon name="folder" /> {status.libraryRoot ? "Change folder" : "Choose folder"}</button></div>
+          </Section>
+
+          <PlayerSettings status={status} />
+          <SubtitleSettings status={status} onChanged={onChanged} />
+
+          <Section id="metadata" title="Titles and art" icon="image" hint="Where names, summaries and pictures come from.">
+            <p className="muted small">
+              {status.hasTmdb ? "A TMDB key is saved; matching and missing-episode checks use TMDB." : "Without a TMDB key, matching uses your Jellyfin library, Jellyfin's own lookups and TVmaze. A free key (themoviedb.org → Settings → API) works better."}
+            </p>
+            <div className="row">
+              <label>{status.hasTmdb ? "Replace TMDB key" : "TMDB API key or read access token"}<input className="mono" type="password" value={tmdb} onChange={(e) => setTmdb(e.target.value)} /></label>
+              <button disabled={!tmdb.trim() || busy} onClick={() => void run(async () => { await api.setTmdbKey(tmdb); setTmdb(""); }, "TMDB key checked and saved.")}>Check and save</button>
+              {status.hasTmdb && <button disabled={busy} onClick={() => void run(() => api.setTmdbKey(""), "TMDB key removed.")}>Remove key</button>}
+            </div>
+            <label className="wide-label">Language the renamer uses for episode titles
+              <select value={status.titleLang} onChange={(e) => void run(() => api.setTitleLang(e.target.value))}>
+                {TITLE_LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </label>
+            <LibraryLanguages canEdit={!status.readOnly} />
+          </Section>
+
+          <PicksSettings status={status} />
+          <ScheduleSettings status={status} />
+          <PluginSettings />
+          <div id="set-tools"><ToolsSettings /></div>
+          <div id="set-updates"><UpdateSettings /></div>
+          <ProblemsLog />
+          <p className="muted small">Your Jellyfin API key and TMDB key are kept in this computer's secure storage, never in a file.</p>
         </div>
-      </section>
-
-      <section className="card form">
-        <h2>Library folder</h2>
-        <p className="muted small">The NAS share as this computer sees it. Used by the renamer and intro detection.</p>
-        <p className="mono">{status.libraryRoot ?? "Not chosen yet"}</p>
-        <div className="row"><button onClick={() => void run(async () => { await api.pickRoot(); })}>{status.libraryRoot ? "Change folder" : "Choose folder"}</button></div>
-      </section>
-
-      <section className="card form">
-        <h2>Online metadata</h2>
-        <p className="muted small">
-          {status.hasTmdb ? "A TMDB key is saved. The renamer matches with TMDB in the language below." : "Without a TMDB key, the renamer uses your Jellyfin library, Jellyfin's own lookups and TVmaze. With a free key (themoviedb.org → Settings → API) it matches with TMDB in any language."}
-        </p>
-        <div className="row">
-          <label>{status.hasTmdb ? "Replace TMDB key" : "TMDB API key or read access token"}<input className="mono" type="password" value={tmdb} onChange={(e) => setTmdb(e.target.value)} /></label>
-          <button disabled={!tmdb.trim() || busy} onClick={() => void run(async () => { await api.setTmdbKey(tmdb); setTmdb(""); }, "TMDB key checked and saved.")}>Check and save</button>
-          {status.hasTmdb && <button disabled={busy} onClick={() => void run(() => api.setTmdbKey(""), "TMDB key removed.")}>Remove key</button>}
-        </div>
-        <label className="wide-label">Language of titles and summaries
-          <select value={status.titleLang} onChange={(e) => void run(() => api.setTitleLang(e.target.value))}>
-            {TITLE_LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-        </label>
-      </section>
-
-      <PlayerSettings status={status} />
-      <SubSkipSettings status={status} />
-      <ScheduleSettings status={status} />
-      <SubLangSettings subLangs={status.subLangs} onChanged={onChanged} />
-      <ToolsSettings />
-      <UpdateSettings />
-
-      <p className="muted small">Your Jellyfin API key and TMDB key are kept in this computer's secure storage, never in a file.</p>
+      </div>
     </div>
   );
 }
 
+/* ------------------------------------------------------------- player */
+
 function PlayerSettings({ status }: { status: Status }) {
   const p = usePrefs();
   return (
-    <section className="card form">
-      <h2>Player</h2>
-      <label className="check"><input type="checkbox" checked={p.autoSkipIntro} onChange={(e) => setPrefs({ autoSkipIntro: e.target.checked })} /><span>Skip intros by themselves (a 3-second countdown on the button, press “Watch it” to stay)</span></label>
-      <label className="check"><input type="checkbox" checked={p.autoSkipCredits} onChange={(e) => setPrefs({ autoSkipCredits: e.target.checked })} /><span>Skip credits: go to the next episode after 5 seconds (or skip to the end of a movie's credits)</span></label>
-      <label className="check"><input type="checkbox" checked={p.upNextAutoplay} onChange={(e) => setPrefs({ upNextAutoplay: e.target.checked })} /><span>Play the next episode by itself when the credits start</span></label>
-      <label className="check"><input type="checkbox" checked={p.autoDetectIntros} onChange={(e) => setPrefs({ autoDetectIntros: e.target.checked })} /><span>When I play a season without intro markers, find them in the background (needs ffmpeg; only sure finds are saved)</span></label>
-      <label className="check"><input type="checkbox" checked={p.recapsOff} onChange={(e) => setPrefs({ recapsOff: e.target.checked })} /><span>Turn recaps off completely (no recap markers in the player or the intros tool). Remove saved ones with “Remove recaps” on a season or show.</span></label>
-      <label className="wide-label">Language that C switches on (and fetches when missing)
-        <select value={p.subLang} onChange={(e) => setPrefs({ subLang: e.target.value })}>
-          {[...new Set(["eng", ...status.subLangs])].map((l) => <option key={l} value={l}>{l === "eng" ? "English" : l === "dut" || l === "nld" ? "Dutch" : l}</option>)}
-        </select>
-      </label>
+    <Section id="player" title="Player" icon="play" hint="How watching works in Media Hub.">
+      <Switch checked={p.autoSkipIntro} onChange={(v) => setPrefs({ autoSkipIntro: v })}>Skip intros by themselves (3-second countdown on the button; “Watch it” stays)</Switch>
+      <Switch checked={p.autoSkipCredits} onChange={(v) => setPrefs({ autoSkipCredits: v })}>Skip credits: go to the next episode after 5 seconds</Switch>
+      <Switch checked={p.upNextAutoplay} onChange={(v) => setPrefs({ upNextAutoplay: v })}>Play the next episode by itself when the credits start</Switch>
+      <Switch checked={p.recapsOff} onChange={(v) => setPrefs({ recapsOff: v })}>Turn recaps off completely (no recap markers in the player or the intros tool)</Switch>
+      <Switch checked={p.autoDetectIntros} onChange={(v) => setPrefs({ autoDetectIntros: v })} disabled={status.readOnly}>Find intros and credits in the background when I play a season without markers (needs ffmpeg; only sure finds are saved)</Switch>
       <div className="strong small">Subtitle look</div>
       <SubStyleEditor />
-    </section>
+    </Section>
   );
 }
+
+/* ---------------------------------------------------------- subtitles */
+
+function SubtitleSettings({ status, onChanged }: { status: Status; onChanged: () => void }) {
+  const p = usePrefs();
+  const [list, setList] = useState<Culture[]>([]);
+  const [add, setAdd] = useState("");
+  const [folders, setFolders] = useState<{ name: string }[]>([]);
+  const [base, setBase] = useState("");
+  const [custom, setCustom] = useState("");
+  useEffect(() => {
+    cultures().then(setList).catch(() => setList([]));
+  }, []);
+  useEffect(() => {
+    if (status.libraryRoot) api.folders(base).then(setFolders).catch(() => setFolders([]));
+  }, [status.libraryRoot, base]);
+  const name = (c: string) => list.find((x) => x.ThreeLetterISOLanguageName === c || x.ThreeLetterISOLanguageNames?.includes(c))?.DisplayName ?? c;
+  const langs = status.subLangs;
+  const saveLangs = (next: string[]) => void api.setSubLangs(next).then(onChanged);
+  const [skipUndo, setSkipUndo] = useState<string[][]>([]);
+  /** Saves a new skip list, keeping the old one for Undo. */
+  const saveSkip = (next: string[]) => {
+    setSkipUndo((u) => [...u.slice(-19), p.subSkipFolders]);
+    setPrefs({ subSkipFolders: [...new Set(next)] });
+  };
+  const toggleSkip = (f: string) => saveSkip(p.subSkipFolders.includes(f) ? p.subSkipFolders.filter((x) => x !== f) : [...p.subSkipFolders, f]);
+  /** Folder state: ticked = subtitles everywhere in it, stripe = some folders inside are left alone. */
+  const folderState = (f: string): TriState => {
+    if (p.subSkipFolders.some((x) => x === f || f.startsWith(`${x}/`))) return "none";
+    return p.subSkipFolders.some((x) => x.startsWith(`${f}/`)) ? "some" : "all";
+  };
+  /** On: the folder and everything in it gets subtitles. Off: the whole folder is left alone. */
+  const setFolder = (fs: string[], on: boolean) => {
+    const inside = (x: string) => fs.some((f) => x === f || x.startsWith(`${f}/`));
+    const rest = p.subSkipFolders.filter((x) => !inside(x));
+    saveSkip(on ? rest : [...rest, ...fs]);
+  };
+  const rel = (n: string) => (base ? `${base}/${n}` : n);
+  const options = list.filter((c) => c.ThreeLetterISOLanguageName && !langs.includes(c.ThreeLetterISOLanguageName));
+
+  return (
+    <Section id="subtitles" title="Subtitles" icon="subtitles" hint="Which subtitles to get, and where.">
+      <div className="strong small">Languages</div>
+      <p className="muted small">“Needed” languages are fetched when missing. “If available” ones are only fetched when there's a perfect match (made for exactly that file). Subtitles built into the video count, so nothing is downloaded twice. Plain subtitles are preferred over ones with sound descriptions (SDH).</p>
+      <div className="lang-list">
+        {langs.map((l, i) => {
+          const needed = p.subRequired.includes(l);
+          return (
+            <div key={l} className="lang-row">
+              <span className="strong">{name(l)}</span>
+              <div className="seg">
+                <button className={needed ? "on" : ""} onClick={() => setPrefs({ subRequired: [...new Set([...p.subRequired, l])] })}>Needed</button>
+                <button className={!needed ? "on" : ""} onClick={() => setPrefs({ subRequired: p.subRequired.filter((x) => x !== l) })}>If available</button>
+              </div>
+              <label className="check small"><input type="radio" name="clang" checked={p.subLang === l} onChange={() => setPrefs({ subLang: l })} />C key turns this on</label>
+              {langs.length > 1 && <button className="link small" onClick={() => saveLangs(langs.filter((x) => x !== l))}>Remove</button>}
+              {i > 0 && <button className="link small" onClick={() => saveLangs([l, ...langs.filter((x) => x !== l)])}>Make first</button>}
+            </div>
+          );
+        })}
+      </div>
+      <div className="row">
+        <label>Add a language
+          <select value={add} onChange={(e) => setAdd(e.target.value)}>
+            <option value="">Choose…</option>
+            {options.map((c) => <option key={c.ThreeLetterISOLanguageName} value={c.ThreeLetterISOLanguageName}>{c.DisplayName}</option>)}
+          </select>
+        </label>
+        <button disabled={!add} onClick={() => { saveLangs([...langs, add]); setAdd(""); }}>Add</button>
+      </div>
+      <label className="narrow wide-label">Lowest match score to download (100 = made for exactly this file)
+        <input type="number" min={1} max={100} value={p.minSubScore} onChange={(e) => setPrefs({ minSubScore: Math.max(1, Math.min(100, Number(e.target.value) || 100)) })} />
+      </label>
+
+      <div className="strong small" id="set-subfolders">Folders</div>
+      <p className="muted small">Untick a folder to leave it alone (for example home videos or foreign-language shows); folders inside it follow. A stripe means some folders inside are left alone.</p>
+      {status.libraryRoot ? (
+        <div className="skip-picker">
+          <div className="small muted">
+            <button className="link" onClick={() => setBase("")}>Library folder</button>
+            {base && base.split("/").map((part, i, all) => <span key={i}> › <button className="link" onClick={() => setBase(all.slice(0, i + 1).join("/"))}>{part}</button></span>)}
+          </div>
+          {folders.length > 1 && (
+            <div className="skip-row skip-head">
+              <span className="row">
+                <TriCheck state={folders.every((f) => folderState(rel(f.name)) === "all") ? "all" : folders.every((f) => folderState(rel(f.name)) === "none") ? "none" : "some"} onChange={(on) => setFolder(folders.map((f) => rel(f.name)), on)} disabled={!!base && folderState(base) === "none"} />
+                <span className="small strong">Every folder here</span>
+              </span>
+              {skipUndo.length > 0 && <button className="link small" onClick={() => { setPrefs({ subSkipFolders: skipUndo[skipUndo.length - 1] }); setSkipUndo(skipUndo.slice(0, -1)); }}><Icon name="undo" size={12} /> Undo</button>}
+            </div>
+          )}
+          {folders.map((f) => {
+            const st = folderState(rel(f.name));
+            const parentOff = p.subSkipFolders.some((x) => rel(f.name).startsWith(`${x}/`));
+            return (
+              <div key={f.name} className="skip-row">
+                <span className="row">
+                  <TriCheck state={st} disabled={parentOff} title={st === "some" ? "Some folders inside are left alone" : st === "all" ? "Gets subtitles" : "Left alone"} onChange={(on) => setFolder([rel(f.name)], on)} />
+                  <button className={`link-plain ${st === "none" ? "muted" : ""}`} onClick={() => setBase(rel(f.name))}><Icon name="folder" size={14} /> {f.name}</button>
+                  {st === "some" && <span className="muted small">some folders inside left alone</span>}
+                </span>
+                <button className="link small" onClick={() => setBase(rel(f.name))}>open ›</button>
+              </div>
+            );
+          })}
+        </div>
+      ) : <p className="muted small">Choose your library folder first.</p>}
+      {p.subSkipFolders.length > 0 && (
+        <div className="chips"><span className="muted small">Left alone:</span>{p.subSkipFolders.map((f) => <span key={f} className="chip static">{f}<button className="link x" onClick={() => toggleSkip(f)} aria-label="Switch back on">×</button></span>)}</div>
+      )}
+      <div className="row">
+        <label>Or leave alone every folder named<input value={custom} placeholder="e.g. Anime" onChange={(e) => setCustom(e.target.value)} /></label>
+        <button disabled={!custom.trim()} onClick={() => { toggleSkip(custom.trim()); setCustom(""); }}>Add</button>
+      </div>
+    </Section>
+  );
+}
+
+/* ---------------------------------------------------- library languages */
+
+function LibraryLanguages({ canEdit }: { canEdit: boolean }) {
+  const epoch = useEpoch();
+  const [libs, setLibs] = useState<LibraryLang[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.libraryLanguages().then(setLibs).catch((e) => setError(errorText(e)));
+  }, [epoch]);
+  if (error) return <p className="muted small">Library languages: {error}</p>;
+  if (!libs) return null;
+  return (
+    <div className="stack-s">
+      <div className="strong small">Language per library</div>
+      <p className="muted small">For example Dutch titles and summaries for Kids, English for the rest. Changing it fetches the texts again for that library (pictures stay).</p>
+      {libs.filter((l) => l.kind !== "music" && l.kind !== "boxsets" && l.kind !== "playlists").map((l) => {
+        const cur = META_LANGS.find(([lang]) => lang === l.language)?.[0] ?? l.language;
+        return (
+          <div key={l.id} className="lang-row">
+            <span className="strong">{l.name}</span>
+            <select value={cur} disabled={!canEdit} onChange={(e) => {
+              const pick = META_LANGS.find(([lang]) => lang === e.target.value);
+              if (!pick) return;
+              void askConfirm(`Use ${pick[2]} for titles and summaries in “${l.name}” and fetch them again now? This can take a while on a big library.`, { okLabel: "Change and refresh" }).then((ok) => {
+                if (ok) void track(`${l.name}: ${pick[2]} titles`, () => api.setLibraryLanguage(l.id, pick[0], pick[1], true));
+              });
+            }}>
+              {META_LANGS.map(([lang, , label]) => <option key={lang} value={lang}>{label}</option>)}
+              {!META_LANGS.some(([lang]) => lang === l.language) && <option value={l.language}>{l.language}</option>}
+            </select>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------- picks */
+
+function PicksSettings({ status }: { status: Status }) {
+  const p = usePrefs();
+  return (
+    <Section id="picks" title="Picks of the day" icon="heart" hint="Twelve suggestions a day, also in Jellyfin so other apps see them.">
+      <p className="muted small">
+        Every day Media Hub keeps a playlist and a collection called “Picks of the day” in Jellyfin (shows as their next episode). In Infuse they're in the Jellyfin share under <b>Playlists</b> and <b>Collections</b>. To get them on Infuse's home screen: Infuse → Settings → Shares → your Jellyfin server → <b>Add Favorite</b> → Playlists. Or switch the option below on: Infuse's home screen also shows <b>Favourites</b>.
+      </p>
+      <Switch checked={p.picksAsFavorites} disabled={status.readOnly} onChange={(v) => { setPrefs({ picksAsFavorites: v }); void syncPicks(); }}>
+        Also mark today's picks as favourites (yesterday's are unmarked again; your own favourites are never touched)
+      </Switch>
+      <div className="row"><button disabled={status.readOnly} onClick={() => void syncPicks()}><Icon name="reload" /> Update in Jellyfin now</button></div>
+    </Section>
+  );
+}
+
+/* ------------------------------------------------- Jellyfin as backend */
+
+/** Whether a library option is "on", and the value that switches it on or off. */
+const TUNE_SWITCH: Record<string, { on: (v: unknown) => boolean; value: (on: boolean, s: Status) => unknown; recommendedOn: boolean }> = {
+  AutomaticRefreshIntervalDays: { on: (v) => Number(v ?? 0) > 0, value: (on) => (on ? 30 : 0), recommendedOn: false },
+  EnableRealtimeMonitor: { on: (v) => v === true, value: (on) => on, recommendedOn: true },
+  ExtractChapterImagesDuringLibraryScan: { on: (v) => v !== false, value: (on) => on, recommendedOn: false },
+  ExtractTrickplayImagesDuringLibraryScan: { on: (v) => v !== false, value: (on) => on, recommendedOn: false },
+  SaveLocalMetadata: { on: (v) => v === true, value: (on) => on, recommendedOn: true },
+  MetadataSavers: { on: (v) => Array.isArray(v) && v.includes("Nfo"), value: (on) => (on ? ["Nfo"] : []), recommendedOn: true },
+  SubtitleDownloadLanguages: { on: (v) => Array.isArray(v) && v.length > 0, value: (on, s) => (on ? s.subLangs : []), recommendedOn: false },
+};
+
+function BackendSettings({ status }: { status: Status }) {
+  const epoch = useEpoch();
+  const [t, setT] = useState<Tuning | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [openLib, setOpenLib] = useState<string | null>(null);
+  const canEdit = !status.readOnly;
+  const load = () => api.backendTuning().then((x) => { setT(x); setError(null); }).catch((e) => setError(errorText(e)));
+  useEffect(() => void load(), [epoch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const libs = new Map<string, TuneRow[]>();
+  for (const r of t?.rows.filter((x) => x.scope === "library") ?? []) libs.set(r.target, [...(libs.get(r.target) ?? []), r]);
+  const tasks = t?.rows.filter((x) => x.scope === "task") ?? [];
+  const todo = t?.rows.filter((x) => x.scope === "library" && !x.ok).length ?? 0;
+  const set = (r: TuneRow, value: unknown, what: string) => void track(what, () => api.backendSet(r.scope, r.target, r.key, value)).catch((e) => setError(errorText(e)));
+
+  return (
+    <Section id="backend" title="Jellyfin as the backend" icon="server" hint="Media Hub decides details, art and skip markers. Jellyfin keeps them and hands them to Infuse.">
+      {error && <p className="error">{error}</p>}
+      {!canEdit && <p className="note">Changing Jellyfin's settings needs changes switched on (above).</p>}
+
+      <div className="strong small">Your edits stay</div>
+      <Switch checked={t?.lockEdits ?? true} onChange={(v) => void api.setLockEdits(v).then(load)}>
+        Lock a title once I change its details or pictures, so Jellyfin's own refreshes never undo it (Refresh from internet and Identify unlock it again)
+      </Switch>
+      <div className="row">
+        <button disabled={!canEdit} onClick={() => void askConfirm("Lock every show and movie? Jellyfin then never changes their details or pictures by itself. Each title can be undone in History.", { okLabel: "Lock all" }).then((ok) => { if (ok) void track("Locking every title", async (job) => { const un = await followEvent(job, "bulk-progress"); try { const n = await api.lockAll(true); job.update(`${n} titles locked`, 1); } finally { un(); } }, { stop: "bulk" }).catch((e) => setError(errorText(e))); })}><Icon name="lock" /> Lock every title</button>
+        <button disabled={!canEdit} onClick={() => void track("Unlocking every title", async (job) => { const un = await followEvent(job, "bulk-progress"); try { const n = await api.lockAll(false); job.update(`${n} titles unlocked`, 1); } finally { un(); } }, { stop: "bulk" }).catch((e) => setError(errorText(e)))}>Unlock every title</button>
+      </div>
+
+      <div className="row between">
+        <div>
+          <div className="strong small">Library settings</div>
+          <div className="muted small">{t ? (todo ? `${todo} setting${todo === 1 ? "" : "s"} differ from what works best with Media Hub and Infuse.` : "Every library is set up the way Media Hub works best.") : "Reading Jellyfin's settings…"}</div>
+        </div>
+        {todo > 0 && <button className="primary" disabled={!canEdit} onClick={() => void track("Setting up Jellyfin", () => api.backendApplyRecommended().then(() => undefined)).catch((e) => setError(errorText(e)))}>Use the recommended settings</button>}
+      </div>
+      <div className="tune-libs">
+        {[...libs.entries()].map(([id, rows]) => {
+          const off = rows.filter((r) => !r.ok).length;
+          const open = openLib === id;
+          return (
+            <div key={id} className={`tune-lib ${open ? "open" : ""}`}>
+              <button className="tune-lib-head link-plain" onClick={() => setOpenLib(open ? null : id)}>
+                <span className={`chev ${open ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
+                <span className="strong">{rows[0].targetName}</span>
+                <span className={`small ${off ? "warn" : "ok"}`}>{off ? `${off} to change` : "✓ all good"}</span>
+              </button>
+              {open && rows.map((r) => {
+                const sw = TUNE_SWITCH[r.key];
+                const on = sw ? sw.on(r.current) : false;
+                return (
+                  <div key={r.key} className={`tune-row ${r.ok ? "" : "differs"}`}>
+                    <div className="grow">
+                      <div>{r.label} <span className="muted small">· recommended {sw?.recommendedOn ? "on" : "off"}</span></div>
+                      <div className="muted small">{r.detail}</div>
+                    </div>
+                    {sw && <input type="checkbox" className="switch" checked={on} disabled={!canEdit} onChange={(e) => set(r, sw.value(e.target.checked, status), `${r.targetName}: ${r.label.toLowerCase()} ${e.target.checked ? "on" : "off"}`)} />}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+
+      {tasks.length > 0 && (
+        <>
+          <div className="strong small">Jellyfin's scheduled tasks</div>
+          <p className="muted small">Heavy tasks slow down the NAS and Infuse's library sync while they run. Best at night, or off when you don't need them.</p>
+          <div className="tune-libs">
+            {tasks.map((r) => {
+              const isOff = Array.isArray(r.current) && r.current.length === 0;
+              return (
+                <div key={r.target} className="tune-row">
+                  <div className="grow">
+                    <div>{r.targetName} <span className={`small ${isOff ? "muted" : ""}`}>· {r.label}</span></div>
+                    <div className="muted small">{r.detail}</div>
+                  </div>
+                  <button className="link small" disabled={!canEdit} onClick={() => void track(`Running “${r.targetName}”`, () => api.backendRunTask(r.target), { reload: false })}>Run now</button>
+                  <input type="checkbox" className="switch" title={isOff ? "Off" : "On a schedule"} checked={!isOff} disabled={!canEdit} onChange={(e) => set(r, e.target.checked, `${r.targetName} ${e.target.checked ? "on" : "off"}`)} />
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      <div className="strong small">Infuse</div>
+      <div className={`why-box ${t?.markersOk ? "sure" : ""}`}>
+        <ul>
+          <li className={t?.markersOk ? "ok" : "warn"}>
+            {t ? (t.markersOk ? `Skip intro, credits and recap: Jellyfin ${t.version} hands Media Hub's markers to Infuse (Infuse 8.0.4 or newer).` : `Jellyfin ${t.version || "(unknown)"} is older than 10.10, so Infuse can't read skip markers from it. Update Jellyfin.`) : "Checking the Jellyfin version…"}
+          </li>
+          <li>Add the server in Infuse under Settings → Shares → Add → Jellyfin, signed in as the same user Media Hub watches as.</li>
+          <li><b>Direct mode</b> is the fast one: Infuse browses Jellyfin live, nothing to sync. Library mode copies everything into Infuse first.</li>
+          <li>Picks of the day, your collections and playlists: pin them to Infuse's home screen under Settings → Shares → your Jellyfin server → Add Favorite.</li>
+          <li>Infuse shows what Media Hub set: titles, summaries, posters, backgrounds and logos come from Jellyfin, so edit them here, not in Infuse.</li>
+          <li>Watched status and where you stopped sync both ways through Jellyfin.</li>
+        </ul>
+      </div>
+    </Section>
+  );
+}
+
+/* ---------------------------------------------------------- schedule */
 
 function ScheduleSettings({ status }: { status: Status }) {
   const p = usePrefs();
   const s = p.schedule;
   const set = (patch: Partial<typeof s>) => setPrefs({ schedule: { ...s, ...patch } });
   return (
-    <section className="card form">
-      <h2>Scheduled tasks</h2>
-      <p className="muted small">Runs once a day while Media Hub is open. {p.lastRun.daily ? `Last run: ${p.lastRun.daily}.` : "Not run yet."}</p>
-      <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} /><span>Run these every day from</span>
-        <select value={s.hour} onChange={(e) => set({ hour: Number(e.target.value) })} style={{ width: 100 }} disabled={!s.enabled}>
+    <Section id="schedule" title="Daily tasks" icon="clock" hint={`Runs once a day while Media Hub is open. ${p.lastRun.daily ? `Last run: ${p.lastRun.daily}.` : "Not run yet."}`}>
+      <div className="row">
+        <Switch checked={s.enabled} onChange={(v) => set({ enabled: v })}>Run every day from</Switch>
+        <select value={s.hour} onChange={(e) => set({ hour: Number(e.target.value) })} style={{ width: 110 }} disabled={!s.enabled}>
           {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>)}
         </select>
-      </label>
+      </div>
       <div className="fields2">
         <label className="check small"><input type="checkbox" checked={s.scan} onChange={(e) => set({ scan: e.target.checked })} />Scan the library</label>
-        <label className="check small"><input type="checkbox" checked={s.picks} onChange={(e) => set({ picks: e.target.checked })} />Update “Picks of the day” in Jellyfin</label>
+        <label className="check small"><input type="checkbox" checked={s.picks} onChange={(e) => set({ picks: e.target.checked })} />Update “Picks of the day”</label>
         <label className="check small"><input type="checkbox" checked={s.art} onChange={(e) => set({ art: e.target.checked })} />Fill in missing artwork (newest titles first)</label>
-        <label className="check small"><input type="checkbox" checked={s.subtitles} onChange={(e) => set({ subtitles: e.target.checked })} />Get missing subtitles (only score {p.minSubScore}+)</label>
+        <label className="check small"><input type="checkbox" checked={s.subtitles} onChange={(e) => set({ subtitles: e.target.checked })} />Get missing subtitles (your Subtitles settings)</label>
       </div>
-      <div className="row">
-        <label className="narrow wide-label">Minimum subtitle score
-          <input type="number" min={1} max={100} value={p.minSubScore} onChange={(e) => setPrefs({ minSubScore: Math.max(1, Math.min(100, Number(e.target.value) || 100)) })} />
-        </label>
-        <button onClick={() => void runDaily(status, true)}>Run now</button>
-      </div>
-      {status.readOnly && <p className="muted small">Artwork, subtitles and picks need changes switched on (above).</p>}
-    </section>
+      <div className="row"><button onClick={() => void runDaily(status, true)}><Icon name="play" /> Run now</button></div>
+      {status.readOnly && <p className="muted small">Artwork, subtitles and picks need changes switched on.</p>}
+    </Section>
   );
 }
 
-function SubSkipSettings({ status }: { status: Status }) {
-  const p = usePrefs();
-  const [folders, setFolders] = useState<{ name: string }[]>([]);
-  const [base, setBase] = useState("");
-  const [custom, setCustom] = useState("");
+/* ------------------------------------------------------------ plugins */
+
+function PluginSettings() {
+  const epoch = useEpoch();
+  const [alerts, setAlerts] = useState<Alert[] | null>(null);
   useEffect(() => {
-    if (status.libraryRoot) api.folders(base).then(setFolders).catch(() => setFolders([]));
-  }, [status.libraryRoot, base]);
-  const toggle = (f: string) =>
-    setPrefs({ subSkipFolders: p.subSkipFolders.includes(f) ? p.subSkipFolders.filter((x) => x !== f) : [...p.subSkipFolders, f] });
-  const rel = (n: string) => (base ? `${base}/${n}` : n);
+    api.healthAlerts().then(setAlerts).catch(() => setAlerts([]));
+  }, [epoch]);
+  const needs = (s: string) => alerts?.some((a) => a.fix === "settings:plugins" && a.detail.includes(s));
+  const rows: [string, string, string][] = [
+    ["MediaSegments API", "Saving intro, credits and recap markers (and Infuse's Skip buttons).", "MediaSegments"],
+    ["Open Subtitles", "Downloading subtitles. Sign in to it in the plugin's settings.", "Open Subtitles"],
+    ["Fanart", "Logos, banners, clear art and disc pictures.", "Fanart"],
+    ["TheTVDB", "Banners and episode data for shows.", "TheTVDB"],
+  ];
   return (
-    <section className="card form">
-      <h2>Subtitle downloads</h2>
-      <p className="muted small">Folders the subtitle downloader leaves alone (the Subtitles screen, “Get missing subtitles” and the daily task). Handy for kids' shows, home videos or foreign-language folders.</p>
-      {p.subSkipFolders.length > 0 && (
-        <div className="chips">
-          {p.subSkipFolders.map((f) => <span key={f} className="chip static on">{f}<button className="link x" onClick={() => toggle(f)} aria-label="Remove">×</button></span>)}
+    <Section id="plugins" title="Jellyfin plugins" icon="stack" hint="Installed in Jellyfin: Dashboard → Plugins → Catalog, then restart Jellyfin.">
+      {rows.map(([n, why, key]) => (
+        <div key={n} className="plugin-row">
+          <span className={alerts === null ? "muted" : needs(key) ? "warn" : "ok"}><Icon name={alerts === null ? "clock" : needs(key) ? "warn" : "check"} /></span>
+          <div className="grow"><div className="strong small">{n}</div><div className="muted small">{why}</div></div>
+          <span className={`small ${needs(key) ? "warn" : "ok"}`}>{alerts === null ? "Checking…" : needs(key) ? "Not installed" : "Installed"}</span>
         </div>
-      )}
-      {status.libraryRoot && (
-        <div className="skip-picker">
-          <div className="small muted">
-            <button className="link" onClick={() => setBase("")}>Library folder</button>
-            {base && base.split("/").map((part, i, all) => <span key={i}> › <button className="link" onClick={() => setBase(all.slice(0, i + 1).join("/"))}>{part}</button></span>)}
-          </div>
-          {folders.map((f) => (
-            <div key={f.name} className="skip-row">
-              <label className="check small"><input type="checkbox" checked={p.subSkipFolders.includes(rel(f.name))} onChange={() => toggle(rel(f.name))} />{f.name}</label>
-              <button className="link small" onClick={() => setBase(rel(f.name))}>open ›</button>
-            </div>
-          ))}
-        </div>
-      )}
+      ))}
+    </Section>
+  );
+}
+
+/* ------------------------------------------------------------ problems */
+
+function ProblemsLog() {
+  const list = useProblems();
+  const [copied, setCopied] = useState(false);
+  const text = () => list.map((p) => `${new Date(p.at).toISOString()}  ${p.what}: ${p.message}`).join("\n");
+  return (
+    <Section id="problems" title="Problems log" icon="warn" hint="The last 200 things that went wrong. Copy it into a message to get help.">
       <div className="row">
-        <label>Or type part of a path<input value={custom} placeholder="e.g. Kids or Anime" onChange={(e) => setCustom(e.target.value)} /></label>
-        <button disabled={!custom.trim()} onClick={() => { toggle(custom.trim()); setCustom(""); }}>Add</button>
+        <button disabled={!list.length} onClick={() => { void navigator.clipboard.writeText(`Media Hub problems log\n${navigator.userAgent}\n\n${text()}`).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); }); }}><Icon name="copy" /> {copied ? "Copied" : "Copy for Claude"}</button>
+        <button disabled={!list.length} onClick={clearProblems}>Clear</button>
       </div>
-    </section>
+      <div className="problem-list">
+        {list.length === 0 && <p className="muted small">Nothing went wrong.</p>}
+        {list.slice(0, 60).map((p, i) => (
+          <div key={i} className="problem">
+            <span className="muted small mono">{new Date(p.at).toLocaleString()}</span>
+            <span className="strong small">{p.what}</span>
+            <span className="small bad">{p.message}</span>
+          </div>
+        ))}
+      </div>
+    </Section>
   );
 }

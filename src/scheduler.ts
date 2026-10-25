@@ -2,7 +2,8 @@
 // "Picks of the day" collection, fill in missing artwork and fetch missing subtitles.
 import { api, localDate, Status } from "./api";
 import { track } from "./activity";
-import { prefs, setPrefs, subSkipped } from "./prefs";
+import { scanLibrary } from "./ui";
+import { prefs, setPrefs, subPlan, subSkipped } from "./prefs";
 
 let running = false;
 
@@ -17,7 +18,7 @@ export async function runDaily(status: Status, force = false): Promise<void> {
   const canEdit = !status.readOnly;
   try {
     if (s.scan) {
-      await track("Daily: scanning the library", () => api.sync().then(() => undefined)).catch(() => undefined);
+      await scanLibrary().catch(() => undefined);
     }
     if (s.picks && canEdit) {
       await syncPicks(today);
@@ -44,17 +45,20 @@ export async function runDaily(status: Status, force = false): Promise<void> {
     if (s.subtitles && canEdit) {
       await track("Daily: missing subtitles", async (job) => {
         const r = await api.missingSubtitles(0, 80);
-        const lang = p.subLang || status.subLangs[0] || "eng";
+        const plan = subPlan(status.subLangs);
         let got = 0;
+        let stop = false;
         for (const [i, e] of (r.Items ?? []).entries()) {
-          if (job.cancelled) break;
+          if (job.cancelled || stop) break;
           if (subSkipped(e.Path)) continue;
           job.update(e.SeriesName ? `${e.SeriesName} · ${e.Name}` : e.Name, i / (r.Items?.length || 1));
-          try {
-            const res = await api.subtitleAuto(e.Id, lang, [lang], p.minSubScore);
-            if (res.outcome === "downloaded") got++;
-          } catch (err) {
-            if (/rate|limit|quota|plugin/i.test(String(err))) break; // the site says stop for today
+          for (const x of plan) {
+            try {
+              const res = await api.subtitleAuto(e.Id, x.lang, [x.lang], x.minScore);
+              if (res.outcome === "downloaded") got++;
+            } catch (err) {
+              if (/rate|limit|quota|plugin/i.test(String(err))) { stop = true; break; } // the site says stop for today
+            }
           }
         }
         job.update(`${got} subtitle${got === 1 ? "" : "s"} downloaded`, 1);
@@ -65,15 +69,34 @@ export async function runDaily(status: Status, force = false): Promise<void> {
   }
 }
 
-/** Today's picks as a Jellyfin collection and playlist, so Infuse and other apps see them. */
-async function syncPicks(today: string): Promise<void> {
+/**
+ * Today's picks as a Jellyfin collection and playlist (and, if you like, as favourites, which
+ * Infuse shows on its home screen), so Infuse and other apps see them.
+ */
+export async function syncPicks(today: string = localDate()): Promise<void> {
   await track("“Picks of the day” in Jellyfin", async (job) => {
     const picks = await api.picks(today);
     if (!picks.length) return;
     const ids = picks.map((x) => x.id);
     await api.syncPicksCollection(ids).catch(() => undefined);
     const n = await api.syncPicksPlaylist(ids);
-    job.update(`${n} videos in the playlist`);
+    let favs = 0;
+    if (prefs().picksAsFavorites) {
+      // Unmark yesterday's picks that Media Hub marked, then mark today's (not ones you had already).
+      for (const id of prefs().pickFavs.filter((x) => !ids.includes(x))) await api.setFavorite(id, false).catch(() => undefined);
+      const mine = prefs().pickFavs.filter((x) => ids.includes(x));
+      for (const id of ids) {
+        if (mine.includes(id)) continue;
+        const d = await api.details(id).catch(() => null);
+        if (!d || d.item.UserData?.IsFavorite) continue;
+        await api.setFavorite(id, true).then(() => { mine.push(id); favs++; }).catch(() => undefined);
+      }
+      setPrefs({ pickFavs: mine });
+    } else if (prefs().pickFavs.length) {
+      for (const id of prefs().pickFavs) await api.setFavorite(id, false).catch(() => undefined);
+      setPrefs({ pickFavs: [] });
+    }
+    job.update(`${n} videos in the playlist${favs ? ` · ${favs} favourites` : ""}`, 1);
   }, { reload: false }).catch(() => undefined);
   setPrefs((cur) => ({ lastRun: { ...cur.lastRun, picks: today } }));
 }
