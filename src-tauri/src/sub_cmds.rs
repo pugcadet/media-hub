@@ -51,7 +51,34 @@ fn file_stem(item: &Value) -> String {
 }
 
 fn has_lang(list: &[SubStream], codes: &[String]) -> bool {
-    list.iter().any(|s| !s.forced && codes.iter().any(|c| c.eq_ignore_ascii_case(&s.language)))
+    list.iter().any(|s| {
+        if s.forced {
+            return false;
+        }
+        if codes.iter().any(|c| c.eq_ignore_ascii_case(&s.language)) {
+            return true;
+        }
+        // Built-in subtitles often have no language tag, only a name like "English (SDH)".
+        let unknown = s.language.is_empty() || s.language == "und" || s.language == "unknown";
+        unknown && !s.external && title_names_lang(&s.title, codes)
+    })
+}
+
+/// "English", "English SDH", "Nederlands" … for a subtitle without a language tag.
+fn title_names_lang(title: &str, codes: &[String]) -> bool {
+    const NAMES: &[(&[&str], &[&str])] = &[
+        (&["eng", "en"], &["english"]),
+        (&["dut", "nld", "nl"], &["dutch", "nederlands"]),
+        (&["ger", "deu", "de"], &["german", "deutsch"]),
+        (&["fre", "fra", "fr"], &["french", "français", "francais"]),
+        (&["spa", "es"], &["spanish", "español", "espanol"]),
+        (&["ita", "it"], &["italian", "italiano"]),
+        (&["por", "pt"], &["portuguese", "português", "portugues"]),
+    ];
+    let t = title.to_lowercase();
+    NAMES.iter().any(|(cs, names)| {
+        cs.iter().any(|c| codes.iter().any(|x| x.eq_ignore_ascii_case(c))) && names.iter().any(|n| t.split(|ch: char| !ch.is_alphanumeric()).any(|w| w == *n))
+    })
 }
 
 fn check_codes(lang: &str, codes: &[String]) -> Result<Vec<String>> {
@@ -231,6 +258,18 @@ pub async fn undo_download(w: &Writer, id: &str, record_json: &str) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn built_in_subtitles_without_a_tag_count_by_name() {
+        let st = |lang: &str, title: &str, external: bool| SubStream { index: 2, language: lang.into(), title: title.into(), external, forced: false, path: String::new() };
+        let eng = vec!["eng".to_string()];
+        assert!(has_lang(&[st("eng", "", true)], &eng));
+        assert!(has_lang(&[st("", "English (SDH)", false)], &eng));
+        assert!(has_lang(&[st("und", "English - SUBRIP", false)], &eng));
+        assert!(!has_lang(&[st("", "Dutch", false)], &eng));
+        assert!(!has_lang(&[st("", "Englishman", false)], &eng));
+        assert!(has_lang(&[st("", "Nederlands", false)], &["dut".to_string(), "nld".to_string()]));
+    }
 
     fn item() -> Value {
         serde_json::json!({

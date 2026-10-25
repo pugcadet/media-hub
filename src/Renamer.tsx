@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, Batch, Candidate, errorText, FindReplace, imageUrl, PlanArgs, PlanOp, PlanResult, remoteImageUrl, Status } from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { api, Batch, Candidate, CheckResult, CheckRow, errorText, FindReplace, imageUrl, PlanArgs, PlanOp, PlanResult, remoteImageUrl, Status } from "./api";
 import { askConfirm } from "./confirm";
-import type { View } from "./App";
+import type { View } from "./nav";
+import { nav } from "./nav";
+import { track, useEpoch } from "./activity";
+import { Icon, itemMenu, openMenu } from "./ui";
 
 type Source = PlanArgs["source"];
 type Kind = "auto" | "tv" | "movie";
@@ -120,7 +124,16 @@ function InfusePreview({ plan, poster }: { plan: PlanResult; poster: string | nu
   );
 }
 
-export default function Renamer({ status, onChanged }: { status: Status; onChanged: () => void; onNav: (v: View) => void }) {
+interface Preset {
+  folder: string;
+  kind: Kind;
+  matchId: string | null;
+  onlyFile: string | null;
+  itemId: string | null;
+  label?: string;
+}
+
+function FolderFix({ status, onChanged, preset, embedded, onDone }: { status: Status; onChanged: () => void; preset?: Preset; embedded?: boolean; onDone?: () => void }) {
   const [base, setBase] = useState("");
   const [folders, setFolders] = useState<{ name: string }[]>([]);
   const [filter, setFilter] = useState("");
@@ -144,7 +157,19 @@ export default function Renamer({ status, onChanged }: { status: Status; onChang
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const [done, setDone] = useState<{ batch: string; count: number } | null>(null);
   const [history, setHistory] = useState<Batch[]>([]);
+  const [onlyFile, setOnlyFile] = useState<string | null>(null);
+  const [itemId, setItemId] = useState<string | null>(null);
+  const presetRef = useRef<Preset | undefined>(preset);
   const root = status.libraryRoot;
+
+  // Start on a given show or movie (from the library check or an item page).
+  useEffect(() => {
+    if (!preset) return;
+    presetRef.current = preset;
+    setKind(preset.kind);
+    setTarget(preset.folder);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset?.folder, preset?.itemId]);
 
   useEffect(() => {
     if (!root) return;
@@ -155,7 +180,7 @@ export default function Renamer({ status, onChanged }: { status: Status; onChang
 
   const mode: "tv" | "movie" = plan?.mode === "movie" || kind === "movie" ? "movie" : "tv";
 
-  const preview = useCallback(async (over: Partial<{ matchId: string | null; source: Source; search: string; year: string; kind: Kind; template: string; renameFolder: boolean | null; seasonFolders: boolean }> = {}) => {
+  const preview = useCallback(async (over: Partial<{ matchId: string | null; source: Source; search: string; year: string; kind: Kind; template: string; renameFolder: boolean | null; seasonFolders: boolean; onlyFile: string | null; itemId: string | null }> = {}) => {
     if (target === null) return;
     setBusy("Reading the folder and looking it up…");
     setMessage(null);
@@ -172,6 +197,7 @@ export default function Renamer({ status, onChanged }: { status: Status; onChang
         findReplace: rules.filter((r) => r.find), recursive: true,
         source: over.source ?? source, matchId: over.matchId !== undefined ? over.matchId : matchId,
         renameFolder: rf, seasonFolders: over.seasonFolders ?? seasonFolders,
+        onlyFile: over.onlyFile !== undefined ? over.onlyFile : onlyFile, itemId: over.itemId !== undefined ? over.itemId : itemId,
       });
       // The first look decides show/movie; use that style if the guess changed.
       if (k === "auto" && !over.template && result.mode !== (m ?? "tv")) {
@@ -192,19 +218,30 @@ export default function Renamer({ status, onChanged }: { status: Status; onChang
     } finally {
       setBusy(null);
     }
-  }, [target, kind, year, search, plan?.mode, style, renameFolder, rules, source, matchId, seasonFolders]);
+  }, [target, kind, year, search, plan?.mode, style, renameFolder, rules, source, matchId, seasonFolders, onlyFile, itemId]);
 
   useEffect(() => {
     setPlan(null);
-    setMatchId(null);
     setSearch("");
     setYear("");
     setRenameFolder(null);
     setDone(null);
-    if (target !== null) void previewFor();
+    const p = presetRef.current;
+    if (p && p.folder === target) {
+      setMatchId(p.matchId);
+      if (p.matchId) setSource("jellyfin");
+      setOnlyFile(p.onlyFile);
+      setItemId(p.itemId);
+      if (target !== null) void preview({ matchId: p.matchId, search: "", year: "", renameFolder: null, kind: p.kind, onlyFile: p.onlyFile, itemId: p.itemId, source: p.matchId ? "jellyfin" : undefined, template: p.kind === "auto" ? undefined : style[p.kind as "tv" | "movie"] });
+    } else {
+      setMatchId(null);
+      setOnlyFile(null);
+      setItemId(null);
+      if (target !== null) void preview({ matchId: null, search: "", year: "", renameFolder: null, onlyFile: null, itemId: null });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target]);
-  const previewFor = () => preview({ matchId: null, search: "", year: "", renameFolder: null });
+  const previewFor = () => preview({ search: "", year: "", renameFolder: null });
 
   async function apply() {
     if (!plan || !picked.size) return;
@@ -222,7 +259,10 @@ export default function Renamer({ status, onChanged }: { status: Status; onChang
       setPlan(null);
       loadHistory();
       onChanged();
+      void api.libraryScan().catch(() => undefined);
+      if (presetRef.current && top) presetRef.current = { ...presetRef.current, folder: top.to };
       if (top) setTarget(top.to);
+      onDone?.();
     } catch (e) {
       setMessage({ text: errorText(e), error: true });
     } finally {
@@ -281,17 +321,13 @@ export default function Renamer({ status, onChanged }: { status: Status; onChang
   }
 
   return (
-    <div className="pg">
-      <div className="pg-head">
-        <div>
-          <h1>Renamer</h1>
-          <div className="muted small">Fixes file and folder names so Jellyfin and Infuse recognise every show, season and movie.</div>
-        </div>
-      </div>
+    <div className={embedded ? "stack" : "stack"}>
       {message && <p className={message.error ? "error" : "note"} role="status">{message.text}</p>}
 
       {/* 1 · folder */}
-      {target === null ? (
+      {target === null && embedded ? (
+        <p className="muted">Finding the files…</p>
+      ) : target === null ? (
         <section className="card picker">
           <div className="picker-head">
             <span className="step-dot">1</span>
@@ -325,7 +361,8 @@ export default function Renamer({ status, onChanged }: { status: Status; onChang
         <section className="card chosen">
           <span className="step-dot done">✓</span>
           <span className="ico">📁</span>
-          <span className="mono grow">{target || last(root)}</span>
+          <span className="mono grow">{preset?.label ?? (target || last(root))}{onlyFile ? <span className="muted"> · {last(onlyFile)}</span> : null}</span>
+          <button className="icon-btn" title="Show in Finder" onClick={() => void api.revealRel(target ?? "").catch((e) => setMessage({ text: errorText(e), error: true }))}><Icon name="folder" /></button>
           <div className="seg">
             {(["auto", "tv", "movie"] as Kind[]).map((k) => (
               <button key={k} className={kind === k ? "on" : ""} onClick={() => { setKind(k); void preview({ kind: k, matchId: null, template: k === "auto" ? undefined : style[k as "tv" | "movie"] }); }}>
@@ -333,7 +370,7 @@ export default function Renamer({ status, onChanged }: { status: Status; onChang
               </button>
             ))}
           </div>
-          <button onClick={() => setTarget(null)}>Change folder</button>
+          {!embedded && <button onClick={() => { presetRef.current = undefined; setTarget(null); }}>Change folder</button>}
         </section>
       )}
 
@@ -342,11 +379,11 @@ export default function Renamer({ status, onChanged }: { status: Status; onChang
       {done && (
         <section className="card form done-card">
           <div className="strong">Renamed {done.count} item{done.count === 1 ? "" : "s"}.</div>
-          <div className="muted small">Jellyfin picks up the new names at its next library scan (Dashboard → Libraries → Scan, or wait for the scheduled scan).</div>
+          <div className="muted small">Jellyfin has been asked to scan, so the new names show up in a minute.</div>
           <div className="row">
-            <button className="primary" onClick={() => void previewFor()}>Check this folder again</button>
+            <button className="primary" onClick={() => void previewFor()}>Check again</button>
             <button onClick={() => void undo(done.batch, done.count)}>Undo</button>
-            <button onClick={() => setTarget(null)}>Fix another folder</button>
+            {!embedded && <button onClick={() => { presetRef.current = undefined; setTarget(null); }}>Fix another folder</button>}
           </div>
         </section>
       )}
@@ -496,7 +533,7 @@ export default function Renamer({ status, onChanged }: { status: Status; onChang
         </div>
       )}
 
-      {history.length > 0 && (
+      {history.length > 0 && !embedded && (
         <details className="card history">
           <summary className="strong">History ({history.length})</summary>
           {history.slice(0, 15).map((b) => (
@@ -510,6 +547,268 @@ export default function Renamer({ status, onChanged }: { status: Status; onChang
             </div>
           ))}
         </details>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ library check */
+
+const TV_TEMPLATE = STYLES.tv[0].value;
+const MOVIE_TEMPLATE = STYLES.movie[0].value;
+
+function presetFor(r: CheckRow): Preset {
+  return r.kind === "series"
+    ? { folder: r.folder, kind: "tv", matchId: `jellyfin:${r.id}`, onlyFile: null, itemId: null, label: `${r.name}${r.year ? ` (${r.year})` : ""}` }
+    : { folder: r.folder, kind: "movie", matchId: null, onlyFile: r.file, itemId: r.id, label: `${r.name}${r.year ? ` (${r.year})` : ""}` };
+}
+
+/** Plans and renames one checked title the same way the check did. Returns files renamed. */
+async function renameRow(r: CheckRow): Promise<number> {
+  const p = presetFor(r);
+  const plan = await api.plan({
+    mode: p.kind, folder: p.folder, template: r.kind === "series" ? TV_TEMPLATE : MOVIE_TEMPLATE, show: null, year: null,
+    findReplace: [], recursive: r.kind === "series", source: r.kind === "series" ? "jellyfin" : "none", matchId: p.matchId,
+    renameFolder: null, seasonFolders: false, onlyFile: p.onlyFile, itemId: p.itemId,
+  });
+  const ok = plan.ops.filter((o) => o.status === "ok").map((o) => o.from);
+  if (!ok.length) return 0;
+  const rep = await api.apply(plan.planId, true, ok);
+  return rep.done;
+}
+
+function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => void }) {
+  const epoch = useEpoch();
+  const [res, setRes] = useState<CheckResult | null>(null);
+  const [checking, setChecking] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [show, setShow] = useState<"todo" | "right" | "errors">("todo");
+
+  useEffect(() => {
+    api.namingCheckLast().then((r) => setRes(r)).catch(() => setRes(null));
+  }, [epoch]);
+
+  async function check(ids: string[] | null = null) {
+    setError(null);
+    try {
+      await track(ids ? "Checking names again" : "Checking every show and movie", async (job) => {
+        const un = await listen<{ done: number; total: number; name: string }>("naming-progress", (e) => {
+          setChecking(e.payload.name ? `${e.payload.name} (${e.payload.done + 1}/${e.payload.total})` : null);
+          job.update(e.payload.name, e.payload.total ? e.payload.done / e.payload.total : null);
+        });
+        try {
+          const r = await api.namingCheck(TV_TEMPLATE, MOVIE_TEMPLATE, ids);
+          setRes(r);
+        } finally {
+          un();
+          setChecking(null);
+        }
+      }, { reload: false });
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
+  const rows = res?.rows ?? [];
+  const q = filter.toLowerCase();
+  const match = (r: CheckRow) => !q || r.name.toLowerCase().includes(q) || r.folder.toLowerCase().includes(q);
+  const todo = rows.filter((r) => !r.error && (r.toRename + r.folders + r.problems > 0 || r.reasons.length > 0));
+  const sure = todo.filter((r) => r.sure);
+  const look = todo.filter((r) => !r.sure);
+  const right = rows.filter((r) => !r.error && !todo.includes(r));
+  const errors = rows.filter((r) => r.error);
+
+  async function bulk() {
+    const list = sure.filter((r) => picked.has(r.id));
+    if (!list.length) return;
+    const files = list.reduce((n, r) => n + r.toRename + r.folders, 0);
+    if (!(await askConfirm(`Rename ${files} files and folders in ${list.length} title${list.length === 1 ? "" : "s"}? These are 100% matches. Nothing is deleted or overwritten, and every batch can be undone.`, { okLabel: "Rename all" }))) return;
+    try {
+      await track(`Renaming ${list.length} titles`, async (job) => {
+        let n = 0;
+        const failed: string[] = [];
+        for (const [i, r] of list.entries()) {
+          if (job.cancelled) break;
+          job.update(r.name, i / list.length);
+          try {
+            n += await renameRow(r);
+          } catch (e) {
+            failed.push(`${r.name}: ${errorText(e)}`);
+          }
+        }
+        job.update("Asking Jellyfin to scan", null);
+        await api.libraryScan().catch(() => undefined);
+        await check(list.map((r) => r.id));
+        setPicked(new Set());
+        if (failed.length) throw `${n} renamed; ${failed.length} failed: ${failed[0]}`;
+        job.update(`${n} renamed`, 1);
+      }, { cancellable: true });
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
+  const rowView = (r: CheckRow) => (
+    <div
+      key={r.id}
+      className="check-row"
+      onContextMenu={(e) => openMenu(e, [
+        { label: "Fix…", run: () => onFix(r) },
+        { label: "Open title", run: () => nav.open(r.id) },
+        { label: "Show folder in Finder", run: () => void api.revealRel(r.folder).catch(() => undefined) },
+        { label: "Check again", run: () => void check([r.id]) },
+        { sep: true },
+        ...itemMenu({ id: r.id, kind: r.kind, title: r.name }).filter((m) => m.label === "Identify…" || m.label === "Fill in missing artwork"),
+      ])}
+    >
+      {r.sure && <input type="checkbox" checked={picked.has(r.id)} onChange={() => setPicked((p) => { const n = new Set(p); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; })} aria-label="Select" />}
+      <button className="thumb" onClick={() => nav.open(r.id)} title="Open"><img src={imageUrl(r.id, "Primary", 120)} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /></button>
+      <button className="check-main link-plain" onClick={() => onFix(r)}>
+        <div className="title">{r.name}{r.year ? <span className="muted"> ({r.year})</span> : null} <span className="muted small">· {r.kind === "series" ? "Show" : "Movie"}</span></div>
+        <div className="check-reasons">
+          {r.sure && <span className="chip static on">100% match</span>}
+          {r.error ? <span className="bad small">{r.error}</span> : r.reasons.map((x, i) => <span key={i} className={`small ${/Not identified|clash|without/.test(x) ? "warn" : "muted"}`}>{x}</span>)}
+        </div>
+        {r.example && <div className="mono small check-example"><span className="muted">{r.example[0]}</span> <span className="accent">→ {r.example[1]}</span></div>}
+      </button>
+      <div className="row end">
+        <button className="icon-btn" title="Show in Finder" onClick={() => void api.revealRel(r.folder).catch(() => undefined)}><Icon name="folder" /></button>
+        <button onClick={() => onFix(r)}>{r.sure ? "Review" : "Fix…"}</button>
+      </div>
+    </div>
+  );
+
+  if (!status.libraryRoot) return null;
+  return (
+    <div className="stack">
+      <section className="card form">
+        <div className="row between">
+          <div>
+            <div className="strong">Which shows and movies are named wrong, and why</div>
+            <div className="muted small">{res ? `Last checked ${new Date(res.at * 1000).toLocaleString()} · ${rows.length} titles` : "Not checked yet. Nothing is renamed by checking."}</div>
+          </div>
+          <div className="row end">
+            {checking ? <button onClick={() => void api.namingCheckCancel()}>Stop</button> : <button className="primary" onClick={() => void check()}>{res ? "Check again" : "Check my library"}</button>}
+          </div>
+        </div>
+        {checking && <div className="muted small">Checking {checking}…</div>}
+        {error && <p className="error">{error}</p>}
+      </section>
+
+      {res && (
+        <>
+          <div className="toolbar">
+            <div className="chips">
+              <button className={`chip ${show === "todo" ? "on" : ""}`} onClick={() => setShow("todo")}>To fix ({todo.length})</button>
+              <button className={`chip ${show === "right" ? "on" : ""}`} onClick={() => setShow("right")}>Already right ({right.length})</button>
+              {errors.length > 0 && <button className={`chip ${show === "errors" ? "on" : ""}`} onClick={() => setShow("errors")}>Couldn't check ({errors.length})</button>}
+            </div>
+            <label className="searchbox"><Icon name="search" /><input placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} /></label>
+          </div>
+
+          {show === "todo" && (
+            <>
+              {sure.filter(match).length > 0 && (
+                <section className="card list-card">
+                  <div className="section-head">
+                    <h2>Sure matches ({sure.length})</h2>
+                    <div className="row end">
+                      <span className="muted small">Identified in Jellyfin and every episode found: safe to rename in one go.</span>
+                      <button className="link small" onClick={() => setPicked(new Set(sure.filter(match).map((r) => r.id)))}>Select all</button>
+                      <button className="primary" disabled={!sure.some((r) => picked.has(r.id))} onClick={() => void bulk()}>Rename {sure.filter((r) => picked.has(r.id)).length || ""} selected</button>
+                    </div>
+                  </div>
+                  {sure.filter(match).map(rowView)}
+                </section>
+              )}
+              {look.filter(match).length > 0 && (
+                <section className="card list-card">
+                  <div className="section-head"><h2>Needs a look ({look.length})</h2><span className="muted small">Click one to see the files, pick the right match and rename.</span></div>
+                  {look.filter(match).map(rowView)}
+                </section>
+              )}
+              {todo.length === 0 && <p className="ok strong">Everything is named right.</p>}
+            </>
+          )}
+          {show === "right" && (
+            <section className="card list-card">
+              {right.filter(match).slice(0, 400).map((r) => (
+                <button key={r.id} className="tool-row" onClick={() => nav.open(r.id)}>
+                  <div className="names"><div className="title">{r.name}{r.year ? ` (${r.year})` : ""}</div><div className="muted small mono">{r.folder}</div></div>
+                  <span className="ok small">✓ {r.right} right</span>
+                </button>
+              ))}
+            </section>
+          )}
+          {show === "errors" && <section className="card list-card">{errors.filter(match).map(rowView)}</section>}
+        </>
+      )}
+    </div>
+  );
+}
+
+export default function Renamer({ status, onChanged, start, embedded }: {
+  status: Status; onChanged: () => void; onNav: (v: View) => void;
+  start?: { folder?: string; item?: string }; embedded?: boolean;
+}) {
+  const [mode, setMode] = useState<"check" | "folder">(start ? "folder" : "check");
+  const [preset, setPreset] = useState<Preset | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
+
+  // Opened for one title: find its folder (and file, for a movie) first.
+  useEffect(() => {
+    if (!start?.item) {
+      if (start?.folder !== undefined) setPreset({ folder: start.folder, kind: "auto", matchId: null, onlyFile: null, itemId: null });
+      return;
+    }
+    setError(null);
+    api.namingCheck(TV_TEMPLATE, MOVIE_TEMPLATE, [start.item])
+      .then((r) => {
+        const row = r.rows.find((x) => x.id === start.item);
+        if (!row) throw "Jellyfin has no file location for this title.";
+        if (row.error && !row.folder) throw row.error;
+        setPreset(presetFor(row));
+      })
+      .catch((e) => setError(errorText(e)));
+  }, [start?.item, start?.folder]);
+
+  const fix = (r: CheckRow) => {
+    setPreset(presetFor(r));
+    setMode("folder");
+  };
+
+  if (embedded) {
+    if (!status.libraryRoot) return <p className="muted">Choose your library folder in Settings first.</p>;
+    return (
+      <div className="stack">
+        {error && <p className="error">{error}</p>}
+        {preset ? <FolderFix status={status} onChanged={onChanged} preset={preset} embedded /> : !error && <p className="muted">Finding the files…</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="pg">
+      <div className="pg-head">
+        <div>
+          <h1>Renamer</h1>
+          <div className="muted small">Fixes file and folder names so Jellyfin and Infuse recognise every show, season and movie.</div>
+        </div>
+        <div className="seg">
+          <button className={mode === "check" ? "on" : ""} onClick={() => setMode("check")}>Library check</button>
+          <button className={mode === "folder" ? "on" : ""} onClick={() => { setPreset(undefined); setMode("folder"); }}>Pick a folder</button>
+        </div>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {mode === "check" ? (
+        status.libraryRoot ? <CheckList status={status} onFix={fix} /> : <FolderFix status={status} onChanged={onChanged} />
+      ) : (
+        <>
+          {preset && <p className="muted small"><button className="link" onClick={() => setMode("check")}>← Back to the list</button></p>}
+          <FolderFix key={preset ? `${preset.folder}|${preset.itemId ?? ""}` : "free"} status={status} onChanged={onChanged} preset={preset} />
+        </>
       )}
     </div>
   );

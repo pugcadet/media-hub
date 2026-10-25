@@ -6,16 +6,24 @@ file share. Infuse keeps reading everything from Jellyfin, so whatever you fix h
 
 ## What it does
 
+The hub in the top-left corner switches between the **Media manager** (fix things) and the
+**Player** (browse and watch). Music and downloads will get their own place there later.
+
 | Screen | What you can do |
 | --- | --- |
-| **Library** | Browse movies and shows from Jellyfin, search, sort, picks of the day. |
-| **Item page** | Edit details, ratings and ids · identify via TMDB/TVDB · pick or upload poster, backdrop, logo, thumbnail and banner (per show and per season) · play. |
-| **Subtitles** (movie/episode) | Candidates with a match score (100 = made for exactly this file) · per-season "get missing subtitles". |
-| **Intros & credits** (season) | Auto-detect by listening to the audio (plus chapter names) · timeline to check or draw times · save as skip markers in Jellyfin. |
-| **Renamer** | Jellyfin/Infuse-style names with a preview, episode titles from Jellyfin, find & replace, subtitles move along. |
-| **Storage** | Shrink movies to H.265 with the graphics chip · even out loudness (volume only) · originals kept in a trash folder until you empty it. |
-| **Downloads** | yt-dlp for videos and music · save a channel or playlist as a series (Show / Season 01 / S01E01). |
-| **Player** | Plays through Jellyfin with skip intro/credits and subtitles. |
+| **Home** | Continue watching, next up, picks of the day (also kept in Jellyfin as a collection, so Infuse shows them), recently added, collections. |
+| **Library / Collections** | Browse, search, sort. Right-click any title: play, go to the show or season, mark watched, add to a collection, identify, rename, fill in artwork, show in Finder. |
+| **Item page** | Edit details · identify (updates the artwork too) · artwork tab with every kind of picture, all backdrops (make main, remove, undo), click to enlarge · cast and “more like this” · rename the files of just this title · per-season episodes with subtitle status, subtitle and intro tools on top. |
+| **Add show or movie** | Pick a folder or file from anywhere, say what it is, choose the library folder: it is put in place with the right name, the files are named, Jellyfin scans, the match is linked and the artwork is filled in. |
+| **Renamer** | *Library check*: every show and movie that is named wrong, and why; 100% matches rename in bulk; open any row to fix it by hand. *Pick a folder*: the detailed renamer with a preview of how Infuse will show it. |
+| **Subtitles** | Candidates with a match score (100 = made for exactly this file, the default minimum) · built-in subtitles count, so nothing is downloaded twice. |
+| **Intros & credits** | Auto-detect by listening to the audio · timeline to draw or type times · preview an episode and press I / O to set the start and end while watching · remove recaps, intros or credits for a season or a whole show. |
+| **Player** | Resume, up next with autoplay, skip intro/credits buttons (optionally automatic), C for your subtitle language (fetched online without stopping if missing), subtitle size/font/box/shadow/height, preview pictures while scrubbing, a pause screen with the title's art, info and cast, ↑/↓ volume. |
+| **Settings** | Player and subtitle look, recaps on/off, daily scheduled tasks (scan, picks, artwork, subtitles). |
+| **Storage / Downloads** | Parked for now (code kept). |
+
+The bar at the top shows what Media Hub is doing; screens reload by themselves when a job finishes,
+and the round arrow reloads everything.
 
 ## Safety
 

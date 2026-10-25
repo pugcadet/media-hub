@@ -1,18 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, AutoResult, codesFor, cultures, Culture, errorText, imageUrl, Item, JfChild, languageName, Status } from "./api";
 import type { Route } from "./App";
+import { track, useEpoch } from "./activity";
+import { prefs, setPrefs } from "./prefs";
+import { itemMenu, openMenu } from "./ui";
 
 /** Metadata and art: titles that need a match or a poster. */
 export function MetadataTool({ onOpen, onRoute }: { onOpen: (id: string) => void; onRoute: (r: Route) => void }) {
   const [unmatched, setUnmatched] = useState<Item[]>([]);
   const [noPoster, setNoPoster] = useState<Item[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const epoch = useEpoch();
   useEffect(() => {
+    // Reloads after every change (e.g. identifying a title takes it off the list).
     api.list(null, "", "name", 0, 200, null, "unmatched").then(setUnmatched).catch((e) => setError(errorText(e)));
     api.list(null, "", "name", 0, 200, null, "noposter").then(setNoPoster).catch((e) => setError(errorText(e)));
-  }, []);
+  }, [epoch]);
+  const fillAll = (items: Item[]) => void track(`Artwork for ${items.length} titles`, async (job) => {
+    let added = 0;
+    for (const [i, it] of items.entries()) {
+      if (job.cancelled) break;
+      job.update(it.name, i / items.length);
+      added += (await api.fillMissingArt(it.id, ["Primary", "Backdrop", "Logo", "Thumb", "Banner"]).catch(() => [])).length;
+    }
+    job.update(`${added} pictures added`, 1);
+  }, { cancellable: true });
   const row = (i: Item, why: string) => (
-    <button className="tool-row" key={`${why}-${i.id}`} onClick={() => onOpen(i.id)}>
+    <button className="tool-row" key={`${why}-${i.id}`} onClick={() => onOpen(i.id)} onContextMenu={(e) => openMenu(e, itemMenu({ id: i.id, kind: i.kind, title: i.name, played: i.played }))}>
       <div className="thumb">{i.hasPoster ? <img src={imageUrl(i.id, "Primary", 120)} alt="" loading="lazy" /> : null}</div>
       <div className="names">
         <div className="title">{i.name}{i.year ? ` (${i.year})` : ""}</div>
@@ -32,7 +46,8 @@ export function MetadataTool({ onOpen, onRoute }: { onOpen: (id: string) => void
         {unmatched.length === 0 ? <p className="muted small">Everything is matched.</p> : unmatched.map((i) => row(i, "no match yet: open it and use Identify"))}
       </section>
       <section className="card list-card">
-        <div className="section-head"><h2>Without a poster ({noPoster.length})</h2></div>
+        <div className="section-head"><h2>Without a poster ({noPoster.length})</h2>
+          {noPoster.length > 0 && <button className="link" onClick={() => fillAll(noPoster)}>Fill in all missing artwork</button>}</div>
         {noPoster.length === 0 ? <p className="muted small">Every title has a poster.</p> : noPoster.map((i) => row(i, "pick or upload a poster"))}
       </section>
     </div>
@@ -48,7 +63,8 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
   const [error, setError] = useState<string | null>(null);
   const [list, setList] = useState<Culture[]>([]);
   const [lang, setLang] = useState(status.subLangs[0] ?? "eng");
-  const [minScore, setMinScore] = useState(80);
+  const [minScore, setMinScoreState] = useState(prefs().minSubScore);
+  const setMinScore = (n: number) => { setMinScoreState(n); setPrefs({ minSubScore: n }); };
   const [running, setRunning] = useState(false);
   const stop = useRef(false);
   const [results, setResults] = useState<Record<string, string>>({});
@@ -64,8 +80,10 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
   async function fill() {
     setRunning(true);
     stop.current = false;
-    for (const e of items) {
-      if (stop.current) break;
+    await track(`Subtitles for ${items.length} videos`, async (job) => {
+    for (const [i, e] of items.entries()) {
+      if (stop.current || job.cancelled) break;
+      job.update(label(e), i / items.length);
       if (results[e.Id]) continue;
       setResults((r) => ({ ...r, [e.Id]: "working…" }));
       try {
@@ -77,7 +95,9 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
         if (/rate|limit|quota|switched off|plugin/i.test(t)) break;
       }
     }
+    }, { cancellable: true, reload: false }).catch(() => undefined);
     setRunning(false);
+    void load();
   }
 
   const label = (e: JfChild) =>
@@ -96,7 +116,7 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
             </select>
           </label>
           <label className="sort">Minimum score
-            <input type="number" className="num" min={1} max={100} value={minScore} onChange={(e) => setMinScore(Math.max(1, Math.min(100, Number(e.target.value) || 80)))} />
+            <input type="number" className="num" min={1} max={100} value={minScore} onChange={(e) => setMinScore(Math.max(1, Math.min(100, Number(e.target.value) || 100)))} />
           </label>
           {running ? <button onClick={() => (stop.current = true)}>Stop</button> : (
             <button className="primary" disabled={!items.length || status.readOnly} onClick={() => void fill()}>Get the best match for all</button>

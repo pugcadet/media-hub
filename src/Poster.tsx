@@ -1,4 +1,5 @@
-import { imageUrl, Item } from "./api";
+import { cleanTitle, imageUrl, Item } from "./api";
+import { itemMenu, openMenu } from "./ui";
 
 function meta(item: Item): string {
   if (item.kind === "series") {
@@ -18,20 +19,21 @@ function flag(item: Item): { text: string; cls: string } {
   return { text: "OK", cls: "ok" };
 }
 
-export default function Poster({ item, onOpen, width = 300 }: { item: Item; onOpen: (i: Item) => void; width?: number }) {
+export default function Poster({ item, onOpen, width = 300, canEdit = true }: { item: Item; onOpen: (i: Item) => void; width?: number; canEdit?: boolean }) {
   const f = flag(item);
+  const name = cleanTitle(item.name, item.year);
   return (
-    <button className="poster" onClick={() => onOpen(item)} title={item.name}>
+    <button className="poster" onClick={() => onOpen(item)} title={name} onContextMenu={(e) => openMenu(e, itemMenu({ id: item.id, kind: item.kind, title: name, played: item.played }, canEdit))}>
       <div className="art">
         {item.hasPoster ? (
           <img src={imageUrl(item.id, "Primary", width)} alt="" loading="lazy" decoding="async" />
         ) : (
-          <div className="noart">{item.name}</div>
+          <div className="noart">{name}</div>
         )}
         <span className={`flag ${f.cls}`}>{f.text}</span>
         {item.played && <span className="played" title="Watched">✓</span>}
       </div>
-      <div className="title">{item.name}</div>
+      <div className="title">{name}</div>
       <div className="sub">{meta(item)}</div>
     </button>
   );

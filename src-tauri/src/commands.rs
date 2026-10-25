@@ -402,3 +402,19 @@ pub async fn set_user(state: State<'_, AppState>, id: String) -> Result<()> {
 pub fn set_sync_watched(state: State<'_, AppState>, value: bool) -> Result<()> {
     state.update_settings(|s| s.sync_watched = value)
 }
+
+/// Marks a movie, show, season or episode as watched or not, for the chosen user.
+/// An explicit choice in the window, so it works whether or not "sync watched" is on.
+#[tauri::command]
+pub async fn set_played(state: State<'_, AppState>, id: String, played: bool) -> Result<()> {
+    if !crate::jellyfin::valid_item_id(&id) {
+        return Err(crate::error::Error::msg("bad id"));
+    }
+    let c = state.reader().await?;
+    if played {
+        c.mark_played(&id).await?;
+    } else {
+        c.mark_unplayed(&id).await?;
+    }
+    state.store()?.set_played(&id, played)
+}

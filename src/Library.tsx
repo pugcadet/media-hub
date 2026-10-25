@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, Attention, errorText, imageUrl, Item, Kind, Library as Lib, localDate, Pick, Sort, Status } from "./api";
+import { api, Attention, errorText, Item, Kind, Library as Lib, Sort, Status } from "./api";
 import Poster from "./Poster";
 import type { Route } from "./App";
+import { useEpoch } from "./activity";
 
 const PAGE = 120;
 
@@ -26,20 +27,6 @@ interface Props {
   onOpen: (id: string) => void;
 }
 
-function PickCard({ p, onOpen }: { p: Pick; onOpen: (id: string) => void }) {
-  return (
-    <button className="pick-card" onClick={() => onOpen(p.id)}>
-      <img src={imageUrl(p.artId, "Backdrop", 640)} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} />
-      <div className="pick-shade" />
-      <div className="pick-text">
-        <div className="pick-why">{p.why}</div>
-        <div className="pick-title">{p.title}</div>
-        <div className="pick-meta">{p.meta}</div>
-      </div>
-    </button>
-  );
-}
-
 export default function Library({ status, libraries, attention, route, onRoute, onChanged, onOpen }: Props) {
   const lib = libraries.find((l) => l.id === route.library) ?? null;
   const [kind, setKind] = useState<Kind>(null);
@@ -48,12 +35,12 @@ export default function Library({ status, libraries, attention, route, onRoute, 
   const [sort, setSort] = useState<Sort>("name");
   const [items, setItems] = useState<Item[]>([]);
   const [more, setMore] = useState(false);
-  const [picks, setPicks] = useState<Pick[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const loading = useRef(false);
   const flag = route.flag ?? null;
+  const epoch = useEpoch();
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query), 200);
@@ -81,11 +68,7 @@ export default function Library({ status, libraries, attention, route, onRoute, 
   useEffect(() => {
     loading.current = false;
     void loadPage(0);
-  }, [loadPage, total, status.lastSync]);
-
-  useEffect(() => {
-    api.picks(localDate()).then(setPicks).catch(() => setPicks([]));
-  }, [status.lastSync]);
+  }, [loadPage, total, status.lastSync, epoch]);
 
   useEffect(() => {
     const el = sentinel.current;
@@ -121,7 +104,6 @@ export default function Library({ status, libraries, attention, route, onRoute, 
 
   const title = flag ? FLAG_TITLE[flag] ?? "Library" : lib?.name ?? "Library";
   const mixed = !lib || lib.kind === "mixed";
-  const showPicks = !flag && !debounced && picks.length > 0 && (!route.library || route.library === libraries[0]?.id);
 
   return (
     <div className="pg">
@@ -139,12 +121,6 @@ export default function Library({ status, libraries, attention, route, onRoute, 
 
       {message && <p className="error" role="alert">{message}</p>}
 
-      {showPicks && (
-        <section className="section">
-          <div className="section-head"><h2>Picks of the day</h2><span className="muted small">Refreshes at midnight</span></div>
-          <div className="picks-row">{picks.map((p) => <PickCard key={p.id} p={p} onOpen={onOpen} />)}</div>
-        </section>
-      )}
 
       {!flag && attention && (attention.unmatched > 0 || attention.noPoster > 0 || (attention.noSubtitles ?? 0) > 0) && (
         <section className="attention">
@@ -190,7 +166,7 @@ export default function Library({ status, libraries, attention, route, onRoute, 
 
       {items.length === 0 && !syncing && <p className="muted">{total === 0 ? "Nothing here yet. Press Scan library." : "Nothing matches."}</p>}
       <div className="grid">
-        {items.map((i) => <Poster key={i.id} item={i} onOpen={(x) => onOpen(x.id)} />)}
+        {items.map((i) => <Poster key={i.id} item={i} onOpen={(x) => onOpen(x.id)} canEdit={!status.readOnly} />)}
       </div>
       <div ref={sentinel} style={{ height: 1 }} />
     </div>

@@ -112,6 +112,9 @@ export interface PlanArgs {
   matchId: string | null;
   renameFolder: boolean | null;
   seasonFolders: boolean;
+  /** Movies: only this file (and its subtitles), matched to the Jellyfin item `itemId`. */
+  onlyFile?: string | null;
+  itemId?: string | null;
 }
 
 export interface Batch {
@@ -122,12 +125,12 @@ export interface Batch {
   example: string;
 }
 
-export type ImageKind = "Primary" | "Backdrop" | "Logo" | "Thumb" | "Banner";
+export type ImageKind = "Primary" | "Backdrop" | "Logo" | "Thumb" | "Banner" | "Art" | "Disc";
 
 export interface Change {
   id: number;
   at: number;
-  action: "item_update" | "identify" | "image" | "subtitle" | "segment" | "storage";
+  action: "item_update" | "identify" | "image" | "image_removed" | "collection" | "subtitle" | "segment" | "storage";
   target: string;
   undone: boolean;
 }
@@ -161,6 +164,14 @@ export interface JfItem {
   UserData?: { Played?: boolean; PlaybackPositionTicks?: number };
   SeriesId?: string;
   SeriesName?: string;
+  SeasonId?: string;
+  SeasonName?: string;
+  Taglines?: string[];
+  Studios?: { Name: string }[];
+  People?: { Id: string; Name: string; Role?: string; Type?: string; PrimaryImageTag?: string }[];
+  DateCreated?: string;
+  EndDate?: string;
+  Status?: string;
 }
 
 export interface JfChild extends JfItem {
@@ -305,6 +316,87 @@ export interface Suggestion {
   problem: string | null;
 }
 
+export interface Card {
+  id: string;
+  kind: "movie" | "series" | "episode" | "season" | "collection" | "person" | "other";
+  title: string;
+  subtitle: string;
+  artId: string;
+  seriesId: string | null;
+  year: number | null;
+  progress: number | null;
+  played: boolean;
+  hasPoster: boolean;
+}
+
+export interface HomeFeed {
+  resume: Card[];
+  nextUp: Card[];
+  recent: Card[];
+  collections: Card[];
+}
+
+export interface CheckRow {
+  id: string;
+  kind: "series" | "movie";
+  name: string;
+  year: number | null;
+  folder: string;
+  file: string | null;
+  toRename: number;
+  folders: number;
+  problems: number;
+  right: number;
+  sure: boolean;
+  reasons: string[];
+  example: [string, string] | null;
+  error: string | null;
+}
+
+export interface CheckResult {
+  at: number;
+  rows: CheckRow[];
+}
+
+export interface Trickplay {
+  base: string;
+  width: number;
+  height: number;
+  tileWidth: number;
+  tileHeight: number;
+  count: number;
+  interval: number;
+}
+
+export interface About {
+  itemId: string;
+  artId: string;
+  overview: string;
+  year: number | null;
+  rating: number | null;
+  officialRating: string;
+  genres: string[];
+  people: { id: string; name: string; role: string; hasImage: boolean }[];
+}
+
+export interface SubTrack {
+  index: number;
+  language: string;
+  title: string;
+  url: string;
+  default: boolean;
+}
+
+export interface ImportSource {
+  name: string;
+  isFolder: boolean;
+  files: { rel: string; size: number; video: boolean }[];
+  totalBytes: number;
+  kind: "tv" | "movie";
+  title: string;
+  year: number | null;
+}
+
 export interface PlayInfo {
   token: string;
   url: string;
@@ -313,10 +405,12 @@ export interface PlayInfo {
   audio: { index: number; title: string; selected: boolean }[];
   duration: number;
   start: number;
-  subtitles: { index: number; language: string; title: string; url: string; default: boolean }[];
+  subtitles: SubTrack[];
   segments: { Type: string; StartTicks: number; EndTicks: number }[];
   resume: number;
   next: { id: string; label: string } | null;
+  about?: About;
+  trickplay?: Trickplay | null;
 }
 
 export interface DlRequest {
@@ -415,8 +509,9 @@ export const api = {
   setSubLangs: (langs: string[]) => invoke<void>("set_sub_langs", { langs }),
   children: (id: string) => invoke<JfChild[]>("item_children", { id }),
   subtitleOptions: (id: string, lang: string) => invoke<SubOptions>("subtitle_options", { id, lang }),
+  /** Returns the new subtitle's stream index once Jellyfin lists it (null if it didn't show up in time). */
   subtitleDownload: (id: string, subtitleId: string, lang: string, codes: string[]) =>
-    invoke<void>("subtitle_download", { id, subtitleId, lang, codes }),
+    invoke<number | null>("subtitle_download", { id, subtitleId, lang, codes }),
   subtitleAuto: (id: string, lang: string, codes: string[], minScore: number) =>
     invoke<AutoResult>("subtitle_auto", { id, lang, codes, minScore }),
   segmentsOverview: (seasonId: string) => invoke<SegOverview>("segments_overview", { seasonId }),
@@ -444,6 +539,31 @@ export const api = {
   storageHistory: () => invoke<Change[]>("storage_history"),
   trashInfo: () => invoke<{ files: number; bytes: number }>("trash_info"),
   trashEmpty: (confirm: string) => invoke<void>("trash_empty", { confirm }),
+  mainBackdrop: (id: string, index: number) => invoke<void>("main_backdrop", { id, index }),
+  removeImage: (id: string, kind: ImageKind, index: number) => invoke<void>("remove_image", { id, kind, index }),
+  fillMissingArt: (id: string, kinds: ImageKind[], lang: string | null = null) => invoke<string[]>("fill_missing_art", { id, kinds, lang }),
+  homeFeed: () => invoke<HomeFeed>("home_feed"),
+  collections: () => invoke<Card[]>("collections_list"),
+  collectionItems: (id: string) => invoke<Card[]>("collection_items", { id }),
+  similar: (id: string) => invoke<Card[]>("similar_items", { id }),
+  personItems: (id: string) => invoke<Card[]>("person_items", { id }),
+  collectionCreate: (name: string, ids: string[]) => invoke<string>("collection_create", { name, ids }),
+  collectionAdd: (id: string, ids: string[]) => invoke<void>("collection_add", { id, ids }),
+  collectionRemove: (id: string, ids: string[]) => invoke<void>("collection_remove", { id, ids }),
+  syncPicksCollection: (ids: string[]) => invoke<string>("sync_picks_collection", { ids }),
+  revealItem: (id: string) => invoke<void>("reveal_item", { id }),
+  revealRel: (rel: string) => invoke<void>("reveal_rel", { rel }),
+  itemFolder: (id: string) => invoke<string>("item_folder", { id }),
+  libraryScan: () => invoke<void>("library_scan"),
+  namingCheck: (tvTemplate: string, movieTemplate: string, ids: string[] | null = null) =>
+    invoke<CheckResult>("naming_check", { tvTemplate, movieTemplate, ids }),
+  namingCheckLast: () => invoke<CheckResult | null>("naming_check_last"),
+  namingCheckCancel: () => invoke<void>("naming_check_cancel"),
+  playSubtitles: (token: string) => invoke<SubTrack[]>("play_subtitles", { token }),
+  setPlayed: (id: string, played: boolean) => invoke<void>("set_played", { id, played }),
+  importPick: (folder: boolean) => invoke<ImportSource | null>("import_pick", { folder }),
+  importRun: (dest: string, title: string, year: number | null, mode: "move" | "copy") =>
+    invoke<{ folder: string; moved: number; copied: number; skipped: string[] }>("import_run", { dest, title, year, mode }),
   undo: (batch: string) => invoke<{ restored: number; skipped: string[] }>("undo_rename", { batch }),
 };
 
@@ -495,4 +615,16 @@ export function codesFor(code: string, list: Culture[]): string[] {
 export function languageName(code: string, list: Culture[]): string {
   const c = list.find((x) => x.ThreeLetterISOLanguageName === code || x.ThreeLetterISOLanguageNames?.includes(code));
   return c ? c.DisplayName : code;
+}
+
+/** "Bluey (2018)" → "Bluey" when the year is shown separately anyway. */
+export function cleanTitle(name: string, year?: number | null): string {
+  const m = name.match(/^(.*?)\s*\((\d{4})\)\s*$/);
+  if (m && (!year || Number(m[2]) === year)) return m[1];
+  return name;
+}
+
+/** Wraps a promise so the "open in Finder" style one-liners don't need their own error handling. */
+export function quiet(p: Promise<unknown>): void {
+  p.catch(() => undefined);
 }

@@ -376,6 +376,7 @@ pub async fn play_start(state: State<'_, AppState>, id: String, start: f64, audi
         }
         None => (name, item.get("ProductionYear").and_then(Value::as_i64).map(|y| y.to_string()).unwrap_or_default()),
     };
+    let trickplay = trickplay_of(&item, &tok);
     Ok(PlayInfo {
         url: format!("{}/s/{tok}/{master}", media_base()),
         token: tok,
@@ -388,7 +389,7 @@ pub async fn play_start(state: State<'_, AppState>, id: String, start: f64, audi
         segments,
         resume,
         next: next.filter(|n| valid_item_id(&n.id)),
-        trickplay: trickplay_of(&item, &tok),
+        trickplay,
         about: about_of(&item, &id),
     })
 }

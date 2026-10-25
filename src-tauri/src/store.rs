@@ -74,6 +74,7 @@ pub struct ChangeFull {
     pub action: String,
     pub target: String,
     pub old_value: String,
+    pub new_value: String,
     pub undone: bool,
 }
 
@@ -303,15 +304,6 @@ impl Store {
         })
     }
 
-    /// Ids for the daily picks: titles with a poster, optionally only (un)watched ones.
-    pub fn pick_pool(&self, kind: &str, played: Option<bool>) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM items WHERE kind=?1 AND has_poster=1 AND (?2 IS NULL OR played = ?2)",
-        )?;
-        let rows = stmt.query_map(params![kind, played.map(|p| p as i64)], |r| r.get::<_, String>(0))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-
     /// Every title with a poster, for the daily picks.
     pub fn pick_rows(&self) -> Result<Vec<ItemRow>> {
         let mut stmt = self.conn.prepare(&format!("SELECT {COLS} FROM items WHERE has_poster=1"))?;
@@ -505,14 +497,15 @@ impl Store {
 
     pub fn change(&self, id: i64) -> Result<ChangeFull> {
         Ok(self.conn.query_row(
-            "SELECT action, target, old_value, undone FROM undo_journal WHERE id=?1",
+            "SELECT action, target, old_value, new_value, undone FROM undo_journal WHERE id=?1",
             params![id],
             |r| {
                 Ok(ChangeFull {
                     action: r.get(0)?,
                     target: r.get(1)?,
                     old_value: r.get(2)?,
-                    undone: r.get::<_, i64>(3)? != 0,
+                    new_value: r.get(3)?,
+                    undone: r.get::<_, i64>(4)? != 0,
                 })
             },
         )?)
@@ -524,6 +517,11 @@ impl Store {
             "UPDATE items SET name=?2, year=?3, rating=?4, genres=?5, overview=?6 WHERE id=?1",
             params![id, name, year, rating, genres.join(GENRE_SEP), overview],
         )?;
+        Ok(())
+    }
+
+    pub fn set_played(&self, id: &str, played: bool) -> Result<()> {
+        self.conn.execute("UPDATE items SET played=?2 WHERE id=?1", params![id, played as i64])?;
         Ok(())
     }
 

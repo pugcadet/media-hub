@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, AutoResult, codesFor, cultures, Culture, errorText, JfChild, languageName, SubOptions } from "./api";
+import { track } from "./activity";
+import { prefs, setPrefs } from "./prefs";
 
 function useCultures(): Culture[] {
   const [list, setList] = useState<Culture[]>([]);
@@ -51,8 +53,11 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
     setBusy(subId);
     setNote(null);
     try {
-      await api.subtitleDownload(id, subId, lang, codesFor(lang, list));
-      setNote("Downloaded. Jellyfin saves it next to the video; it can take a few seconds to show up. You can undo it under Changes made here (reload the page).");
+      const idx = await track("Downloading subtitle", () => api.subtitleDownload(id, subId, lang, codesFor(lang, list)));
+      setNote(idx != null
+        ? "Downloaded and ready. It's saved next to the video; you can undo it under Changes made here."
+        : "Downloaded. Jellyfin hasn't listed it yet; it shows up after its next look at the folder (Refresh from internet speeds that up).");
+      await load();
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -118,7 +123,8 @@ export function EpisodesTab({ id, canEdit, subLangs, onOpen }: { id: string; can
   const [eps, setEps] = useState<JfChild[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lang, setLang] = useState(subLangs[0] ?? "eng");
-  const [minScore, setMinScore] = useState(70);
+  const [minScore, setMinScoreState] = useState(prefs().minSubScore);
+  const setMinScore = (n: number) => { setMinScoreState(n); setPrefs({ minSubScore: n }); };
   const [running, setRunning] = useState(false);
   const [stop, setStop] = useState(false);
   const [results, setResults] = useState<Record<string, string>>({});
@@ -143,8 +149,10 @@ export function EpisodesTab({ id, canEdit, subLangs, onOpen }: { id: string; can
     setRunning(true);
     setStop(false);
     stopRef.current = false;
-    for (const e of missing) {
-      if (stopRef.current) break;
+    await track(`Subtitles for ${missing.length} episode${missing.length === 1 ? "" : "s"}`, async (job) => {
+    for (const [i, e] of missing.entries()) {
+      if (stopRef.current || job.cancelled) break;
+      job.update(e.Name, i / missing.length);
       setResults((r) => ({ ...r, [e.Id]: "working…" }));
       try {
         const res = await api.subtitleAuto(e.Id, lang, codes, minScore);
@@ -154,6 +162,7 @@ export function EpisodesTab({ id, canEdit, subLangs, onOpen }: { id: string; can
         if (/rate|limit|quota/i.test(errorText(err))) break; // provider says stop for today
       }
     }
+    }, { cancellable: true }).catch(() => undefined);
     setRunning(false);
     void load();
   }
@@ -163,7 +172,7 @@ export function EpisodesTab({ id, canEdit, subLangs, onOpen }: { id: string; can
       <div className="row">
         <LangPicker langs={subLangs} value={lang} onChange={setLang} list={list} />
         <label className="narrow wide-label">Minimum score
-          <input type="number" min={1} max={100} value={minScore} onChange={(e) => setMinScore(Math.max(1, Math.min(100, Number(e.target.value) || 70)))} />
+          <input type="number" min={1} max={100} value={minScore} onChange={(e) => setMinScore(Math.max(1, Math.min(100, Number(e.target.value) || 100)))} />
         </label>
         {running ? (
           <button onClick={() => setStop(true)}>Stop</button>
@@ -174,7 +183,7 @@ export function EpisodesTab({ id, canEdit, subLangs, onOpen }: { id: string; can
         )}
       </div>
       <p className="muted small">
-        Takes the best match per episode only when it scores at least {minScore}. Subtitle sites limit downloads per day, so large batches may stop early.
+        Takes the best match per episode only when it scores at least {minScore} (100 = made for exactly this file). Episodes with built-in subtitles in this language are skipped. Subtitle sites limit downloads per day, so large batches may stop early.
       </p>
       {error && <p className="error">{error}</p>}
       <div className="table">

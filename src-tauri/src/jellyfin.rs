@@ -651,6 +651,20 @@ impl Client {
         self.send(req).await.map(|_| ())
     }
 
+    /// Marks an item as not watched for the chosen user.
+    pub async fn mark_unplayed(&self, item_id: &str) -> Result<()> {
+        let user = self.user.clone().ok_or_else(|| Error::msg("no user"))?;
+        if !valid_item_id(item_id) {
+            return Err(Error::msg("bad id"));
+        }
+        let req = self.http.delete(self.url(&format!("/UserPlayedItems/{item_id}"))).query(&[("userId", user.as_str())]);
+        if self.send(req).await.is_ok() {
+            return Ok(());
+        }
+        let req = self.http.delete(self.url(&format!("/Users/{user}/PlayedItems/{item_id}")));
+        self.send(req).await.map(|_| ())
+    }
+
     /// Tells Jellyfin to stop converting for a finished playback. Changes nothing stored.
     pub async fn stop_encoding(&self, device_id: &str, play_session_id: &str) -> Result<()> {
         let req = self

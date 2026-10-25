@@ -1,6 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import Hls from "hls.js";
 import { api, errorText, SegEpisode, SegOverview, Span } from "./api";
+import type { JobHandle } from "./activity";
+import { usePrefs } from "./prefs";
+
+/** Removes every marker of `kinds` ("Intro" | "Outro" | "Recap") in the given seasons. */
+export async function removeSegments(seasonIds: string[], kinds: string[], job?: JobHandle): Promise<number> {
+  let n = 0;
+  for (const [si, sid] of seasonIds.entries()) {
+    if (job?.cancelled) break;
+    const ov = await api.segmentsOverview(sid);
+    const eps = ov.episodes.filter((e) => e.segments.some((x) => kinds.includes(x.kind)));
+    for (const [i, e] of eps.entries()) {
+      if (job?.cancelled) break;
+      job?.update(e.name, (si + i / Math.max(1, eps.length)) / seasonIds.length);
+      await api.saveSegments(e.id, null, null, null, kinds);
+      n++;
+    }
+  }
+  job?.update(`${n} episode${n === 1 ? "" : "s"} cleaned`, 1);
+  return n;
+}
 
 type Part = "intro" | "recap" | "credits";
 const KIND: Record<Part, string> = { intro: "Intro", recap: "Recap", credits: "Outro" };
@@ -87,6 +108,9 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seaso
   const [applyTo, setApplyTo] = useState<"season" | "selected">("season");
   const [shiftBy, setShiftBy] = useState(2);
   const [drawing, setDrawing] = useState<Part>("intro");
+  const [preview, setPreview] = useState<string | null>(null);
+  const { recapsOff } = usePrefs();
+  const parts: Part[] = recapsOff ? ["intro", "credits"] : ["intro", "recap", "credits"];
 
   async function load() {
     try {
@@ -156,6 +180,15 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seaso
         else span = { start: (e.duration * a) / 100, end: b != null ? (e.duration * b) / 100 : part === "credits" ? e.duration : (e.duration * a) / 100 + 60 };
         if (span.end > span.start) next[e.id] = { ...next[e.id], [part]: span, source: "manual" };
       }
+      return next;
+    });
+  }
+
+  /** Bulk: clear this part in the whole season (or the selected episodes). Review, then save. */
+  function removePart() {
+    setDrafts((d) => {
+      const next = { ...d };
+      for (const e of targets()) if (next[e.id]?.[part]) next[e.id] = { ...next[e.id], [part]: null, source: "manual" };
       return next;
     });
   }
@@ -268,7 +301,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seaso
           <h2>Set for the whole season</h2>
           <div className="seg wide3">
             {(["intro", "recap", "credits"] as Part[]).map((p) => (
-              <button key={p} className={part === p ? "on" : ""} onClick={() => setPart(p)}>{LABEL[p]}</button>
+              <button key={p} className={part === p ? "on" : ""} disabled={p === "recap" && recapsOff} onClick={() => setPart(p)}>{LABEL[p]}</button>
             ))}
           </div>
           <div className="seg wide3">
@@ -297,7 +330,10 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seaso
               <option value="selected">Selected episodes only ({selected.size})</option>
             </select>
           </label>
-          <button onClick={applyRule}>Apply {LABEL[part].toLowerCase()} times</button>
+          <div className="row">
+            <button className="grow" onClick={applyRule}>Apply {LABEL[part].toLowerCase()} times</button>
+            <button className="danger-outline" onClick={removePart} title="Clears it in the episodes above; review, then save">Remove all {part === "credits" ? "credits" : `${LABEL[part].toLowerCase()}s`}</button>
+          </div>
           <div className="shift">
             <span className="muted small">Shift {LABEL[part].toLowerCase()} by</span>
             <button onClick={() => shift(-1)} aria-label="Earlier">−</button>
@@ -345,9 +381,9 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seaso
 
         <div className="card timeline-card">
           <div className="seg-draw small muted">
-            Drag on a bar to draw:
+            Drag on a bar to draw, or open an episode and press Preview to set the points while watching:
             <div className="seg">
-              {(["intro", "recap", "credits"] as Part[]).map((p) => (
+              {parts.map((p) => (
                 <button key={p} className={drawing === p ? "on" : ""} onClick={() => setDrawing(p)}>{LABEL[p]}</button>
               ))}
             </div>
@@ -359,8 +395,9 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seaso
             </div>
           </div>
           {eps.map((e) => {
-            const d = drafts[e.id];
-            if (!d) return null;
+            const d0 = drafts[e.id];
+            if (!d0) return null;
+            const d = recapsOff ? { ...d0, recap: null } : d0;
             const f = flags.find((x) => x.ep.id === e.id);
             return (
               <div key={e.id}>
@@ -376,7 +413,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seaso
                 </div>
                 {open === e.id && (
                   <div className="tl-detail">
-                    {(["intro", "recap", "credits"] as Part[]).map((p) => (
+                    {parts.map((p) => (
                       <span key={p} className="tl-times">
                         <span className={`key ${p}`} />{LABEL[p]}
                         <TimeInput value={d[p]?.start} onChange={(v) => v === null ? set(e.id, p, null) : set(e.id, p, { start: v, end: Math.max(v + 1, d[p]?.end ?? Math.min(e.duration, v + 60)) })} />
@@ -385,7 +422,11 @@ export function IntrosTab({ seasonId, seasonName, canEdit, onSettings }: { seaso
                       </span>
                     ))}
                     <span className="muted small">length {fmt(e.duration)}</span>
+                    <button className="small-btn show" onClick={() => setPreview(preview === e.id ? null : e.id)}>{preview === e.id ? "Close preview" : "▶ Preview"}</button>
                   </div>
+                )}
+                {open === e.id && preview === e.id && (
+                  <SegPreview ep={e} draft={d} parts={parts} onSet={(p, s2) => set(e.id, p, s2)} />
                 )}
               </div>
             );
@@ -443,6 +484,103 @@ function Bars({ ep, draft, maxDur, drawing, wrong, onDraw }: {
       {(["intro", "recap", "credits"] as Part[]).map((p) => bar(saved(ep, p), "saved", `s-${p}`))}
       {(["intro", "recap", "credits"] as Part[]).map((p) => bar(draft[p], `${p}${wrong(ep.id, p) ? " wrong" : ""}`, `d-${p}`))}
       {drag && bar({ start: Math.min(drag.from, drag.to), end: Math.max(drag.from, drag.to) }, `drawing ${drawing}`, "drag")}
+    </div>
+  );
+}
+
+/**
+ * Watch an episode inside the intros tool and set the start and end of each part at the
+ * current moment (keys: I = start, O = end, J/L = back/forward 5 s, space = play/pause).
+ */
+function SegPreview({ ep, draft, parts, onSet }: { ep: SegEpisode; draft: Draft; parts: Part[]; onSet: (p: Part, s: Span | null) => void }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const [part, setPart] = useState<Part>(draft.intro ? "intro" : "intro");
+  const [time, setTime] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let hls: Hls | null = null;
+    let token: string | null = null;
+    let cancelled = false;
+    const startAt = draft.intro?.start ?? 0;
+    api.playStart(ep.id, 0).then((p) => {
+      token = p.token;
+      if (cancelled) { void api.playStop(p.token).catch(() => undefined); return; }
+      const v = video.current!;
+      if (Hls.isSupported()) {
+        hls = new Hls({ enableWorker: false, startPosition: Math.max(0, startAt - 5) });
+        hls.on(Hls.Events.ERROR, (_e, data) => data.fatal && setError(`Preview stopped (${data.details}).`));
+        hls.loadSource(p.url);
+        hls.attachMedia(v);
+      } else {
+        v.src = p.url;
+      }
+      setReady(true);
+    }).catch((e) => setError(errorText(e)));
+    return () => {
+      cancelled = true;
+      hls?.destroy();
+      if (token) void api.playStop(token).catch(() => undefined);
+    };
+  }, [ep.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const now = () => video.current?.currentTime ?? 0;
+  const seek = (t: number) => { if (video.current) video.current.currentTime = Math.max(0, Math.min(ep.duration, t)); };
+  const setIn = () => {
+    const t = now();
+    const cur = draft[part];
+    onSet(part, { start: t, end: cur && cur.end > t + 1 ? cur.end : Math.min(ep.duration, t + (part === "credits" ? ep.duration : 60)) });
+  };
+  const setOut = () => {
+    const t = now();
+    const cur = draft[part];
+    const start = cur && cur.start < t - 1 ? cur.start : Math.max(0, t - 60);
+    onSet(part, { start, end: t });
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      const k = e.key.toLowerCase();
+      if (k === "i") { e.preventDefault(); setIn(); }
+      else if (k === "o") { e.preventDefault(); setOut(); }
+      else if (k === "j") seek(now() - 5);
+      else if (k === "l") seek(now() + 5);
+      else if (e.key === " ") { e.preventDefault(); const v = video.current; if (v) { if (v.paused) void v.play(); else v.pause(); } }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  const cur = draft[part];
+  return (
+    <div className="seg-preview">
+      <div className="seg-video">
+        <video ref={video} controls onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)} />
+        {!ready && !error && <div className="muted small seg-video-note">Starting…</div>}
+        {error && <div className="error small seg-video-note">{error}</div>}
+      </div>
+      <div className="seg-preview-side">
+        <div className="seg wide3">
+          {parts.map((p) => <button key={p} className={part === p ? "on" : ""} onClick={() => setPart(p)}>{LABEL[p]}</button>)}
+        </div>
+        <div className="mono big-text">{fmt(time)}</div>
+        <div className="row">
+          <button className="primary grow" onClick={setIn}>{LABEL[part]} starts here <span className="kbd">I</span></button>
+          <button className="primary grow" onClick={setOut}>{LABEL[part]} ends here <span className="kbd">O</span></button>
+        </div>
+        <div className="muted small">{LABEL[part]}: {cur ? `${fmt(cur.start)} – ${fmt(cur.end)}` : "not set"}</div>
+        <div className="row">
+          <button onClick={() => seek(now() - 5)}>−5 s <span className="kbd">J</span></button>
+          <button onClick={() => seek(now() + 5)}>+5 s <span className="kbd">L</span></button>
+          {cur && <button onClick={() => seek(cur.start - 3)}>Go to start</button>}
+          {cur && <button onClick={() => seek(cur.end - 3)}>Go to end</button>}
+          {cur && <button className="danger-outline" onClick={() => onSet(part, null)}>Clear</button>}
+        </div>
+        <p className="muted small">Changes appear in “Changes to review”; press Save to send them to Jellyfin.</p>
+      </div>
     </div>
   );
 }

@@ -4,7 +4,10 @@ import { askConfirm } from "./confirm";
 import { SubLangSettings } from "./Subtitles";
 import { ToolsSettings } from "./Intros";
 import { UpdateSettings } from "./Updates";
-import type { View } from "./App";
+import type { View } from "./nav";
+import { setPrefs, usePrefs } from "./prefs";
+import { SubStyleEditor } from "./Player";
+import { runDaily } from "./scheduler";
 
 const TITLE_LANGS: [string, string][] = [["en-US", "English"], ["nl-NL", "Nederlands"], ["de-DE", "Deutsch"], ["fr-FR", "Français"], ["es-ES", "Español"], ["it-IT", "Italiano"]];
 
@@ -107,11 +110,63 @@ export default function Settings({ status, onChanged }: { status: Status; onChan
         </label>
       </section>
 
+      <PlayerSettings status={status} />
+      <ScheduleSettings status={status} />
       <SubLangSettings subLangs={status.subLangs} onChanged={onChanged} />
       <ToolsSettings />
       <UpdateSettings />
 
       <p className="muted small">Your Jellyfin API key and TMDB key are kept in this computer's secure storage, never in a file.</p>
     </div>
+  );
+}
+
+function PlayerSettings({ status }: { status: Status }) {
+  const p = usePrefs();
+  return (
+    <section className="card form">
+      <h2>Player</h2>
+      <label className="check"><input type="checkbox" checked={p.autoSkipIntro} onChange={(e) => setPrefs({ autoSkipIntro: e.target.checked })} /><span>Skip intros by themselves (a 3-second countdown on the button, press “Watch it” to stay)</span></label>
+      <label className="check"><input type="checkbox" checked={p.autoSkipCredits} onChange={(e) => setPrefs({ autoSkipCredits: e.target.checked })} /><span>Skip credits: go to the next episode after 5 seconds (or skip to the end of a movie's credits)</span></label>
+      <label className="check"><input type="checkbox" checked={p.upNextAutoplay} onChange={(e) => setPrefs({ upNextAutoplay: e.target.checked })} /><span>Play the next episode by itself when the credits start</span></label>
+      <label className="check"><input type="checkbox" checked={p.recapsOff} onChange={(e) => setPrefs({ recapsOff: e.target.checked })} /><span>Turn recaps off completely (no recap markers in the player or the intros tool). Remove saved ones with “Remove recaps” on a season or show.</span></label>
+      <label className="wide-label">Language that C switches on (and fetches when missing)
+        <select value={p.subLang} onChange={(e) => setPrefs({ subLang: e.target.value })}>
+          {[...new Set(["eng", ...status.subLangs])].map((l) => <option key={l} value={l}>{l === "eng" ? "English" : l === "dut" || l === "nld" ? "Dutch" : l}</option>)}
+        </select>
+      </label>
+      <div className="strong small">Subtitle look</div>
+      <SubStyleEditor />
+    </section>
+  );
+}
+
+function ScheduleSettings({ status }: { status: Status }) {
+  const p = usePrefs();
+  const s = p.schedule;
+  const set = (patch: Partial<typeof s>) => setPrefs({ schedule: { ...s, ...patch } });
+  return (
+    <section className="card form">
+      <h2>Scheduled tasks</h2>
+      <p className="muted small">Runs once a day while Media Hub is open. {p.lastRun.daily ? `Last run: ${p.lastRun.daily}.` : "Not run yet."}</p>
+      <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} /><span>Run these every day from</span>
+        <select value={s.hour} onChange={(e) => set({ hour: Number(e.target.value) })} style={{ width: 100 }} disabled={!s.enabled}>
+          {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>)}
+        </select>
+      </label>
+      <div className="fields2">
+        <label className="check small"><input type="checkbox" checked={s.scan} onChange={(e) => set({ scan: e.target.checked })} />Scan the library</label>
+        <label className="check small"><input type="checkbox" checked={s.picks} onChange={(e) => set({ picks: e.target.checked })} />Update “Picks of the day” in Jellyfin</label>
+        <label className="check small"><input type="checkbox" checked={s.art} onChange={(e) => set({ art: e.target.checked })} />Fill in missing artwork (newest titles first)</label>
+        <label className="check small"><input type="checkbox" checked={s.subtitles} onChange={(e) => set({ subtitles: e.target.checked })} />Get missing subtitles (only score {p.minSubScore}+)</label>
+      </div>
+      <div className="row">
+        <label className="narrow wide-label">Minimum subtitle score
+          <input type="number" min={1} max={100} value={p.minSubScore} onChange={(e) => setPrefs({ minSubScore: Math.max(1, Math.min(100, Number(e.target.value) || 100)) })} />
+        </label>
+        <button onClick={() => void runDaily(status, true)}>Run now</button>
+      </div>
+      {status.readOnly && <p className="muted small">Artwork, subtitles and picks need changes switched on (above).</p>}
+    </section>
   );
 }

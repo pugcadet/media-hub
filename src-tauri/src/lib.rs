@@ -7,6 +7,7 @@ mod error;
 mod fingerprint;
 mod fsops;
 mod images;
+mod import;
 mod jellyfin;
 mod local;
 mod media_tools;
@@ -59,6 +60,9 @@ pub fn run() {
             commands::list_users,
             commands::set_user,
             commands::set_sync_watched,
+            commands::set_played,
+            import::import_pick,
+            import::import_run,
             updater::check_update,
             updater::install_update,
             rename_cmds::pick_library_root,

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { api, errorText, imageUrl, Item, JfItem, Status } from "./api";
-import { IntrosTab } from "./Intros";
+import { api, cleanTitle, errorText, imageUrl, Item, JfItem, Status } from "./api";
+import { IntrosTab, removeSegments } from "./Intros";
+import { track } from "./activity";
+import { askConfirm } from "./confirm";
 import type { View } from "./App";
 
 /** Intros and credits: pick a show, then a season, then work on its timeline. */
@@ -36,8 +38,15 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
   return (
     <div className="pg">
       <div className="pg-head">
-        <h1>{show ? show.name : "Intros and credits"}</h1>
-        {show && <div className="pg-actions"><button onClick={() => setShow(null)}>Choose another show</button></div>}
+        <h1>{show ? cleanTitle(show.name, show.year) : "Intros and credits"}</h1>
+        {show && (
+          <div className="pg-actions">
+            {([["Recap", "recaps"], ["Intro", "intros"], ["Outro", "credits"]] as const).map(([k, label]) => (
+              <button key={k} disabled={status.readOnly} onClick={() => void askConfirm(`Remove all ${label} markers in every season of ${show.name}?`, { okLabel: `Remove ${label}`, danger: true }).then((ok) => { if (ok) void track(`Removing ${label}`, (job) => removeSegments(seasons.map((s) => s.Id), [k], job)); })}>Remove all {label}</button>
+            ))}
+            <button onClick={() => setShow(null)}>Choose another show</button>
+          </div>
+        )}
       </div>
       {error && <p className="error">{error}</p>}
 
