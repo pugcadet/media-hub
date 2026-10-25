@@ -4,6 +4,7 @@ import { track } from "./activity";
 import { askConfirm } from "./confirm";
 import { nav } from "./nav";
 import { Icon } from "./ui";
+import { agoText, useSaved } from "./saved";
 
 function size(b: number): string {
   if (!b) return "";
@@ -19,7 +20,13 @@ const fileName = (p: string) => p.split(/[\\/]/).pop() ?? p;
 
 /** The same movie or episode more than once: keep the best, trash the rest, or group as versions. */
 export default function Duplicates({ status }: { status: Status }) {
-  const [groups, setGroups] = useState<DupGroup[] | null>(null);
+  // The last search is kept (also when it found nothing), with when it ran.
+  const [saved, save] = useSaved<DupGroup[]>("duplicates");
+  const groups = saved?.data ?? null;
+  const setGroups = (f: DupGroup[] | null | ((g: DupGroup[] | null) => DupGroup[] | null)) => {
+    const next = typeof f === "function" ? f(groups) : f;
+    if (next) save(next);
+  };
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const canEdit = !status.readOnly;
@@ -62,7 +69,10 @@ export default function Duplicates({ status }: { status: Status }) {
           <h1>Duplicates</h1>
           <div className="muted small">The same movie (same TMDB/IMDb id, or name and year) or the same episode more than once. The best copy is marked: highest resolution, then HDR, then the newer codec.</div>
         </div>
-        <div className="pg-actions"><button className="primary" disabled={busy} onClick={() => void find()}>{groups ? "Look again" : "Find duplicates"}</button></div>
+        <div className="pg-actions">
+          {saved && <span className="muted small">Checked {agoText(saved.at)}</span>}
+          <button className="primary" disabled={busy} onClick={() => void find()}>{groups ? "Look again" : "Find duplicates"}</button>
+        </div>
       </div>
       {error && <p className="error">{error}</p>}
       {real && real.length === 0 && <p className="ok strong">No duplicates.</p>}

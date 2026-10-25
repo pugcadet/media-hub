@@ -10,6 +10,8 @@ mod error;
 mod fingerprint;
 mod fsops;
 mod images;
+#[cfg(test)]
+mod fake_jellyfin;
 mod import;
 mod jellyfin;
 mod library;
@@ -58,6 +60,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::status,
+            images::images_revalidate,
+            library::find_moved,
+            collections::collection_folder_plan,
+            collections::collection_relink,
             commands::connect,
             commands::disconnect,
             commands::sync_library,

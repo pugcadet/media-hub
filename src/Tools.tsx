@@ -6,6 +6,7 @@ import { askConfirm } from "./confirm";
 import { prefs, setPrefs, subSkipped, usePrefs } from "./prefs";
 import { BulkSelect, Icon, itemMenu, openMenu, SettingsLink, Tabs, TriCheck, useUndoableSet } from "./ui";
 import { foldersOf, tabFolder, useFolderMap } from "./folders";
+import { agoText, usePageState, useSaved } from "./saved";
 
 /** Metadata and art: titles that need a match or a poster. */
 export function MetadataTool({ onOpen, onRoute }: { onOpen: (id: string) => void; onRoute: (r: Route) => void }) {
@@ -56,6 +57,27 @@ export function MetadataTool({ onOpen, onRoute }: { onOpen: (id: string) => void
   );
 }
 
+interface ShowGroup { key: string; name: string; movie: boolean; items: JfChild[] }
+
+/** Videos as shows (episodes by their show, movies together). */
+function showsOf(list: JfChild[]): ShowGroup[] {
+  const m = new Map<string, ShowGroup>();
+  for (const e of list) {
+    const movie = e.Type !== "Episode";
+    const key = movie ? "__movies" : e.SeriesId ?? e.SeriesName ?? "?";
+    const g = m.get(key) ?? { key, name: movie ? "Movies" : e.SeriesName ?? "Show", movie, items: [] };
+    g.items.push(e);
+    m.set(key, g);
+  }
+  return [...m.values()];
+}
+
+function seasonsOf(list: JfChild[]): { key: string; name: string; items: JfChild[] }[] {
+  const m = new Map<number, JfChild[]>();
+  for (const e of list) m.set(e.ParentIndexNumber ?? 0, [...(m.get(e.ParentIndexNumber ?? 0) ?? []), e]);
+  return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([n, items]) => ({ key: String(n), name: n === 0 ? "Specials" : `Season ${n}`, items }));
+}
+
 const OUTCOME: Record<AutoResult["outcome"], string> = { has: "already has it", downloaded: "downloaded", low: "best match too weak", none: "nothing found" };
 
 /** Subtitles: every movie and episode without subtitles, with a bulk "get the best match". */
@@ -73,9 +95,14 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
 
   const { subSkipFolders } = usePrefs();
   const [skipped, setSkipped] = useState(0);
-  const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<"folder" | "name">("folder");
-  const [tab, setTab] = useState("all");
+  const [query, setQuery] = usePageState("subs.query", "");
+  const [sort, setSort] = usePageState<"folder" | "name">("subs.sort", "folder");
+  const [tab, setTab] = usePageState("subs.tab", "all");
+  // Shows and seasons start folded; the ones you open stay open.
+  const [openKeys, setOpenKeys] = usePageState<string[]>("subs.open", []);
+  const isOpenKey = (k: string) => openKeys.includes(k);
+  const toggleKey = (k: string) => setOpenKeys((o) => (o.includes(k) ? o.filter((x) => x !== k) : [...o, k]));
+  const [stopReason, setStopReason] = useState<string | null>(null);
   const folderMap = useFolderMap();
   const folderOf = (e: JfChild) => folderMap.get(e.SeriesId ?? e.Id) ?? "Other";
   const load = () =>
@@ -104,11 +131,12 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
     return [...g.entries()];
   }, [shownItems, sort]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function fill() {
-    const items = shownItems;
+  async function fill(items: JfChild[] = shownItems, what = `${items.length} videos`) {
     setRunning(true);
+    setStopReason(null);
     stop.current = false;
-    await track(`Subtitles for ${items.length} videos`, async (job) => {
+    let downloaded = 0;
+    await track(`Subtitles for ${what}`, async (job) => {
     for (const [i, e] of items.entries()) {
       if (stop.current || job.cancelled) break;
       job.update(label(e), i / items.length);
@@ -116,13 +144,19 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
       setResults((r) => ({ ...r, [e.Id]: "working…" }));
       try {
         const res = await api.subtitleAuto(e.Id, lang, codes, minScore);
+        if (res.outcome === "downloaded") downloaded++;
         setResults((r) => ({ ...r, [e.Id]: OUTCOME[res.outcome] + (res.score != null ? ` (${res.score})` : "") }));
       } catch (err) {
         const t = errorText(err);
         setResults((r) => ({ ...r, [e.Id]: t }));
-        if (/rate|limit|quota|switched off|plugin/i.test(t)) break;
+        // A limit or a missing plugin won't fix itself on the next video: stop and say why.
+        if (/rate|limit|quota|switched off|plugin|stopped|login/i.test(t)) {
+          setStopReason(t);
+          throw t;
+        }
       }
     }
+    job.update(`${downloaded} downloaded`, 1);
     }, { cancellable: true, reload: false }).catch(() => undefined);
     setRunning(false);
     void load();
@@ -167,20 +201,55 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
         </label>
         <span className="muted small">{shownItems.length} videos</span>
       </div>
-      <div className="card list-card">
+      {stopReason && <p className="error">{stopReason}</p>}
+      <div className="card list-card sub-tree">
         {groups.map(([g, list]) => (
           <div key={g || "all"}>
             {g && <div className="change-group"><Icon name="folder" size={14} /><span className="strong small">{g}</span><span className="muted small">{list.length} videos</span></div>}
-            {list.slice(0, 600).map((e) => (
-              <button className="tool-row" key={e.Id} onClick={() => onOpen(e.Id)} onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: e.Type === "Episode" ? "Episode" : "Movie", title: label(e), played: false }))}>
-                <div className="names">
-                  <div className="title">{label(e)}</div>
-                  <div className="muted small">{results[e.Id] ?? "No subtitles"}</div>
+            {showsOf(list).map((sh) => {
+              const k = `show:${sh.key}`;
+              const open = isOpenKey(k);
+              return (
+                <div key={sh.key} className="sub-show">
+                  <div className="sub-head">
+                    <button className="link-plain sub-toggle" onClick={() => toggleKey(k)} aria-expanded={open}>
+                      <span className={`chev ${open ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
+                      <span className="strong">{sh.name}</span>
+                      <span className="muted small">{sh.items.length} {sh.movie ? (sh.items.length === 1 ? "movie" : "movies") : `episode${sh.items.length === 1 ? "" : "s"}`}</span>
+                    </button>
+                    <span className="muted small sub-done">{sh.items.filter((e) => results[e.Id]).length ? `${sh.items.filter((e) => /downloaded/.test(results[e.Id] ?? "")).length} downloaded` : ""}</span>
+                    <button className="small-btn" disabled={running || status.readOnly} onClick={() => void fill(sh.items, sh.name)}>Get subtitles</button>
+                  </div>
+                  {open && (sh.movie ? [{ key: "m", name: "", items: sh.items }] : seasonsOf(sh.items)).map((se) => {
+                    const sk = `${k}|${se.key}`;
+                    const sopen = sh.movie || isOpenKey(sk);
+                    return (
+                      <div key={se.key} className="sub-season">
+                        {!sh.movie && (
+                          <div className="sub-head sub-head2">
+                            <button className="link-plain sub-toggle" onClick={() => toggleKey(sk)} aria-expanded={sopen}>
+                              <span className={`chev ${sopen ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
+                              <span className="small strong">{se.name}</span>
+                              <span className="muted small">{se.items.length}</span>
+                            </button>
+                            <button className="small-btn" disabled={running || status.readOnly} onClick={() => void fill(se.items, `${sh.name} ${se.name}`)}>Get subtitles</button>
+                          </div>
+                        )}
+                        {sopen && se.items.map((e) => (
+                          <button className="tool-row sub-ep" key={e.Id} onClick={() => onOpen(e.Id)} onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: e.Type === "Episode" ? "Episode" : "Movie", title: label(e), played: false }))}>
+                            <div className="names">
+                              <div className="title small">{e.Type === "Episode" ? `E${String(e.IndexNumber ?? 0).padStart(2, "0")} · ${e.Name}` : e.Name}</div>
+                              <div className={`small ${/limit|stopped|couldn't|refused/i.test(results[e.Id] ?? "") ? "bad" : "muted"}`}>{results[e.Id] ?? "No subtitles"}</div>
+                            </div>
+                            <span className="muted">›</span>
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })}
                 </div>
-                <span className="muted">›</span>
-              </button>
-            ))}
-            {list.length > 600 && <p className="muted small pad">…and {list.length - 600} more. Search or pick a folder tab to narrow it down.</p>}
+              );
+            })}
           </div>
         ))}
         {shownItems.length === 0 && !error && <p className="muted small pad">{items.length ? "Nothing matches." : "Every video has subtitles."}</p>}
@@ -193,7 +262,13 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
 export function SubtitleCleanup({ status }: { status: Status }) {
   const p = usePrefs();
   const [list, setList] = useState<Culture[]>([]);
-  const [rows, setRows] = useState<ExtraSub[] | null>(null);
+  // The last search is kept (also when nothing was found), with when it ran.
+  const [savedRows, saveRows] = useSaved<ExtraSub[]>("extraSubs");
+  const rows = savedRows?.data ?? null;
+  const setRows = (f: ExtraSub[] | null | ((r: ExtraSub[] | null) => ExtraSub[] | null)) => {
+    const next = typeof f === "function" ? f(rows) : f;
+    if (next) saveRows(next);
+  };
   const [error, setError] = useState<string | null>(null);
   const sel = useUndoableSet<string>();
   const key = (r: ExtraSub) => `${r.id}|${r.path}`;
@@ -248,7 +323,7 @@ export function SubtitleCleanup({ status }: { status: Status }) {
       {rows && (
         <section className="card list-card">
           <div className="section-head pad">
-            <h2>{rows.length ? `${rows.length} subtitle files in other languages` : "No subtitle files in other languages"}</h2>
+            <h2>{rows.length ? `${rows.length} subtitle files in other languages` : "No subtitle files in other languages"} <span className="muted small">· checked {agoText(savedRows!.at)}</span></h2>
             {rows.length > 0 && (
               <div className="row end">
                 <BulkSelect sel={sel} keys={rows.map(key)} noun="files" />

@@ -110,7 +110,13 @@ pub async fn detect_season(
     season_id: String,
     intro_max: f64,
     credits_max: f64,
+    find_intro: Option<bool>,
+    find_credits: Option<bool>,
 ) -> Result<Vec<Suggestion>> {
+    let (find_intro, find_credits) = (find_intro.unwrap_or(true), find_credits.unwrap_or(true));
+    if !find_intro && !find_credits {
+        return Err(Error::msg("Tick intros, credits or both."));
+    }
     let c = reader(&state).await?;
     let settings = state.settings()?;
     let ffmpeg = media_tools::locate_ffmpeg(settings.ffmpeg_path.as_deref())
@@ -139,6 +145,7 @@ pub async fn detect_season(
         let item = c.item_json(&id).await?;
         let duration = item.get("RunTimeTicks").and_then(Value::as_f64).unwrap_or(0.0) / TICKS_PER_SECOND;
         let (ch_intro, ch_credits) = detect::from_chapters(&item);
+        let (ch_intro, ch_credits) = (ch_intro.filter(|_| find_intro), ch_credits.filter(|_| find_credits));
         let mut sug = Suggestion {
             id: id.clone(),
             intro: ch_intro,
@@ -166,8 +173,8 @@ pub async fn detect_season(
         let (i_off, i_len) = detect::intro_window(duration, intro_max);
         let (c_off, c_len) = detect::credits_window(duration, credits_max);
         let (bin1, bin2, f1, f2) = (ffmpeg.clone(), ffmpeg.clone(), file.clone(), file.clone());
-        let need_intro = sug.intro.is_none();
-        let need_credits = sug.credits.is_none();
+        let need_intro = find_intro && sug.intro.is_none();
+        let need_credits = find_credits && sug.credits.is_none();
         let ih = tauri::async_runtime::spawn_blocking(move || {
             need_intro.then(|| media_tools::decode_audio(&bin1, &f1, i_off, i_len).map(|s| fingerprint(&s)))
         });

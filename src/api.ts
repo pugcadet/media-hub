@@ -114,6 +114,8 @@ export interface PlanArgs {
   seasonFolders: boolean;
   /** Shows: names that differ only by a "(2018)" year are left as they are. */
   yearOptional?: boolean;
+  /** Only tidy messy names (release tags, dots); leave names Jellyfin reads fine. */
+  minimal?: boolean;
   /** Movies: only this file (and its subtitles), matched to the Jellyfin item `itemId`. */
   onlyFile?: string | null;
   itemId?: string | null;
@@ -724,12 +726,12 @@ export const api = {
   identifySearch: (kind: "series" | "movie", name: string, year: number | null, ids: Record<string, string>) =>
     invoke<SearchResult[]>("identify_search", { kind, name, year, ids }),
   identifyApply: (id: string, result: SearchResult, replaceImages: boolean) =>
-    invoke<void>("identify_apply", { id, result, replaceImages }),
+    artChange(id, invoke<void>("identify_apply", { id, result, replaceImages })),
   remoteImages: (id: string, kind: ImageKind) => invoke<RemoteImage[]>("remote_images", { id, kind }),
-  setImage: (id: string, kind: ImageKind, url: string) => invoke<void>("set_image", { id, kind, url }),
-  uploadImageFile: (id: string, kind: ImageKind) => invoke<boolean>("upload_image_file", { id, kind }),
-  undoChange: (changeId: number) => invoke<void>("undo_change", { changeId }),
-  refreshItem: (id: string, replaceAll: boolean) => invoke<void>("refresh_item", { id, replaceAll }),
+  setImage: (id: string, kind: ImageKind, url: string) => artChange(id, invoke<void>("set_image", { id, kind, url })),
+  uploadImageFile: (id: string, kind: ImageKind) => artChange(id, invoke<boolean>("upload_image_file", { id, kind })),
+  undoChange: (changeId: number) => invoke<void>("undo_change", { changeId }).finally(() => bumpArt()),
+  refreshItem: (id: string, replaceAll: boolean) => artChange(id, invoke<void>("refresh_item", { id, replaceAll })),
   setReadOnly: (value: boolean) => invoke<void>("set_read_only", { value }),
   languages: () => invoke<Culture[]>("languages"),
   setSubLangs: (langs: string[]) => invoke<void>("set_sub_langs", { langs }),
@@ -741,8 +743,8 @@ export const api = {
   subtitleAuto: (id: string, lang: string, codes: string[], minScore: number) =>
     invoke<AutoResult>("subtitle_auto", { id, lang, codes, minScore }),
   segmentsOverview: (seasonId: string) => invoke<SegOverview>("segments_overview", { seasonId }),
-  detectSeason: (seasonId: string, introMax: number, creditsMax: number) =>
-    invoke<Suggestion[]>("detect_season", { seasonId, introMax, creditsMax }),
+  detectSeason: (seasonId: string, introMax: number, creditsMax: number, findIntro = true, findCredits = true) =>
+    invoke<Suggestion[]>("detect_season", { seasonId, introMax, creditsMax, findIntro, findCredits }),
   saveSegments: (itemId: string, intro: Span | null, credits: Span | null, recap: Span | null, clear: string[]) =>
     invoke<void>("save_segments", { itemId, intro, credits, recap, clear }),
   ffmpegInfo: () => invoke<{ path: string | null; version: string | null }>("ffmpeg_info"),
@@ -765,9 +767,14 @@ export const api = {
   storageHistory: () => invoke<Change[]>("storage_history"),
   trashInfo: () => invoke<{ files: number; bytes: number }>("trash_info"),
   trashEmpty: (confirm: string) => invoke<void>("trash_empty", { confirm }),
-  mainBackdrop: (id: string, index: number) => invoke<void>("main_backdrop", { id, index }),
-  removeImage: (id: string, kind: ImageKind, index: number) => invoke<void>("remove_image", { id, kind, index }),
-  fillMissingArt: (id: string, kinds: ImageKind[], lang: string | null = null) => invoke<string[]>("fill_missing_art", { id, kinds, lang }),
+  mainBackdrop: (id: string, index: number) => artChange(id, invoke<void>("main_backdrop", { id, index })),
+  removeImage: (id: string, kind: ImageKind, index: number) => artChange(id, invoke<void>("remove_image", { id, kind, index })),
+  fillMissingArt: (id: string, kinds: ImageKind[], lang: string | null = null) => artChange(id, invoke<string[]>("fill_missing_art", { id, kinds, lang })),
+  imagesRevalidate: () => invoke<void>("images_revalidate"),
+  /** A title whose id changed (folder renamed): its new id, found by name and year. */
+  findMoved: (id: string) => invoke<string | null>("find_moved", { id }),
+  collectionFolderPlan: (id: string, name: string | null) => invoke<{ planId: string; folder: string; ops: PlanOp[]; skipped: string[] }>("collection_folder_plan", { id, name }),
+  collectionRelink: (id: string, movies: [string, number | null][]) => invoke<void>("collection_relink", { id, movies }),
   homeFeed: () => invoke<HomeFeed>("home_feed"),
   collections: () => invoke<Card[]>("collections_list"),
   collectionItems: (id: string) => invoke<Card[]>("collection_items", { id }),
@@ -781,8 +788,8 @@ export const api = {
   revealRel: (rel: string) => invoke<void>("reveal_rel", { rel }),
   itemFolder: (id: string) => invoke<string>("item_folder", { id }),
   libraryScan: () => invoke<void>("library_scan"),
-  namingCheck: (tvTemplate: string, movieTemplate: string, ids: string[] | null = null, yearOptional = true) =>
-    invoke<CheckResult>("naming_check", { tvTemplate, movieTemplate, ids, yearOptional }),
+  namingCheck: (tvTemplate: string, movieTemplate: string, ids: string[] | null = null, yearOptional = true, minimal = true) =>
+    invoke<CheckResult>("naming_check", { tvTemplate, movieTemplate, ids, yearOptional, minimal }),
   backendTuning: () => invoke<Tuning>("backend_tuning"),
   backendSet: (scope: "library" | "task", target: string, key: string, value: unknown) => invoke<void>("backend_set", { scope, target, key, value }),
   backendApplyRecommended: () => invoke<number>("backend_apply_recommended"),
@@ -853,9 +860,29 @@ const IMG_BASE = navigator.userAgent.includes("Windows")
   : "hubimg://localhost";
 
 /** `tag` changes when the picture changes, so the window fetches the new one. */
+/**
+ * Picture versions: when art changes (here, or after "Reload data"), the address changes too,
+ * so the window never shows a picture it remembered from before.
+ */
+const artVersions = new Map<string, number>();
+let artGlobal = 0;
+export function bumpArt(id?: string): void {
+  if (id) artVersions.set(id, (artVersions.get(id) ?? 0) + 1);
+  else artGlobal++;
+}
+function artChange<T>(id: string, p: Promise<T>): Promise<T> {
+  return p.finally(() => bumpArt(id));
+}
+
+/** True for the "title is gone from Jellyfin" error (and only that one). */
+export function isTitleGone(e: unknown): boolean {
+  return /no longer in Jellyfin/.test(errorText(e));
+}
+
 export function imageUrl(id: string, kind: ImageKind, width: number, index = 0, tag = ""): string {
   const idx = index > 0 ? `/${index}` : "";
-  return `${IMG_BASE}/${id}/${kind}${idx}?w=${width}${tag ? `&t=${encodeURIComponent(tag)}` : ""}`;
+  const v = artGlobal * 1000 + (artVersions.get(id) ?? 0);
+  return `${IMG_BASE}/${id}/${kind}${idx}?w=${width}${tag ? `&t=${encodeURIComponent(tag)}` : ""}${v ? `&v=${v}` : ""}`;
 }
 
 /** Candidate pictures from TMDB/TVDB/fanart, fetched by the app (only from known image sites). */

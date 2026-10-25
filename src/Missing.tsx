@@ -4,9 +4,12 @@ import { track, useEpoch } from "./activity";
 import { nav } from "./nav";
 import { Icon } from "./ui";
 import { setPrefs, usePrefs } from "./prefs";
+import { readSaved, usePageState, writeSaved } from "./saved";
 
-// Results stay while the app is open, so going back and forth doesn't recheck everything.
-const cache = new Map<string, MissingReport | string>();
+// Results are kept on this computer (also "nothing missing"), so a check isn't lost when you
+// leave the page or close the app.
+const cache = new Map<string, MissingReport | string>(Object.entries(readSaved<Record<string, MissingReport | string>>("missing")?.data ?? {}));
+const persist = () => writeSaved("missing", Object.fromEntries(cache));
 
 /** Missing episodes: each show compared with TMDB (or TVmaze). Unaired episodes don't count. */
 export default function Missing({ status }: { status: Status }) {
@@ -14,8 +17,8 @@ export default function Missing({ status }: { status: Status }) {
   const [shows, setShows] = useState<Item[]>([]);
   const [, force] = useState(0);
   const [open, setOpen] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [onlyGaps, setOnlyGaps] = useState(false);
+  const [query, setQuery] = usePageState("missing.query", "");
+  const [onlyGaps, setOnlyGaps] = usePageState("missing.onlyGaps", false);
   const { missingIgnored, missingSpecials } = usePrefs();
   const [showIgnored, setShowIgnored] = useState(false);
   const ignore = (id: string, on: boolean) => setPrefs((p) => ({ missingIgnored: on ? [...new Set([...p.missingIgnored, id])] : p.missingIgnored.filter((x) => x !== id) }));
@@ -36,6 +39,7 @@ export default function Missing({ status }: { status: Status }) {
         }
         force((n) => n + 1);
       }
+      persist();
     }, { cancellable: true, reload: false });
   }
 
@@ -53,6 +57,7 @@ export default function Missing({ status }: { status: Status }) {
           <div className="muted small">Compares your files with {status.hasTmdb ? "TMDB" : "TVmaze (add a TMDB key for better results)"}. Episodes that haven't aired yet don't count; specials are counted separately.</div>
         </div>
         <div className="pg-actions">
+          {checked > 0 && <button onClick={() => void check(active)}>Check all again</button>}
           <button className="primary" onClick={() => void check(active.filter((s) => !cache.has(s.id)))} disabled={!active.length || active.every((s) => cache.has(s.id))}>
             {checked ? `Check the other ${active.filter((s) => !cache.has(s.id)).length}` : `Check all ${active.length} shows`}
           </button>

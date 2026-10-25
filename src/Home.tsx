@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Alert, api, Card, cleanTitle, HomeFeed, imageUrl, Item, localDate, Pick, Status } from "./api";
-import { track, useEpoch } from "./activity";
+import { onDataReload, track, useEpoch } from "./activity";
 import { nav } from "./nav";
 import { CardTile, Icon, Img, imageLoaded, itemMenu, openMenu, playTitle, preloadImages, Row, scanLibrary, SettingsLink } from "./ui";
 import { prefs, setPrefs, usePrefs } from "./prefs";
@@ -91,6 +91,7 @@ export function Billboard({ pick, onPlay, full, children }: { pick: Pick; onPlay
 }
 
 const homeCache: { feed: HomeFeed | null; picks: Pick[]; movies: Card[]; shows: Card[]; top: Card[] } = { feed: null, picks: [], movies: [], shows: [], top: [] };
+onDataReload(() => { overviews.clear(); });
 
 /** Overviews already fetched for the big picture (so going back doesn't wait again). */
 const overviews = new Map<string, string>();

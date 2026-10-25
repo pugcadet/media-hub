@@ -7,7 +7,7 @@ import { nav } from "./nav";
 import { track, useEpoch } from "./activity";
 import { BulkSelect, Icon, itemMenu, openMenu, TriCheck, useUndoableSet } from "./ui";
 import { Studio, StudioItem } from "./Studio";
-import { setPrefs, usePrefs, withShowYear, yearOptional, type Prefs } from "./prefs";
+import { setPrefs, usePrefs, withShowYear, yearOptional, minimalNames, type Prefs } from "./prefs";
 
 type Source = PlanArgs["source"];
 type Kind = "auto" | "tv" | "movie";
@@ -642,7 +642,7 @@ function presetFor(r: CheckRow): Preset {
 async function renameRow(r: CheckRow): Promise<number> {
   const p = presetFor(r);
   const plan = await api.plan({
-    mode: p.kind, folder: p.folder, template: r.kind === "series" ? tvTemplate() : MOVIE_TEMPLATE, show: null, year: null, yearOptional: yearOptional(),
+    mode: p.kind, folder: p.folder, template: r.kind === "series" ? tvTemplate() : MOVIE_TEMPLATE, show: null, year: null, yearOptional: yearOptional(), minimal: minimalNames(),
     findReplace: [], recursive: r.kind === "series", source: r.kind === "series" ? "jellyfin" : "none", matchId: p.matchId,
     renameFolder: null, seasonFolders: false, onlyFile: p.onlyFile, itemId: p.itemId,
   });
@@ -682,7 +682,7 @@ export function explain(o: PlanOp, source: string | null): string[] {
   return why;
 }
 
-function CheckDetail({ r, onFix, onDone }: { r: CheckRow; onFix: () => void; onDone: () => void }) {
+function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
   const [plan, setPlan] = useState<PlanResult | null>(null);
   const [ids, setIds] = useState<Record<string, string>>({});
   const sel = useUndoableSet<string>();
@@ -691,19 +691,23 @@ function CheckDetail({ r, onFix, onDone }: { r: CheckRow; onFix: () => void; onD
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showRight, setShowRight] = useState(false);
+  const { tidy, showYear } = usePrefs();
+  const [renameTop, setRenameTop] = useState(true);
+  const [seasonDirs, setSeasonDirs] = useState(false);
 
   useEffect(() => {
     const p = presetFor(r);
+    setPlan(null);
     api.plan({
-      mode: p.kind, folder: p.folder, template: r.kind === "series" ? tvTemplate() : MOVIE_TEMPLATE, show: null, year: null, yearOptional: yearOptional(),
+      mode: p.kind, folder: p.folder, template: r.kind === "series" ? tvTemplate() : MOVIE_TEMPLATE, show: null, year: null, yearOptional: yearOptional(), minimal: minimalNames(),
       findReplace: [], recursive: r.kind === "series", source: r.kind === "series" ? "jellyfin" : "none", matchId: p.matchId,
-      renameFolder: r.kind === "series" ? true : null, seasonFolders: false, onlyFile: p.onlyFile, itemId: p.itemId,
+      renameFolder: r.kind === "series" ? renameTop : null, seasonFolders: seasonDirs, onlyFile: p.onlyFile, itemId: p.itemId,
     }).then((pl) => {
       setPlan(pl);
       sel.reset(pl.ops.filter((o) => o.status === "ok").map((o) => o.from));
     }).catch((e) => setError(errorText(e)));
-    api.details(r.id).then((d) => setIds(d.item.ProviderIds ?? {})).catch(() => undefined);
-  }, [r.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [r.id, tidy, showYear, renameTop, seasonDirs]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => void api.details(r.id).then((d) => setIds(d.item.ProviderIds ?? {})).catch(() => undefined), [r.id]);
 
   if (error) return <div className="check-detail"><p className="error">{error}</p></div>;
   if (!plan) return <div className="check-detail"><p className="muted small">Working out every change…</p></div>;
@@ -770,9 +774,25 @@ function CheckDetail({ r, onFix, onDone }: { r: CheckRow; onFix: () => void; onD
         </div>
         <div className="row end">
           {!(ids.Tmdb || ids.Tvdb) && <button onClick={() => nav.open(r.id, { tab: "identify" })}>Identify first…</button>}
-          <button onClick={onFix}>More options…</button>
           <button className="primary" disabled={!picked.size || busy} onClick={() => void apply()}>{busy ? "Renaming…" : `Rename ${picked.size} selected`}</button>
         </div>
+      </div>
+
+      <div className="ren-options">
+        <div className="seg" role="group" aria-label="What to rename">
+          <button className={tidy !== "style" ? "on" : ""} onClick={() => setPrefs({ tidy: "messy" })} title="Release tags (2160p, BluRay, x265, [YTS]) and dots for spaces">Only messy names</button>
+          <button className={tidy === "style" ? "on" : ""} onClick={() => setPrefs({ tidy: "style" })} title="Every name follows the naming style exactly">Match the naming style</button>
+        </div>
+        {tidy === "style" && r.kind === "series" && (
+          <>
+            <div className="seg" role="group" aria-label="Year in show names">
+              {SHOW_YEAR.map((o) => <button key={o.id} className={showYear === o.id ? "on" : ""} title={o.hint} onClick={() => setPrefs({ showYear: o.id })}>{o.label}</button>)}
+            </div>
+            <label className="check small"><input type="checkbox" checked={renameTop} onChange={(e) => setRenameTop(e.target.checked)} />Rename the show folder</label>
+            <label className="check small"><input type="checkbox" checked={seasonDirs} onChange={(e) => setSeasonDirs(e.target.checked)} />Put loose episodes in season folders</label>
+          </>
+        )}
+        <span className="muted small">{tidy !== "style" ? "Names Jellyfin already reads fine are left alone." : "Jellyfin finds titles either way; this only makes names uniform."}</span>
       </div>
 
       <div className="change-list">
@@ -871,7 +891,7 @@ function FolderScope({ rows, top, sel }: { rows: CheckRow[]; top: (r: CheckRow) 
   );
 }
 
-function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => void }) {
+function CheckList({ status }: { status: Status }) {
   const epoch = useEpoch();
   const [res, setRes] = useState<CheckResult | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
@@ -898,8 +918,11 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [res]);
 
+  const { tidy } = usePrefs();
+  const [checkedTidy, setCheckedTidy] = useState(tidy);
   async function check(ids: string[] | null = null) {
     setError(null);
+    if (!ids) setCheckedTidy(tidy);
     try {
       await track(ids ? "Checking names again" : "Checking every show and movie", async (job) => {
         const un = await listen<{ done: number; total: number; name: string }>("naming-progress", (e) => {
@@ -907,7 +930,7 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
           job.update(e.payload.name, e.payload.total ? e.payload.done / e.payload.total : null);
         });
         try {
-          setRes(await api.namingCheck(tvTemplate(), MOVIE_TEMPLATE, ids, yearOptional()));
+          setRes(await api.namingCheck(tvTemplate(), MOVIE_TEMPLATE, ids, yearOptional(), minimalNames()));
         } finally {
           un();
           setChecking(null);
@@ -960,7 +983,6 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
   }
 
   const menuFor = (r: CheckRow) => [
-    { label: "More options…", run: () => onFix(r) },
     { label: "Open title", run: () => nav.open(r.id) },
     { label: "Show folder in Finder", run: () => void api.revealRel(r.folder).catch(() => undefined) },
     { label: "Check again", run: () => void check([r.id]) },
@@ -997,7 +1019,7 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
         {checking ? <button onClick={() => void api.namingCheckCancel()}>Stop</button> : (
           <>
             {narrowed && scope.size > 0 && <button onClick={() => void check(rows.filter((r) => scope.has(r.id)).map((r) => r.id))}>Check these {scope.size}</button>}
-            <button className="primary" onClick={() => void check()}>{res ? "Check again" : "Check my library"}</button>
+            <button className="primary" onClick={() => void check()}>{res ? (checkedTidy !== tidy ? "Check again with the new setting" : "Check again") : "Check my library"}</button>
           </>
         )}
       </div>
@@ -1045,7 +1067,7 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
                 </div>
               </div>
               {show === "right" ? <p className="ok">✓ Every file and folder already has the right name.</p> : (
-                <CheckDetail key={openRow.id} r={openRow} onFix={() => onFix(openRow)} onDone={() => void check([openRow.id])} />
+                <CheckDetail key={openRow.id} r={openRow} onDone={() => void check([openRow.id])} />
               )}
             </div>
           )}
@@ -1070,7 +1092,7 @@ export default function Renamer({ status, onChanged, start, embedded }: {
       return;
     }
     setError(null);
-    api.namingCheck(tvTemplate(), MOVIE_TEMPLATE, [start.item], yearOptional())
+    api.namingCheck(tvTemplate(), MOVIE_TEMPLATE, [start.item], yearOptional(), minimalNames())
       .then((r) => {
         const row = r.rows.find((x) => x.id === start.item);
         if (!row) throw "Jellyfin has no file location for this title.";
@@ -1079,11 +1101,6 @@ export default function Renamer({ status, onChanged, start, embedded }: {
       })
       .catch((e) => setError(errorText(e)));
   }, [start?.item, start?.folder]);
-
-  const fix = (r: CheckRow) => {
-    setPreset(presetFor(r));
-    setMode("folder");
-  };
 
   if (embedded) {
     if (!status.libraryRoot) return <p className="muted">Choose your library folder in Settings first.</p>;
@@ -1106,7 +1123,7 @@ export default function Renamer({ status, onChanged, start, embedded }: {
       </div>
       {error && <p className="error">{error}</p>}
       {mode === "check" ? (
-        status.libraryRoot ? <CheckList status={status} onFix={fix} /> : <FolderFix status={status} onChanged={onChanged} />
+        status.libraryRoot ? <CheckList status={status} /> : <FolderFix status={status} onChanged={onChanged} />
       ) : (
         <>
           {preset && <p className="muted small"><button className="link" onClick={() => setMode("check")}>← Back to the list</button></p>}

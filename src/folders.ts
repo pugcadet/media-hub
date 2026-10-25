@@ -2,10 +2,11 @@
 // library health check. Shared by every screen that filters or groups by folder.
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { useEpoch } from "./activity";
+import { onDataReload, useEpoch } from "./activity";
 
 let cache: { epoch: number; map: Map<string, string> } | null = null;
 let pending: Promise<Map<string, string>> | null = null;
+onDataReload(() => { cache = null; });
 
 function load(epoch: number): Promise<Map<string, string>> {
   if (cache && cache.epoch === epoch) return Promise.resolve(cache.map);

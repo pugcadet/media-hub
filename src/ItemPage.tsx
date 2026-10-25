@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, Card, CheckRow, cleanTitle, HealthRow, SegSummary, codesFor, cultures, Culture, Details, errorText, imageUrl, ImageKind, ItemEdits, JfChild, JfImage, JfItem,
+  api, isTitleGone, Card, CheckRow, cleanTitle, HealthRow, SegSummary, codesFor, cultures, Culture, Details, errorText, imageUrl, ImageKind, ItemEdits, JfChild, JfImage, JfItem,
   languageName, remoteImageUrl, RemoteImage, SearchResult, Status,
 } from "./api";
 import { SubtitlesTab, EpisodesTab } from "./Subtitles";
@@ -126,6 +126,16 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
       // Keep what you are typing when the page reloads in the background.
       if (!dirtyRef.current) setForm(toForm(det.item));
     } catch (e) {
+      if (isTitleGone(e)) {
+        // Usually renamed: Jellyfin found it again under a new id. Look it up and go there.
+        setMessage({ text: "This title moved in Jellyfin. Looking it up…", error: false });
+        const moved = await api.findMoved(id).catch(() => null);
+        if (moved) {
+          void scanLibrary();
+          nav.open(moved);
+          return;
+        }
+      }
       setMessage({ text: errorText(e), error: true });
     }
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -150,7 +160,7 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
         <div className="item-top"><button onClick={onBack}>← Back</button></div>
         {message ? (
           <div className="stack-s">
-            <p className="error">{message.text}</p>
+            <p className={message.error ? "error" : "muted"}>{message.text}</p>
             {/no longer in Jellyfin/.test(message.text) && <div className="row"><button className="primary" onClick={() => void scanLibrary().then(onBack)}>Scan the library</button><button onClick={onBack}>Back</button></div>}
           </div>
         ) : <div className="pg-loading"><span className="spinner" /> Loading…</div>}

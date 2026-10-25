@@ -1,8 +1,9 @@
 // The Player side of Media Hub: browse and watch, like Infuse or Netflix. No editing here;
 // the hub switcher (top left) goes back to the media manager.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { usePageState } from "./saved";
 import { api, Card, cleanTitle, Details, imageUrl, JfChild, Library, Pick, Sort, Status } from "./api";
-import { useEpoch } from "./activity";
+import { onDataReload, useEpoch } from "./activity";
 import { nav } from "./nav";
 import { HubSwitcher } from "./Sidebar";
 import Home, { Billboard, featured, itemToCard } from "./Home";
@@ -21,10 +22,15 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
   // Like Netflix: the top bar floats over the picture and turns solid once you scroll.
   const [solid, setSolid] = useState(false);
 
-  useEffect(() => {
-    scroller.current?.scrollTo({ top: 0 });
-    setSolid(false);
-  }, [item?.id, tab]);
+  // Each tab remembers where you were; a title opens at the top, Back returns to the spot.
+  const tabScroll = useRef<Record<string, number>>({});
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const y = item ? 0 : query ? 0 : tabScroll.current[tab] ?? 0;
+    el.scrollTo({ top: y });
+    setSolid(y > 40);
+  }, [item?.id, tab]); // eslint-disable-line react-hooks/exhaustive-deps
   const hasHero = !!item || (!query && tab !== "collections");
   const [seen, setSeen] = useState<Tab[]>(["home"]);
   useEffect(() => setSeen((s) => (s.includes(tab) ? s : [...s, tab])), [tab]);
@@ -67,7 +73,7 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
           <input placeholder="Search" value={query} onChange={(e) => { setQuery(e.target.value); if (item && e.target.value) onBack(); }} />
         </label>
       </header>
-      <div className={`w-page ${hasHero ? "has-hero" : ""}`} ref={scroller} onScroll={(e) => setSolid((e.target as HTMLDivElement).scrollTop > 40)}>
+      <div className={`w-page ${hasHero ? "has-hero" : ""}`} ref={scroller} onScroll={(e) => { const y = (e.target as HTMLDivElement).scrollTop; setSolid(y > 40); if (!item && !query) tabScroll.current[tab] = y; }}>
         {item && <WatchItem key={item.id} id={item.id} onBack={onBack} />}
         {!item && query && <Browse kind={null} query={query} />}
         {/* The tabs stay loaded once opened, so switching back shows them at once. */}
@@ -108,15 +114,16 @@ const letterOf = (name: string) => {
 const browseCache = new Map<string, { items: Card[]; hero: Pick | null }>();
 const detailsCache = new Map<string, Details>();
 const epsCache = new Map<string, JfChild[]>();
+onDataReload(() => { browseCache.clear(); detailsCache.clear(); epsCache.clear(); });
 
 function Browse({ kind, query }: { kind: "movie" | "series" | null; query: string }) {
   const epoch = useEpoch();
-  const [sort, setSort] = useState<Sort>("added");
+  const [sort, setSort] = usePageState<Sort>(`watch.${kind ?? "search"}.sort`, "added");
   const [items, setItems] = useState<Card[]>(() => (query ? [] : browseCache.get(kind ?? "all")?.items ?? []));
   const [more, setMore] = useState(true);
-  const [genre, setGenre] = useState<string | null>(null);
+  const [genre, setGenre] = usePageState<string | null>(`watch.${kind ?? "search"}.genre`, null);
   const [genres, setGenres] = useState<string[]>([]);
-  const [onlyNew, setOnlyNew] = useState(false);
+  const [onlyNew, setOnlyNew] = usePageState(`watch.${kind ?? "search"}.onlyNew`, false);
   const [hero, setHero] = useState<Pick | null>(() => (query ? null : browseCache.get(kind ?? "all")?.hero ?? null));
   const sentinel = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);

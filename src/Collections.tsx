@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { api, Card, errorText, imageUrl, Status } from "./api";
+import { api, Card, errorText, imageUrl, scanAround, Status } from "./api";
+import { askConfirm } from "./confirm";
 import { track, useEpoch } from "./activity";
 import { nav } from "./nav";
-import { askChoice, CardTile, Img, SettingsLink } from "./ui";
+import { askChoice, CardTile, Icon, Img, SettingsLink } from "./ui";
 
 /** Jellyfin collections (box sets): browse, make new ones, add and remove titles. */
 export default function Collections({ status, selected, variant = "manage" }: { status: Status; selected: string | null ; variant?: "manage" | "watch" }) {
@@ -40,6 +41,37 @@ export default function Collections({ status, selected, variant = "manage" }: { 
     if (pick && "value" in pick) await track("Adding to collection", () => api.collectionAdd(selected, [pick.value]));
   }
 
+  /** Moves every movie of this collection into one folder on the NAS (one undoable batch). */
+  async function oneFolder() {
+    if (!selected) return;
+    const suggested = (current?.title ?? "Collection").replace(/ Collection$/i, "");
+    const r = await askChoice(`Put the movies of ${current?.title ?? "this collection"} in one folder`, [], { label: "Folder name", placeholder: suggested, okLabel: "Show what moves" });
+    if (!r || !("text" in r)) return;
+    try {
+      const plan = await api.collectionFolderPlan(selected, r.text.trim() || suggested);
+      const ok = plan.ops.filter((o) => o.status === "ok");
+      if (!ok.length) {
+        setError(plan.skipped.length ? `Nothing to move. ${plan.skipped.join(" · ")}` : `Every movie is already in “${plan.folder}”.`);
+        return;
+      }
+      const list = ok.slice(0, 6).map((o) => `• ${o.from.split("/").pop()}`).join("\n");
+      const more = ok.length > 6 ? `\n…and ${ok.length - 6} more` : "";
+      const skip = plan.skipped.length ? `\n\nLeft where they are: ${plan.skipped.join("; ")}` : "";
+      if (!(await askConfirm(`Move ${ok.length} movie folder${ok.length === 1 ? "" : "s"} into “${plan.folder}”?\n\n${list}${more}${skip}\n\nJellyfin sees them as new (watched status stays); Media Hub adds them back to this collection once Jellyfin has found them. You can undo the move in History.`, { okLabel: "Move" }))) return;
+      const movies = (items ?? []).filter((i) => i.kind === "movie").map((i) => [i.title, i.year ?? null] as [string, number | null]);
+      await track(`Moving ${ok.length} movies into ${plan.folder}`, async (job) => {
+        const rep = await api.apply(plan.planId, true, ok.map((o) => o.from));
+        job.update("Asking Jellyfin to look at the new folder", null);
+        await scanAround([plan.folder, ...ok.map((o) => o.from)]);
+        await api.collectionRelink(selected, movies).catch(() => undefined);
+        if (rep.failed.length) throw `${rep.done} moved; ${rep.failed.length} failed: ${rep.failed[0]}`;
+        job.update(`${rep.done} moved · re-adding to the collection in the background`, 1);
+      });
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
   if (selected) {
     return (
       <div className="pg">
@@ -47,7 +79,10 @@ export default function Collections({ status, selected, variant = "manage" }: { 
           <button onClick={() => nav.route({ view: "collections" })}>← All collections</button>
         </div>
         {variant === "manage" ? (
-          <div className="pg-head"><div><h1>{current?.title ?? "Collection"}</h1><div className="muted small">{items ? `${items.length} title${items.length === 1 ? "" : "s"}` : "Loading…"}</div></div></div>
+          <div className="pg-head coll-head">
+            <div className="coll-art"><Img src={imageUrl(selected, "Primary", 240)} /></div>
+            <div className="grow"><h1>{current?.title ?? "Collection"}</h1><div className="muted small">{items ? `${items.length} title${items.length === 1 ? "" : "s"}` : "Loading…"}</div></div>
+          </div>
         ) : <div className="coll-hero">
           <Img src={imageUrl(selected, "Backdrop", 1400)} />
           <div className="bb-shade" />
@@ -58,7 +93,8 @@ export default function Collections({ status, selected, variant = "manage" }: { 
         </div>}
         <div className="row">
           <button className="primary" disabled={!canEdit} onClick={() => void addTitles()}>+ Add a title</button>
-          <button onClick={() => void api.revealItem(selected).catch(() => undefined)}>Show in Finder</button>
+          <button disabled={!canEdit} onClick={() => nav.open(selected, { tab: "art" })}><Icon name="image" /> Change artwork</button>
+          <button disabled={!canEdit || !status.libraryRoot} onClick={() => void oneFolder()} title="Move the movies into one folder on the NAS, named after the collection"><Icon name="folder" /> Put the movies in one folder…</button>
           <span className="muted small">Right-click a title to remove it. Collections show up in Infuse too.</span>
         </div>
         {error && <p className="error">{error}</p>}

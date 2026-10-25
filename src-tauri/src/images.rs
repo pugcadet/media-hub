@@ -126,6 +126,22 @@ async fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<V
             if let Some(f) = file.as_ref() {
                 if let Ok(bytes) = std::fs::read(f) {
                     let age = std::fs::metadata(f).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).map(|d| d.as_secs()).unwrap_or(u64::MAX);
+                    // After "Reload data": pictures cached before it are fetched again now.
+                    let reload_at = REVALIDATE_AT.load(std::sync::atomic::Ordering::Relaxed);
+                    let cached_at = std::fs::metadata(f).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+                    if tag.is_empty() && cached_at < reload_at {
+                        if let Ok(Some(c)) = state.client() {
+                            if let Ok((b, ct)) = c.image(id, kind, index, width).await {
+                                let _ = write_cache(f, &b);
+                                return Response::builder()
+                                    .status(200)
+                                    .header("Content-Type", ct)
+                                    .header("Cache-Control", "private, max-age=86400")
+                                    .body(b)
+                                    .map_err(|e| Error::msg(e.to_string()));
+                            }
+                        }
+                    }
                     if tag.is_empty() && age > 86_400 {
                         let (app2, id2, kind2, f2) = (app.clone(), id.to_string(), kind.to_string(), f.clone());
                         tauri::async_runtime::spawn(async move {
@@ -183,6 +199,15 @@ fn write_cache(f: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = f.with_extension("part");
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(tmp, f)
+}
+
+static REVALIDATE_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// "Reload data": pictures cached until now are checked with Jellyfin again on next use.
+#[tauri::command]
+pub fn images_revalidate() {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    REVALIDATE_AT.store(now, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Forgets the cached pictures of one title (after you change its artwork).

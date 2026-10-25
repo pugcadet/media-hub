@@ -308,7 +308,7 @@ pub async fn set_image(state: State<'_, AppState>, id: String, kind: String, url
         .journal_add("image", &format!("{id}|{kind}|0"), &backup, &url)?;
     if let Err(e) = w.download_remote_image(&id, kind, &url).await {
         state.store()?.journal_delete(entry)?;
-        return Err(e);
+        return Err(Error::msg(save_hint(&e.to_string())));
     }
     lock_after_edit(&state, &w, &id).await;
     resync(&state, &id).await;
@@ -384,6 +384,7 @@ pub async fn fill_missing_art(state: State<'_, AppState>, id: String, kinds: Vec
         .collect();
     let lang = lang.unwrap_or_else(|| "en".into());
     let mut added = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
     for k in kinds.iter().take(8) {
         let Some(kind) = image_kind(k) else { continue };
         if have.iter().any(|h| h == kind) {
@@ -397,7 +398,15 @@ pub async fn fill_missing_art(state: State<'_, AppState>, id: String, kinds: Vec
         let entry = state.store()?.journal_add("image", &format!("{id}|{kind}|0"), "", &url)?;
         match w.download_remote_image(&id, kind, &url).await {
             Ok(()) => added.push(kind.to_string()),
-            Err(_) => state.store()?.journal_delete(entry)?,
+            Err(e) => {
+                state.store()?.journal_delete(entry)?;
+                failed.push(e.to_string());
+            }
+        }
+    }
+    if added.is_empty() {
+        if let Some(e) = failed.first() {
+            return Err(Error::msg(save_hint(e)));
         }
     }
     if !added.is_empty() {
@@ -407,6 +416,15 @@ pub async fn fill_missing_art(state: State<'_, AppState>, id: String, kinds: Vec
         crate::images::forget(&state.dir, &id);
     }
     Ok(added)
+}
+
+/// Jellyfin failing to save a picture is nearly always about where it saves it.
+pub fn save_hint(e: &str) -> String {
+    if e.contains("status 500") || e.to_lowercase().contains("access") || e.to_lowercase().contains("denied") || e.to_lowercase().contains("read-only") {
+        format!("Jellyfin couldn't save the picture ({e}). With “Save artwork and details next to the media” on, Jellyfin needs permission to write in the media folders on the NAS; give it write access or switch that setting off under Settings → Jellyfin & Infuse.")
+    } else {
+        format!("Jellyfin couldn't save the picture: {e}")
+    }
 }
 
 /// Best picture: your language (or no text for backdrops), then rating, votes and size.

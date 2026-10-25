@@ -48,6 +48,10 @@ pub struct PlanRequest {
     /// show in Jellyfin loses its watched status and markers, so a year alone isn't worth it).
     #[serde(default)]
     pub year_optional: bool,
+    /// Only tidy names that are messy (release tags, dots for spaces). Names that are fine for
+    /// Jellyfin but in another style are left alone; nothing moves into new folders.
+    #[serde(default)]
+    pub minimal: bool,
     /// Ids of the matched show (tmdb/tvdb), used for {tmdbtag}/{tvdbtag}. Filled by the app.
     #[serde(default, skip_deserializing)]
     pub ids: HashMap<String, String>,
@@ -439,6 +443,9 @@ pub fn plan_tv(
         if req.year_optional && without_year(name) == without_year(&new_name) {
             new_name = name.to_string();
         }
+        if req.minimal && !crate::naming::is_messy(stem) {
+            new_name = name.to_string();
+        }
         if top_name.is_none() {
             top_name = parts.top.clone();
         }
@@ -447,7 +454,7 @@ pub fn plan_tv(
         let inside_dir = split_path(inside).0;
         let first_dir = inside_dir.split('/').next().unwrap_or("");
         let step_dir = if inside_dir.is_empty() {
-            match (&parts.season, req.season_folders) {
+            match (&parts.season, req.season_folders && !req.minimal) {
                 (Some(sd), true) => join(folder, sd),
                 _ => dir.to_string(),
             }
@@ -492,6 +499,9 @@ pub fn plan_tv(
         if season_from_dir(d).is_none() {
             continue;
         }
+        if req.minimal && !crate::naming::is_messy(d) {
+            continue;
+        }
         if *d != new {
             let (old_full, new_full) = (join(folder, d), join(folder, &new));
             dir_map.push((old_full.clone(), new_full.clone()));
@@ -501,6 +511,7 @@ pub fn plan_tv(
 
     // The show folder itself.
     let rename_top = match req.rename_folder {
+        _ if req.minimal && !crate::naming::is_messy(folder_name) => false,
         Some(v) => v,
         None => {
             !folder.is_empty()
@@ -599,9 +610,20 @@ pub fn plan_movies(
             }
         };
         let parts = parts_of(&rendered, false);
-        let new_name = name_with_rules(&parts.file, &rules);
+        let mut new_name = name_with_rules(&parts.file, &rules);
         let own_folder = dir != folder && !dir.is_empty() && per_dir(dir) == 1;
-        let (step, note) = match (&parts.top, own_folder, dir == folder) {
+        let dir_name = split_path(dir).1;
+        let mut top = parts.top.clone();
+        if req.minimal {
+            if !crate::naming::is_messy(split_ext(name).0) {
+                new_name = name.to_string();
+            }
+            if !(own_folder && crate::naming::is_messy(dir_name)) {
+                // The folder is fine (or isn't the movie's own): don't rename or create one.
+                top = None;
+            }
+        }
+        let (step, note) = match (&top, own_folder, dir == folder) {
             // In its own folder: rename the file there; the folder is renamed after.
             (Some(top), true, _) => {
                 let parent = split_path(dir).0;
@@ -617,7 +639,7 @@ pub fn plan_movies(
             _ => (join(dir, &new_name), None),
         };
         let back = parse_name(split_ext(split_path(&step).1).0);
-        let verified = back.title.eq_ignore_ascii_case(&sanitize(&title)) && back.year == year;
+        let verified = (req.minimal && step == **f) || back.title.eq_ignore_ascii_case(&sanitize(&title)) && back.year == year;
         let mut o = op(f, &step, &step, "video");
         o.verified = verified;
         o.note = if verified { note } else { Some("The new name does not read back as the same title and year.".into()) };
@@ -661,6 +683,7 @@ mod tests {
             rename_folder: None,
             season_folders: false,
             year_optional: false,
+            minimal: false,
             ids: HashMap::new(),
             alt_titles: Vec::new(),
         }
@@ -777,6 +800,36 @@ mod tests {
         assert_eq!(ops[0].status, "unchanged");
         assert_eq!(guess_show("Downloads", &f), ("Bluey".to_string(), Some(2018)));
         assert_eq!(guess_show("TV/Season 1", &f).0, "Bluey");
+    }
+
+    #[test]
+    fn minimal_only_tidies_messy_names() {
+        // A messy movie file and folder are cleaned; the year stays.
+        let f = files(&["Movies/Ad.Astra.2019.2160p.4K.BluRay.x265.10bit.AAC5.1-[YTS.MX]/Ad.Astra.2019.2160p.4K.BluRay.x265.10bit.AAC5.1-[YTS.MX].mkv"]);
+        let mut r = req("Movies", MOVIE);
+        r.minimal = true;
+        let ops = plan_movies(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
+        let v = ops.iter().find(|o| o.kind == "video").unwrap();
+        assert_eq!(v.status, "ok", "{ops:#?}");
+        assert_eq!(v.to, "Movies/Ad Astra (2019)/Ad Astra (2019).mkv");
+        // A tidy movie in another style is left alone.
+        let f = files(&["Movies/Heat 1995/Heat.mkv"]);
+        let ops = plan_movies(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
+        assert!(ops.iter().all(|o| o.status == "unchanged"), "{ops:#?}");
+        // Episodes Jellyfin reads fine: no year, no titles, no season folders added.
+        let f = files(&["TV/Bluey/Bluey - S01E01.mkv", "TV/Bluey/Season 1/Bluey - S01E02.mkv"]);
+        let mut r = req("TV/Bluey", TV);
+        r.year = Some(2018);
+        r.minimal = true;
+        r.season_folders = true;
+        let ops = plan_tv(&f, &r, &HashMap::from([((1, 1), "Magic Xylophone".to_string())]), &nothing_exists).unwrap();
+        assert!(ops.iter().all(|o| o.status == "unchanged"), "{ops:#?}");
+        // A messy episode is tidied in place.
+        let f = files(&["TV/Bluey/Bluey.S01E03.1080p.WEB-DL.mkv"]);
+        let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
+        let v = ops.iter().find(|o| o.kind == "video").unwrap();
+        assert_eq!(v.status, "ok");
+        assert_eq!(v.to, "TV/Bluey/Bluey (2018) - S01E03.mkv");
     }
 
     #[test]

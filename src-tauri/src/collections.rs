@@ -241,3 +241,130 @@ mod tests {
         assert!(card(&serde_json::json!({"Id": "../x", "Type": "Movie"})).is_none());
     }
 }
+
+/* ------------------------------------------- a collection's movies in one folder */
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderPlan {
+    plan_id: String,
+    /// The folder the movies go into, relative to the library folder.
+    folder: String,
+    ops: Vec<crate::planner::PlanOp>,
+    /// Movies that can't be moved, and why.
+    skipped: Vec<String>,
+}
+
+/// "Alien Collection" → "Alien".
+pub fn collection_folder_name(name: &str) -> String {
+    let n = name.trim();
+    let n = n.strip_suffix(" Collection").or_else(|| n.strip_suffix(" collection")).unwrap_or(n);
+    crate::naming::sanitize(n.trim())
+}
+
+/// Plans moving every movie folder of a collection into one folder named after it, next to
+/// where most of them are now ("Movies/Alien/Alien (1979)/…"). Nothing moves until applied;
+/// it's one undoable batch.
+#[tauri::command]
+pub async fn collection_folder_plan(state: State<'_, AppState>, id: String, name: Option<String>) -> Result<FolderPlan> {
+    if !valid_item_id(&id) {
+        return Err(Error::msg("bad id"));
+    }
+    let root = state.settings()?.library_root.map(std::path::PathBuf::from).ok_or_else(|| Error::msg("Choose your library folder in Settings first."))?;
+    let c = state.reader().await?;
+    let coll = c.item_json(&id).await?;
+    let folder_name = collection_folder_name(name.as_deref().unwrap_or_else(|| coll.get("Name").and_then(Value::as_str).unwrap_or("Collection")));
+    if folder_name.is_empty() {
+        return Err(Error::msg("The collection needs a name."));
+    }
+    let items = c.items_query(vec![("ParentId", id.clone()), ("Fields", "Path".into()), ("IncludeItemTypes", "Movie".into())], 500).await?;
+    let mut movie_dirs: Vec<(String, String)> = Vec::new(); // (name, folder rel)
+    let mut skipped = Vec::new();
+    for v in &items {
+        let title = v.get("Name").and_then(Value::as_str).unwrap_or("?").to_string();
+        let Some(server) = v.get("Path").and_then(Value::as_str) else { continue };
+        let Ok(local) = crate::local::to_local(&state, server) else {
+            skipped.push(format!("{title}: not found in your library folder"));
+            continue;
+        };
+        let Some(dir) = local.parent().and_then(|d| crate::local::rel_to_root(&root, d)) else {
+            skipped.push(format!("{title}: outside your library folder"));
+            continue;
+        };
+        movie_dirs.push((title, dir));
+    }
+    // Where most of them live now.
+    let mut parents: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (_, d) in &movie_dirs {
+        *parents.entry(crate::naming::split_path(d).0.to_string()).or_default() += 1;
+    }
+    let base = parents.into_iter().max_by_key(|x| x.1).map(|x| x.0).unwrap_or_default();
+    let base = if crate::naming::split_path(&base).1 == folder_name { crate::naming::split_path(&base).0.to_string() } else { base };
+    let target_dir = if base.is_empty() { folder_name.clone() } else { format!("{base}/{folder_name}") };
+    let mut ops = Vec::new();
+    for (title, dir) in movie_dirs {
+        let (parent, last) = crate::naming::split_path(&dir);
+        if parent == target_dir {
+            continue; // already there
+        }
+        if dir == base || last.is_empty() {
+            skipped.push(format!("{title}: not in a folder of its own (give it one with the Renamer first)"));
+            continue;
+        }
+        let to = format!("{target_dir}/{last}");
+        let exists = root.join(&to).exists();
+        ops.push(crate::planner::PlanOp {
+            from: dir.clone(),
+            to: to.clone(),
+            kind: "folder",
+            status: if exists { "conflict" } else { "ok" },
+            note: exists.then(|| "A folder with that name is already there.".to_string()),
+            season: None,
+            episodes: Vec::new(),
+            verified: true,
+            score: None,
+            step_to: to,
+            title: Some(title),
+        });
+    }
+    let plan_id = format!("coll-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+    state.set_plan(crate::state::StoredPlan { id: plan_id.clone(), root, ops: ops.clone() })?;
+    Ok(FolderPlan { plan_id, folder: target_dir, ops, skipped })
+}
+
+/// After moving movies: Jellyfin gives them new ids, which drops them from the collection.
+/// Waits until it has found them again (by name and year) and puts them back. Background.
+#[tauri::command]
+pub async fn collection_relink(app: tauri::AppHandle, state: State<'_, AppState>, id: String, movies: Vec<(String, Option<i64>)>) -> Result<()> {
+    if !valid_item_id(&id) {
+        return Err(Error::msg("bad id"));
+    }
+    let w = state.writer().await?;
+    tauri::async_runtime::spawn(async move {
+        use tauri::Emitter;
+        let norm = |s: &str| s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+        let mut found: Vec<String> = Vec::new();
+        for _ in 0..48 {
+            tauri::async_runtime::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_secs(5))).await.ok();
+            found.clear();
+            for (name, year) in &movies {
+                let hits = w
+                    .reader()
+                    .items_query(vec![("IncludeItemTypes", "Movie".into()), ("Recursive", "true".into()), ("SearchTerm", name.chars().take(80).collect()), ("Fields", "ProductionYear".into())], 20)
+                    .await
+                    .unwrap_or_default();
+                if let Some(v) = hits.iter().find(|v| norm(v.get("Name").and_then(Value::as_str).unwrap_or("")) == norm(name) && (year.is_none() || v.get("ProductionYear").and_then(Value::as_i64) == *year)) {
+                    if let Some(i) = v.get("Id").and_then(Value::as_str) {
+                        found.push(i.replace('-', ""));
+                    }
+                }
+            }
+            if found.len() == movies.len() {
+                break;
+            }
+        }
+        let ok = !found.is_empty() && w.collection_add(&id, &found).await.is_ok();
+        let _ = app.emit("collection-relinked", serde_json::json!({ "id": id, "count": if ok { found.len() } else { 0 } }));
+    });
+    Ok(())
+}

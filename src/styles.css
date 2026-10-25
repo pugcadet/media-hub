@@ -1492,3 +1492,44 @@ button.m-q-name { display: flex; flex-direction: column; min-width: 0; cursor: p
 button.settings-link { display: inline-flex; align-items: center; gap: 4px; vertical-align: baseline; }
 button.settings-link svg { flex: 0 0 auto; position: relative; top: 0; }
 label.accent-custom { flex-direction: row; }
+/* Titles missing artwork get an amber outline. */
+.wall-tile.missing-art .wall-art { box-shadow: 0 0 0 2px var(--amber); border-color: var(--amber); }
+/* "Continuing from 12:34 · Start over" — no question before playing. */
+.p-resumed { position: absolute; left: 32px; bottom: 120px; z-index: 6; display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 16px; border-radius: 999px;
+  background: rgba(15,20,32,.82); border: 1px solid rgba(255,255,255,.14); color: #fff; font-size: 14px; animation: fadein .25s; }
+.p-resumed button { height: 32px; border-radius: 999px; background: rgba(255,255,255,.12); border: 0; color: #fff; }
+/* The page slides up over the picture, but starts below the buttons (they stay clickable and clear). */
+.w-item > .w-hero .w-hero-body { padding-bottom: 150px; }
+/* "hidden" turns a box into its own scroller, which stops the big picture from staying put.
+   "clip" cuts off the same overflow without that. */
+.pg.layered, .w-page > .pg, .w-tab-body > .pg { overflow-x: clip; overflow-y: visible; }
+.player, .watch, .music { overflow-x: clip; }
+.pg.layered.pg > :is(.hero-carousel, .billboard) + :not(.overlay):not(.az-rail) { margin-top: -12vh; padding-top: 8vh; background: linear-gradient(180deg, rgba(15,20,32,0) 0, rgba(15,20,32,.85) 6vh, var(--wbg) 11vh); }
+/* Renamer: options for the open title, right above its changes */
+.ren-options { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; padding: 10px 0; }
+.ren-options .seg { align-self: center; }
+/* Subtitles: shows and seasons fold open */
+.sub-tree { padding: 6px 0; }
+.sub-show { border-bottom: 1px solid var(--line); }
+.sub-show:last-child { border-bottom: 0; }
+.sub-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px; }
+.sub-head2 { padding-left: 34px; }
+button.sub-toggle { display: inline-flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer; padding: 4px 0; }
+.sub-done { white-space: nowrap; }
+button.small-btn { height: 30px; padding: 0 12px; font-size: 13px; border-radius: 8px; }
+.sub-ep { padding-left: 58px !important; }
+.chev { display: inline-flex; transition: transform .15s; }
+.chev.open { transform: rotate(90deg); }
+.page[hidden] { display: none; }
+/* Library health: the totals are filters */
+button.health-stat { height: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; font-weight: inherit; cursor: pointer; }
+button.health-stat:hover:not(:disabled) { border-color: var(--line2); background: var(--panel2); }
+button.health-stat.on { border-color: var(--accent); background: var(--accent-soft); }
+button.health-stat:disabled { opacity: .7; cursor: default; }
+.health-clear { align-self: center; display: inline-flex; align-items: center; gap: 4px; }
+.detect-what { display: flex; gap: 12px; align-items: center; }
+.coll-head { align-items: center; justify-content: flex-start; }
+.coll-art { width: 72px; aspect-ratio: 2/3; border-radius: 8px; overflow: hidden; background: var(--panel2); border: 1px solid var(--line); flex: 0 0 72px; }
+.coll-art img { width: 100%; height: 100%; object-fit: cover; }
+.confirm .confirm-text, .confirm p { white-space: pre-line; }
+.steps-ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }

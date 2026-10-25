@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { usePageState } from "./saved";
 import { api, cleanTitle, errorText, imageUrl, Item, JfItem, Library, SegSummary, Status } from "./api";
 import { IntrosTab } from "./Intros";
 import { useEpoch } from "./activity";
@@ -68,7 +69,7 @@ function ShowRow({ s, onPick }: { s: Item; onPick: () => void }) {
 /** Intros and credits: shows per library, then a season's timeline. */
 export default function IntrosTool({ status, onNav }: { status: Status; onNav: (v: View) => void }) {
   const epoch = useEpoch();
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = usePageState("intros.query", "");
   const [libs, setLibs] = useState<Library[]>([]);
   const [lib, setLib] = useState<string | null>(null);
   const [shows, setShows] = useState<Item[]>([]);
@@ -76,8 +77,8 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
   const [seasons, setSeasons] = useState<JfItem[]>([]);
   const [season, setSeason] = useState<JfItem | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [onlyGaps, setOnlyGaps] = useState(false);
-  const [tab, setTab] = useState("all");
+  const [onlyGaps, setOnlyGaps] = usePageState("intros.onlyGaps", false);
+  const [tab, setTab] = usePageState("intros.tab", "all");
   const folderMap = useFolderMap();
 
   useEffect(() => {

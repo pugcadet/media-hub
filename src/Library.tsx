@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePageState } from "./saved";
 import { api, Attention, errorText, Item, Kind, Library as Lib, Sort, Status } from "./api";
 import Wall, { type Problem } from "./Wall";
 import type { Route } from "./App";
@@ -30,10 +31,10 @@ interface Props {
 
 export default function Library({ status, libraries, route, onChanged }: Props) {
   const lib = libraries.find((l) => l.id === route.library) ?? null;
-  const [kind, setKind] = useState<Kind>(null);
-  const [query, setQuery] = useState("");
+  const [kind, setKind] = usePageState<Kind>(`library.${route.library ?? "all"}.kind`, null);
+  const [query, setQuery] = usePageState(`library.${route.library ?? "all"}.query`, "");
   const [debounced, setDebounced] = useState("");
-  const [sort, setSort] = useState<Sort>("name");
+  const [sort, setSort] = usePageState<Sort>(`library.${route.library ?? "all"}.sort`, "name");
   const [items, setItems] = useState<Item[]>([]);
   const [more, setMore] = useState(false);
   const [syncing, setSyncing] = useState(false);

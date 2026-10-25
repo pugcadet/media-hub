@@ -220,20 +220,37 @@ fn subtitle_path(video: &std::path::Path, lang: &str, ext: &str) -> Option<std::
     None
 }
 
-/// Saves the subtitle next to the video ourselves. Fails when the NAS isn't reachable.
-async fn save_local(state: &AppState, w: &Writer, id: &str, item: &Value, sub_id: &str, lang: &str, hint: &str) -> Result<Downloaded> {
-    let server = item.get("Path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or_else(|| Error::msg("no file location"))?;
-    let video = crate::local::to_local(state, server)?;
-    if !video.is_file() {
-        return Err(Error::msg("The video is not reachable on this computer."));
+/// Where the video is on this computer, if the NAS is reachable.
+fn local_video(state: &AppState, item: &Value) -> Option<std::path::PathBuf> {
+    let server = item.get("Path").and_then(Value::as_str).filter(|p| !p.is_empty())?;
+    crate::local::to_local(state, server).ok().filter(|p| p.is_file())
+}
+
+/// Turns a provider failure into something you can act on (daily limits above all).
+pub fn provider_error(e: &str) -> String {
+    let l = e.to_lowercase();
+    if l.contains("limit") || l.contains("quota") || l.contains("429") || l.contains("too many") || l.contains("406") || l.contains("remaining") {
+        format!("The subtitle site's download limit is reached for today ({e}). Media Hub stopped; try again tomorrow or sign in with an account that has more downloads (Jellyfin → Plugins → OpenSubtitles).")
+    } else if l.contains("401") || l.contains("unauthor") || l.contains("login") || l.contains("credentials") {
+        format!("The subtitle site refused the download ({e}). Check the OpenSubtitles login in Jellyfin → Plugins.")
+    } else {
+        format!("The subtitle couldn't be downloaded: {e}")
     }
-    let bytes = w.subtitle_file(sub_id).await?;
+}
+
+/// Saves the subtitle next to the video ourselves.
+async fn save_local(state: &AppState, w: &Writer, id: &str, video: &std::path::Path, sub_id: &str, lang: &str, hint: &str) -> Result<Downloaded> {
+    let bytes = w.subtitle_file(sub_id).await.map_err(|e| Error::msg(provider_error(&e.to_string())))?;
     let text = decode_text(&bytes);
     if text.trim().is_empty() {
-        return Err(Error::msg("The subtitle provider sent an empty file."));
+        return Err(Error::msg("The subtitle site sent an empty file (often its daily download limit). Media Hub stopped."));
+    }
+    // A provider that's out of downloads sometimes sends a short message instead of subtitles.
+    if text.len() < 400 && !text.contains("-->") && !text.contains("[Events]") {
+        return Err(Error::msg(provider_error(text.trim())));
     }
     let format = sniff_format(&text, hint);
-    let path = subtitle_path(&video, lang, format).ok_or_else(|| Error::msg("No free file name for the subtitle."))?;
+    let path = subtitle_path(video, lang, format).ok_or_else(|| Error::msg("No free file name for the subtitle."))?;
     std::fs::write(&path, text.as_bytes()).map_err(|e| Error::msg(format!("Could not save the subtitle: {e}")))?;
     let file = path.to_string_lossy().into_owned();
     state.store()?.journal_add("subtitle_file", id, &file, sub_id)?;
@@ -256,13 +273,13 @@ pub fn undo_saved_file(path: &str) -> Result<()> {
 
 async fn download(state: &AppState, w: &Writer, id: &str, item: &Value, sub_id: &str, codes: Vec<String>, hint: &str) -> Result<Downloaded> {
     let lang = codes.last().cloned().unwrap_or_default();
-    match save_local(state, w, id, item, sub_id, &lang, hint).await {
-        Ok(d) => {
-            // Hand it to Jellyfin: it picks the file up on a quick look at the folder.
-            let _ = w.refresh_light(id).await;
-            return Ok(d);
-        }
-        Err(e) => eprintln!("saving the subtitle ourselves failed ({e}); asking Jellyfin to download it"),
+    // With the NAS reachable Media Hub saves it itself, and a failure is reported as it is
+    // (no silent second try through Jellyfin that hides a download limit).
+    if let Some(video) = local_video(state, item) {
+        let d = save_local(state, w, id, &video, sub_id, &lang, hint).await?;
+        // Hand it to Jellyfin: it picks the file up on a quick look at the folder.
+        let _ = w.refresh_light(id).await;
+        return Ok(d);
     }
     let record = DownloadRecord {
         lang: codes,
@@ -273,7 +290,7 @@ async fn download(state: &AppState, w: &Writer, id: &str, item: &Value, sub_id: 
     let entry = state.store()?.journal_add("subtitle", id, &rec, sub_id)?;
     if let Err(e) = w.subtitle_download(id, sub_id).await {
         state.store()?.journal_delete(entry)?;
-        return Err(e);
+        return Err(Error::msg(provider_error(&e.to_string())));
     }
     Ok(Downloaded { format: hint.to_lowercase(), ..Default::default() })
 }
@@ -354,7 +371,12 @@ pub async fn subtitle_auto(state: State<'_, AppState>, id: String, lang: String,
     let mut codes = codes;
     codes.retain(|c| c != &lang);
     codes.push(lang.clone());
-    download(&state, &w, &id, &item, &sub_id, codes, &hint).await?;
+    let before: Vec<String> = streams(&item).into_iter().filter(|s| s.external).map(|s| s.path).collect();
+    let d = download(&state, &w, &id, &item, &sub_id, codes.clone(), &hint).await?;
+    if d.text.is_none() && wait_for_new(&w, &id, &before, &codes, 8).await.is_none() {
+        // Jellyfin answers "done" even when the subtitle site refused: check for the file.
+        return Err(Error::msg("Jellyfin said the subtitle was downloaded, but no new subtitle appeared. That's usually the subtitle site's daily download limit. Media Hub stopped."));
+    }
     Ok(AutoResult { outcome: "downloaded", score: Some(best.score), name: best.sub.name.clone() })
 }
 
@@ -418,6 +440,14 @@ mod tests {
         let s = streams(&item());
         assert!(!has_lang(&s, &["eng".to_string()]));
         assert!(has_lang(&s, &["nld".to_string(), "dut".to_string()]));
+    }
+
+    #[test]
+    fn limits_are_named() {
+        assert!(provider_error("The server answered with status 500: DownloadLimitReached").contains("limit"));
+        assert!(provider_error("status 429").contains("limit"));
+        assert!(provider_error("status 401").contains("login"));
+        assert!(provider_error("boom").contains("couldn't be downloaded"));
     }
 
     #[test]

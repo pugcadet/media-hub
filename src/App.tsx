@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, Attention, errorText, Library as Lib, Status } from "./api";
 import Setup from "./Setup";
 import Library from "./Library";
@@ -14,11 +14,11 @@ import Collections from "./Collections";
 import AddMedia from "./AddMedia";
 import Watch from "./Watch";
 import Player from "./Player";
-import { ActivityBar } from "./ui";
+import { ActivityBar, reloadData } from "./ui";
 import { UpdateToast } from "./Updates";
 import Music from "./Music";
 import { setNav, type OpenOpts, type Route, type View } from "./nav";
-import { useEpoch } from "./activity";
+import { reloadAll, useEpoch } from "./activity";
 import { prefs, setPrefs, usePrefs } from "./prefs";
 import { startScheduler } from "./scheduler";
 import Health from "./Health";
@@ -71,6 +71,12 @@ export default function App() {
   // ⌘, (Ctrl+, on Windows) opens Settings, like every Mac app.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement)?.tagName ?? "");
+      if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "r" || e.key === "R") && !document.querySelector(".player")) {
+        e.preventDefault();
+        void reloadData();
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === ",") {
         e.preventDefault();
         go({ view: "settings" });
@@ -98,10 +104,19 @@ export default function App() {
   }, [status?.connected, status?.readOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const top = itemStack[itemStack.length - 1];
+  // Where the list was scrolled when a title was opened (put back when you come back).
+  const listRef = useRef<HTMLDivElement>(null);
+  const listScroll = useRef(0);
+  const hadTop = useRef(false);
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!top && hadTop.current && el) el.scrollTop = listScroll.current;
+    hadTop.current = !!top;
+  });
   const back = useCallback(() => setItemStack((s) => s.slice(0, -1)), []);
 
   const player = useMemo(
-    () => playId && status ? <Player key={playId} id={playId} status={status} onClose={() => setPlayId(null)} onNext={(n) => setPlayId(n)} /> : null,
+    () => playId && status ? <Player key={playId} id={playId} status={status} onClose={() => { setPlayId(null); window.setTimeout(reloadAll, 900); }} onNext={(n) => setPlayId(n)} /> : null,
     [playId, status],
   );
 
@@ -127,9 +142,9 @@ export default function App() {
     );
   }
 
-  let page;
-  if (top) {
-    page = (
+  // The list page stays loaded under an open title, so Back returns to it exactly as it was
+  // (selection, filters, scroll position).
+  const itemPage = top ? (
       <ItemPage
         key={top.id}
         id={top.id}
@@ -142,8 +157,9 @@ export default function App() {
         titleLang={status.titleLang}
         status={status}
       />
-    );
-  } else {
+  ) : null;
+  let page;
+  {
     switch (route.view) {
       case "home":
         page = <Dashboard status={status} />;
@@ -208,7 +224,8 @@ export default function App() {
       <Sidebar status={status} libraries={libraries} attention={attention} route={route} onRoute={go} />
       <div className="main-col">
         <ActivityBar />
-        <div className="page" key={`${route.view}-${route.n ?? 0}-${top?.id ?? ""}`}>{page}</div>
+        <div className="page" key={`${route.view}-${route.n ?? 0}`} ref={listRef} hidden={!!top} onScroll={(e) => { if (!top) listScroll.current = (e.target as HTMLDivElement).scrollTop; }}>{page}</div>
+        {top && <div className="page" key={`item-${top.id}-${top.n ?? 0}`}>{itemPage}</div>}
       </div>
       {player}
       <UpdateToast />

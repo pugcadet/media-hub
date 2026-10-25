@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { usePageState } from "./saved";
 import { api, CheckRow, Details, errorText, HealthRow, imageUrl, Status } from "./api";
 import { followEvent, track, useEpoch } from "./activity";
 import { nav } from "./nav";
@@ -44,11 +45,14 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
   const epoch = useEpoch();
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<"todo" | "all" | "ok">(focus === "art" ? "all" : "todo");
+  const [filter, setFilter] = usePageState<"todo" | "all" | "ok">(`health.${focus}.filter`, focus === "art" ? "all" : "todo");
   const folderSel = useUndoableSet<string>();
   const seenFolders = useRef<Set<string>>(new Set());
-  const [query, setQuery] = useState("");
-  const [kind, setKind] = useState<"" | "series" | "movie">("");
+  const [query, setQuery] = usePageState(`health.${focus}.query`, "");
+  const [kind, setKind] = usePageState<"" | "series" | "movie">(`health.${focus}.kind`, "");
+  // Click a column total ("Logo · 12 missing") to see only those titles.
+  const [only, setOnly] = usePageState<Check | "">(`health.${focus}.only`, "");
+  const [offFolders, setOffFolders] = usePageState<string[]>(`health.${focus}.offFolders`, []);
   const checks: Check[] = focus === "art" ? ["identified", ...ART] : ["name", "identified", "poster", "backdrop", "logo", "subs"];
   const canEdit = !st.readOnly;
 
@@ -93,11 +97,16 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
     const fresh = folders.filter((f) => !seenFolders.current.has(f));
     if (!fresh.length) return;
     fresh.forEach((f) => seenFolders.current.add(f));
-    folderSel.reset([...folderSel.set, ...fresh]);
+    folderSel.reset([...folderSel.set, ...fresh.filter((f) => !offFolders.includes(f))]);
   }, [folders.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Folders you untick stay unticked next time.
+  useEffect(() => {
+    if (folders.length) setOffFolders(folders.filter((f) => !folderSel.has(f)));
+  }, [folderSel.set]); // eslint-disable-line react-hooks/exhaustive-deps
   const shown = (rows ?? [])
     .filter((r) => folderSel.has(r.libraryFolder || "Other") && (!kind || r.kind === kind) && (!query || r.name.toLowerCase().includes(query.toLowerCase())))
-    .filter((r) => (filter === "all" ? true : filter === "ok" ? score(r) === 1 : score(r) < 1))
+    .filter((r) => !only || status(r, only) === false)
+    .filter((r) => only || (filter === "all" ? true : filter === "ok" ? score(r) === 1 : score(r) < 1))
     .sort((a, b) => (filter === "todo" ? score(a) - score(b) : 0) || a.name.localeCompare(b.name));
   const total = rows?.length ?? 0;
   const perfect = (rows ?? []).filter((r) => score(r) === 1).length;
@@ -209,11 +218,12 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
       {rows && (
         <div className="health-sum">
           {checks.map((c) => (
-            <div key={c} className="health-stat">
+            <button key={c} className={`health-stat ${only === c ? "on" : ""}`} disabled={!gaps(c) && only !== c} onClick={() => setOnly(only === c ? "" : c)} title={gaps(c) ? `Show only the ${gaps(c)} titles missing this` : "Nothing missing"}>
               <div className="small muted">{LABEL[c]}</div>
               <div className={`strong ${gaps(c) ? "warn" : "ok"}`}>{gaps(c) ? `${gaps(c)} missing` : "✓ all"}</div>
-            </div>
+            </button>
           ))}
+          {only && <button className="link small health-clear" onClick={() => setOnly("")}><Icon name="x" size={12} /> Show all again</button>}
         </div>
       )}
 

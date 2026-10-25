@@ -169,6 +169,25 @@ impl RawItem {
 }
 
 /// Jellyfin ids are 32 hex characters. Checked before an id goes into a URL.
+/// What a "not found" answer means, from the address that was asked for. Only a missing title
+/// is reported as a missing title.
+pub fn not_found_text(path: &str) -> String {
+    let p = path.trim_end_matches('/');
+    let parts: Vec<&str> = p.split('/').filter(|x| !x.is_empty()).collect();
+    let is_id = |x: &str| x.len() == 32 && x.chars().all(|c| c.is_ascii_hexdigit()) || (x.len() == 36 && x.chars().filter(|c| *c == '-').count() == 4);
+    match parts.as_slice() {
+        ["Items", id] | ["Users", _, "Items", id] if is_id(id) => TITLE_GONE.to_string(),
+        ["Shows", id, ..] | ["Items", id, "Similar"] if is_id(id) => TITLE_GONE.to_string(),
+        ["Items", _, "Images", ..] => "Jellyfin has no such picture for this title.".to_string(),
+        ["Items", _, "RemoteImages", ..] => "Jellyfin couldn't fetch that picture (the image site may have removed it).".to_string(),
+        ["MediaSegments", ..] => "Jellyfin can't store skip markers: install the “MediaSegments API” plugin (Dashboard → Plugins) and restart Jellyfin.".to_string(),
+        ["Providers", "Subtitles", ..] | ["Items", _, "RemoteSearch", "Subtitles", ..] => "The subtitle site doesn't have this subtitle (any more). Pick another one.".to_string(),
+        _ => format!("Jellyfin couldn't find what Media Hub asked for ({}).", parts.iter().map(|x| if is_id(x) { "…" } else { x }).collect::<Vec<_>>().join("/")),
+    }
+}
+
+pub const TITLE_GONE: &str = "This title is no longer in Jellyfin (removed, or renamed and found again under a new id). Scan the library to update Media Hub's list.";
+
 pub fn valid_item_id(id: &str) -> bool {
     id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit())
 }
@@ -215,7 +234,7 @@ impl Client {
         match resp.status().as_u16() {
             200..=299 => Ok(resp),
             401 | 403 => Err(Error::Unauthorized),
-            404 => Err(Error::msg("This title is no longer in Jellyfin (removed, or renamed and found again under a new id). Scan the library to update Media Hub's list.")),
+            404 => Err(Error::msg(not_found_text(resp.url().path()))),
             s => {
                 // Jellyfin usually says why in the body; show a short, single-line version.
                 let body = resp.text().await.unwrap_or_default();
@@ -1267,6 +1286,17 @@ mod tests {
         assert_eq!(t.get(&(1, 1)).map(String::as_str), Some("Magic Xylophone"));
         assert_eq!(t.get(&(1, 4)).map(String::as_str), Some("Double"));
         assert_eq!(t.len(), 3);
+    }
+
+    #[test]
+    fn not_found_names_the_right_thing() {
+        let id = "0123456789abcdef0123456789abcdef";
+        assert_eq!(not_found_text(&format!("/Items/{id}")), TITLE_GONE);
+        assert_eq!(not_found_text(&format!("/Users/{id}/Items/{id}")), TITLE_GONE);
+        assert!(not_found_text(&format!("/MediaSegments/{id}")).contains("plugin"));
+        assert!(not_found_text("/Providers/Subtitles/Subtitles/abc").contains("subtitle"));
+        assert!(not_found_text(&format!("/Items/{id}/Images/Logo")).contains("picture"));
+        assert!(!not_found_text("/Library/VirtualFolders").contains("no longer"));
     }
 
     #[test]

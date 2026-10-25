@@ -1,9 +1,9 @@
 // The safe, automatic fixes shared by Library health, the library wall and a title's page:
 // fill in missing artwork, get missing subtitles, rename 100%-sure names. Everything they do
 // is journaled by the backend, so it can be undone in History.
-import { api, applyPlan, CheckRow, HealthRow, ImageKind, scanAround } from "./api";
+import { api, applyPlan, CheckRow, errorText, HealthRow, ImageKind, scanAround } from "./api";
 import type { JobHandle } from "./activity";
-import { prefs, subPlan, subSkipped, withShowYear, yearOptional } from "./prefs";
+import { prefs, subPlan, subSkipped, withShowYear, yearOptional, minimalNames } from "./prefs";
 
 export type FixKind = "art" | "subs" | "rename";
 
@@ -69,13 +69,19 @@ export function safeFixes(t: FixTarget): FixKind[] {
   return out;
 }
 
+/** One video's subtitle failing is skipped; a limit or login problem stops the whole run. */
+function stopOnLimit(e: unknown): null {
+  if (/limit|stopped|login|plugin|refused/i.test(errorText(e))) throw e;
+  return null;
+}
+
 /** Subtitles for one movie or every episode of a show that has none (your Subtitles settings). */
 export async function getSubtitles(t: { id: string; kind: "series" | "movie" }, subLangs: string[], job?: JobHandle): Promise<number> {
   let n = 0;
   const plan = subPlan(subLangs);
   if (t.kind === "movie") {
     for (const x of plan) {
-      const res = await api.subtitleAuto(t.id, x.lang, [x.lang], x.minScore).catch(() => null);
+      const res = await api.subtitleAuto(t.id, x.lang, [x.lang], x.minScore).catch(stopOnLimit);
       if (res?.outcome === "downloaded") n++;
     }
     return n;
@@ -87,7 +93,7 @@ export async function getSubtitles(t: { id: string; kind: "series" | "movie" }, 
     for (const e of eps) {
       if (job?.cancelled) break;
       for (const x of plan) {
-        const res = await api.subtitleAuto(e.Id, x.lang, [x.lang], x.minScore).catch(() => null);
+        const res = await api.subtitleAuto(e.Id, x.lang, [x.lang], x.minScore).catch(stopOnLimit);
         if (res?.outcome === "downloaded") n++;
       }
     }
@@ -101,7 +107,7 @@ export async function renameSure(r: CheckRow): Promise<number> {
   const plan = await api.plan({
     mode: series ? "tv" : "movie", folder: r.folder,
     template: series ? withShowYear("{show}< ({year})>/{seasondir}/{show}< ({year})> - {sxe}< - {title}>.{ext}") : "{title}< ({year})>/{title}< ({year})>.{ext}",
-    show: null, year: null, yearOptional: yearOptional(), findReplace: [], recursive: series, source: series ? "jellyfin" : "none",
+    show: null, year: null, yearOptional: yearOptional(), minimal: minimalNames(), findReplace: [], recursive: series, source: series ? "jellyfin" : "none",
     matchId: series ? `jellyfin:${r.id}` : null, renameFolder: series ? true : null, seasonFolders: false,
     onlyFile: series ? null : r.file, itemId: series ? null : r.id,
   });
@@ -114,28 +120,34 @@ export interface FixResult {
   art: number;
   subs: number;
   renamed: number;
+  /** What went wrong (first few), shown instead of a silent "nothing fixed". */
+  errors: string[];
 }
 
 export function fixSummary(r: FixResult): string {
   const parts = [r.art ? `${r.art} picture${r.art === 1 ? "" : "s"}` : "", r.subs ? `${r.subs} subtitle${r.subs === 1 ? "" : "s"}` : "", r.renamed ? `${r.renamed} file${r.renamed === 1 ? "" : "s"} renamed` : ""].filter(Boolean);
-  return parts.length ? parts.join(", ") : "Nothing could be fixed automatically";
+  const err = r.errors[0] ? ` · Problem: ${r.errors[0]}` : "";
+  return (parts.length ? parts.join(", ") : "Nothing could be fixed automatically") + err;
 }
 
 /** Runs the chosen safe fixes over a list of titles, with progress on `job`. */
 export async function fixTitles(list: FixTarget[], what: FixKind[], subLangs: string[], job: JobHandle): Promise<FixResult> {
-  const r: FixResult = { art: 0, subs: 0, renamed: 0 };
+  const r: FixResult = { art: 0, subs: 0, renamed: 0, errors: [] };
+  const fail = (e: unknown) => { const t = errorText(e); if (!r.errors.includes(t)) r.errors.push(t); };
   const renamedFolders: string[] = [];
   for (const [i, t] of list.entries()) {
     if (job.cancelled) break;
     job.update(t.name, i / list.length);
     if (what.includes("art") && t.identified && t.missingArt.length) {
-      r.art += (await api.fillMissingArt(t.id, t.missingArt).catch(() => [])).length;
+      r.art += (await api.fillMissingArt(t.id, t.missingArt).catch((e) => { fail(e); return [] as string[]; })).length;
+      // The same save problem on three titles in a row won't fix itself: stop and say so.
+      if (r.art === 0 && r.errors.length && i >= 2 && /couldn't save the picture/.test(r.errors[0])) break;
     }
     if (what.includes("subs") && t.noSubs > 0) {
       r.subs += await getSubtitles(t, subLangs, job);
     }
     if (what.includes("rename") && t.check?.sure) {
-      const n = await renameSure(t.check).catch(() => 0);
+      const n = await renameSure(t.check).catch((e) => { fail(e); return 0; });
       if (n) renamedFolders.push(t.check.folder);
       r.renamed += n;
     }

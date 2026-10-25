@@ -47,6 +47,15 @@ export function reloadAll(): void {
   notify();
 }
 
+/** Things kept in memory to show pages instantly; "Reload data" empties them. */
+const caches = new Set<() => void>();
+export function onDataReload(clear: () => void): void {
+  caches.add(clear);
+}
+export function clearDataCaches(): void {
+  caches.forEach((f) => { try { f(); } catch { /* ignore */ } });
+}
+
 export interface JobHandle {
   update: (detail: string, progress?: number | null) => void;
   readonly cancelled: boolean;

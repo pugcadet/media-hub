@@ -392,8 +392,14 @@ function PicksSettings({ status }: { status: Status }) {
   return (
     <Section id="picks" title="Picks of the day" icon="heart" hint="Twelve suggestions a day, also in Jellyfin so other apps see them.">
       <p className="muted small">
-        Every day Media Hub keeps a playlist and a collection called “Picks of the day” in Jellyfin (shows as their next episode). In Infuse they're in the Jellyfin share under <b>Playlists</b> and <b>Collections</b>. To get them on Infuse's home screen: Infuse → Settings → Shares → your Jellyfin server → <b>Add Favorite</b> → Playlists. Or switch the option below on: Infuse's home screen also shows <b>Favourites</b>.
+        Every day Media Hub keeps a collection (and a playlist) called “Picks of the day” in Jellyfin. To see it as a <b>row</b> on Infuse's home screen, like Up Next, instead of a folder you have to open:
       </p>
+      <ol className="muted small steps-ol">
+        <li>In Infuse, open your Jellyfin share → <b>Collections</b>.</li>
+        <li>Long-press (or right-click) <b>Picks of the day</b> → <b>Pin to Home Screen</b>.</li>
+        <li>On Infuse's home screen tap <b>Edit</b> (top right) and choose to show it as a <b>list</b> (a row of posters), not as a favourite icon. If the row doesn't appear, check that “Show favourites” is on in Infuse → Settings → Home.</li>
+      </ol>
+      <p className="muted small">Media Hub swaps what's in the collection every night, so the pinned row changes by itself. Infuse decides how rows look; Media Hub can only fill them.</p>
       <Switch checked={p.picksAsFavorites} disabled={status.readOnly} onChange={(v) => { setPrefs({ picksAsFavorites: v }); void syncPicks(); }}>
         Also mark today's picks as favourites (yesterday's are unmarked again; your own favourites are never touched)
       </Switch>

@@ -1,8 +1,8 @@
 // Shared pieces: right-click menus, picture viewer, choice dialog, cards and rows,
 // and the activity bar at the top of the window.
 import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { Alert, api, Card, errorText, imageUrl } from "./api";
-import { dismiss, followEvent, isStopped, reloadAll, track, useEpoch, useJobs } from "./activity";
+import { Alert, api, bumpArt, Card, errorText, imageUrl } from "./api";
+import { clearDataCaches, dismiss, followEvent, isStopped, track, useEpoch, useJobs } from "./activity";
 import { nav } from "./nav";
 import { setPrefs as setPrefsLite, usePrefs as usePrefsLite } from "./prefs";
 
@@ -391,6 +391,31 @@ export function SettingsLink({ section, children }: { section: string; children:
 }
 
 /** Scans the Jellyfin library into Media Hub's list, with progress. */
+/**
+ * "Reload data" (top right, or R): asks Jellyfin again for everything the pages show — the
+ * library list, which videos have subtitles and art, watch progress, pictures — instead of
+ * what Media Hub remembered.
+ */
+let reloading = false;
+export function reloadData(): Promise<void> {
+  if (reloading) return Promise.resolve();
+  reloading = true;
+  return track("Reloading data from Jellyfin", async (job) => {
+    job.update("Library list", 0.1);
+    const un = await followEvent(job, "sync-progress");
+    try { await api.sync(); } finally { un(); }
+    job.update("Subtitles, art and names", 0.6);
+    const un2 = await followEvent(job, "health-progress");
+    try { await api.libraryHealth(true); } finally { un2(); }
+    await api.imagesRevalidate().catch(() => undefined);
+    bumpArt();
+    clearDataCaches();
+    job.update("Up to date", 1);
+  }, { stop: "sync" }).catch((e) => {
+    if (!isStopped(e)) throw e;
+  }).finally(() => { reloading = false; });
+}
+
 export function scanLibrary(): Promise<void> {
   return track("Scanning the library", async (job) => {
     const un = await followEvent(job, "sync-progress");
@@ -566,12 +591,11 @@ export function ActivityBar() {
       <Alerts />
       <button
         className={`icon-btn ${spin ? "spinning" : ""}`}
-        title="Reload everything (R)"
-        aria-label="Reload"
+        title="Reload data from Jellyfin: subtitles, art, watch progress, new titles (R)"
+        aria-label="Reload data"
         onClick={() => {
           setSpin(true);
-          reloadAll();
-          window.setTimeout(() => setSpin(false), 700);
+          void reloadData().finally(() => setSpin(false));
         }}
       >
         <Icon name="reload" />

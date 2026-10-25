@@ -360,6 +360,22 @@ fn dup_item(v: &Value) -> DupItem {
     }
 }
 
+/// The show name a file names itself by ("Planet Earth III - S01E08 - Heroes.mp4" → "planetearthiii").
+pub fn show_in_file(path: &str) -> Option<String> {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let re = regex::Regex::new(r"(?i)^(.*?)[\s._-]*(?:s\d{1,2}\s*e\d{1,3}|\d{1,2}x\d{2})").ok()?;
+    let show = re.captures(name)?.get(1)?.as_str();
+    let show = regex::Regex::new(r"[\(\[]?(19|20)\d{2}[\)\]]?").ok()?.replace_all(show, "");
+    let n = norm(&show);
+    (!n.is_empty()).then_some(n)
+}
+
+/// True when the files in a group are named after different shows.
+fn different_shows(ids: &[String], files: &HashMap<String, String>) -> bool {
+    let shows: HashSet<String> = ids.iter().filter_map(|i| files.get(i)).filter_map(|p| show_in_file(p)).collect();
+    shows.len() > 1
+}
+
 /// True when the episodes in a group have clearly different titles.
 fn episodes_differ(ids: &[String], names: &HashMap<String, String>) -> bool {
     let titles: Vec<&String> = ids.iter().filter_map(|i| names.get(i)).filter(|t| !t.trim().is_empty()).collect();
@@ -393,6 +409,7 @@ pub async fn find_duplicates(state: State<'_, AppState>) -> Result<Vec<DupGroup>
         .await?;
     let mut groups: BTreeMap<String, (String, &'static str, Vec<String>)> = BTreeMap::new();
     let mut names: HashMap<String, String> = HashMap::new();
+    let mut files: HashMap<String, String> = HashMap::new();
     for v in light.iter().filter(|v| !s(v, "Path").is_empty()) {
         let id = clean_id(s(v, "Id"));
         if s(v, "Type") == "Movie" {
@@ -413,6 +430,7 @@ pub async fn find_duplicates(state: State<'_, AppState>) -> Result<Vec<DupGroup>
             let key = format!("e|{}|{sn}|{en}", clean_id(s(v, "SeriesId")));
             let title = format!("{} · S{sn:02}E{en:02}", s(v, "SeriesName"));
             names.insert(id.clone(), s(v, "Name").to_string());
+            files.insert(id.clone(), s(v, "Path").to_string());
             groups.entry(key).or_insert((title, "episode", Vec::new())).2.push(id);
         }
     }
@@ -421,6 +439,9 @@ pub async fn find_duplicates(state: State<'_, AppState>) -> Result<Vec<DupGroup>
     let dups: Vec<(String, &'static str, Vec<String>)> = groups
         .into_values()
         .filter(|g| g.2.len() > 1)
+        // Files named after different shows ("Planet Earth III - S01E08" and "Planet Earth -
+        // S01E08") are different episodes, whatever Jellyfin grouped them under.
+        .filter(|g| g.1 != "episode" || !different_shows(&g.2, &files))
         .map(|(title, kind, ids)| {
             if kind == "episode" && episodes_differ(&ids, &names) {
                 (title, "mixed", ids)
@@ -930,6 +951,17 @@ pub async fn segment_summary(state: State<'_, AppState>, series_id: String, fres
 mod tests {
     use super::*;
 
+    #[test]
+    fn different_shows_are_not_duplicates() {
+        assert_eq!(show_in_file("/tv/Planet Earth/Season 01/Planet Earth III - S01E08 - Heroes.mp4").as_deref(), Some("planetearthiii"));
+        assert_eq!(show_in_file("/tv/Planet Earth/Season 01/Planet Earth - S01E08 - Jungles.mp4").as_deref(), Some("planetearth"));
+        assert_eq!(show_in_file("Bluey (2018) - S01E02.mkv").as_deref(), Some("bluey"));
+        let files: HashMap<String, String> = [("a", "/x/Planet Earth III - S01E08 - Heroes.mp4"), ("b", "/x/Planet Earth - S01E08 - Jungles.mp4"), ("c", "/x/Planet Earth - S01E08 - Jungles.1080p.mkv")]
+            .into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        assert!(different_shows(&["a".into(), "b".into()], &files));
+        assert!(!different_shows(&["b".into(), "c".into()], &files));
+    }
+
     fn ep(s: u32, e: u32, d: Option<&str>) -> EpInfo {
         EpInfo { season: s, episode: e, title: format!("E{e}"), air_date: d.map(String::from) }
     }
@@ -1041,4 +1073,35 @@ pub async fn set_library_language(state: State<'_, AppState>, id: String, langua
 pub async fn undo_library_options(w: &crate::jellyfin::Writer, id: &str, old_json: &str) -> Result<()> {
     let old: Value = serde_json::from_str(old_json).map_err(|_| Error::msg("bad journal entry"))?;
     w.set_library_options(id, &old).await
+}
+
+/// A title Jellyfin no longer knows by its old id (usually its folder was renamed): finds it
+/// again by name, year and kind. Returns the new id.
+#[tauri::command]
+pub async fn find_moved(state: State<'_, AppState>, id: String) -> Result<Option<String>> {
+    if !valid_item_id(&id) {
+        return Err(Error::msg("bad id"));
+    }
+    let Some(row) = state.store()?.get_many(&[id.clone()])?.into_iter().next() else { return Ok(None) };
+    let c = state.reader().await?;
+    let kind = if row.kind == "series" { "Series" } else { "Movie" };
+    let found = c
+        .items_query(
+            vec![
+                ("IncludeItemTypes", kind.into()),
+                ("Recursive", "true".into()),
+                ("SearchTerm", row.name.chars().take(80).collect()),
+                ("Fields", "ProductionYear".into()),
+                ("EnableImages", "false".into()),
+            ],
+            50,
+        )
+        .await?;
+    let norm = |s: &str| s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+    let best = found.iter().find(|v| {
+        let name = v.get("Name").and_then(Value::as_str).unwrap_or("");
+        let year = v.get("ProductionYear").and_then(Value::as_i64).map(|y| y as i32);
+        norm(name) == norm(&row.name) && (row.year.is_none() || year.is_none() || year == row.year)
+    });
+    Ok(best.and_then(|v| v.get("Id").and_then(Value::as_str)).map(|s| s.replace('-', "")).filter(|n| *n != id))
 }

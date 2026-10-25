@@ -136,12 +136,13 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           }).catch(() => undefined);
         }
         const v = video.current!;
-        // First start: offer to continue where you stopped (Infuse-style).
+        // First start: continue where you stopped, without asking ("Start over" is offered).
         let startAt = session.start;
-        const offerResume = session.n === 0 && pi.resume > 30 && pi.resume < pi.duration * 0.95;
-        if (offerResume) {
+        const offerResume = false;
+        if (session.n === 0 && pi.resume > 30 && pi.resume < pi.duration * 0.95) {
+          startAt = pi.resume;
           setAskResume(pi.resume);
-          startAt = 0;
+          window.setTimeout(() => setAskResume(null), 9000);
         }
         if (Hls.isSupported()) {
           // A big buffer ahead (minutes, not seconds) so a slow moment on the NAS or the
@@ -302,14 +303,14 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
 
   // Pause screen after a moment.
   useEffect(() => {
-    if (playing || askResume !== null || !info) {
+    if (playing || !info) {
       setPausedLong(false);
       return;
     }
     // Show the picture right away (a short delay so a quick tap doesn't flash it).
     const t = window.setTimeout(() => setPausedLong(true), 250);
     return () => window.clearTimeout(t);
-  }, [playing, askResume, info]);
+  }, [playing, info]);
 
   const marks: Mark[] = useMemo(() => (info?.segments ?? [])
     .filter((s) => s.Type === "Intro" || s.Type === "Outro" || (s.Type === "Recap" && !p.recapsOff))
@@ -702,9 +703,9 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       {error && <div className="p-error">{error}</div>}
       {toast && <div className="p-toast">{toast}</div>}
       {askResume !== null && (
-        <div className="p-resume" onClick={(e) => e.stopPropagation()}>
-          <button className="primary" autoFocus onClick={() => { const r = askResume; setAskResume(null); seek(r); void video.current?.play(); }}>Resume from {fmt(askResume)}</button>
-          <button onClick={() => { setAskResume(null); seek(0); void video.current?.play(); }}>Start from the beginning</button>
+        <div className="p-resumed" onClick={(e) => e.stopPropagation()}>
+          <span>Continuing from {fmt(askResume)}</span>
+          <button onClick={() => { setAskResume(null); seek(0); void video.current?.play(); }}>Start over</button>
         </div>
       )}
       {upNext && !upNextDismissed ? (

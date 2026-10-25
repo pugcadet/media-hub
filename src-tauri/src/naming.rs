@@ -87,6 +87,28 @@ pub fn clean_release(s: &str) -> String {
         .to_string()
 }
 
+/// True when a name needs tidying for its own sake: release tags (quality, codec, source,
+/// group like "[YTS.MX]") or dots/underscores instead of spaces. Names that are only in a
+/// different style ("Show - 1x02", no year, no episode title) are not messy: Jellyfin reads them.
+pub fn is_messy(stem: &str) -> bool {
+    let s = stem.trim();
+    for m in re_brackets().find_iter(s) {
+        let inner = m.as_str().to_lowercase();
+        // Jellyfin's own id tags ([tmdbid-123], [imdbid-tt…]) are wanted.
+        if !(inner.contains("id-") || inner.contains("tmdb") || inner.contains("tvdb") || inner.contains("imdb")) {
+            return true;
+        }
+    }
+    if !s.contains(' ') && (s.matches('.').count() >= 2 || s.contains('_')) {
+        return true;
+    }
+    let spaced = if s.contains(' ') { s.to_string() } else { s.replace(['.', '_'], " ") };
+    spaced.split(|c: char| c.is_whitespace() || c == '.').any(|w| {
+        let key = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '-').to_lowercase();
+        JUNK.contains(&key.as_str()) || re_res().is_match(&key)
+    })
+}
+
 /// Safe single path component: no characters Windows, macOS or SMB shares dislike.
 pub fn sanitize(s: &str) -> String {
     let s = s.replace(": ", " - ");
@@ -378,6 +400,19 @@ fn render_nodes(nodes: &[Node], vars: &HashMap<&str, Var>, out: &mut String, mis
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messy_names() {
+        assert!(is_messy("Ad.Astra.2019.2160p.4K.BluRay.x265.10bit.AAC5.1-[YTS.MX]"));
+        assert!(is_messy("Dune Part Two 2024 1080p WEB-DL"));
+        assert!(is_messy("the_bear_s01e01"));
+        assert!(!is_messy("Planet Earth - S01E08 - Jungles"));
+        assert!(!is_messy("Bluey - S01E02"));
+        assert!(!is_messy("Mr. Robot - S01E01 - eps1.0_hellofriend.mov"[..23].trim()));
+        assert!(!is_messy("Ad Astra (2019)"));
+        assert!(!is_messy("Ad Astra (2019) [tmdbid-419704]"));
+        assert!(!is_messy("Bluey"));
+    }
 
     fn ep(stem: &str, hint: Option<u32>) -> Option<(u32, Vec<u32>)> {
         parse_episode(stem, hint).map(|m| (m.season, m.episodes))

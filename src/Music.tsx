@@ -1,6 +1,7 @@
 // Music: albums, artists and songs from Jellyfin, with a player bar. Lives under the hub
 // switcher next to the media manager and the video player.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePageState } from "./saved";
 import { api, errorText, imageUrl, MusicItem, Status } from "./api";
 import { HubSwitcher } from "./Sidebar";
 import { fmt } from "./Intros";
@@ -315,7 +316,7 @@ function TrackList({ tracks, current, onPlay, showAlbum, player }: { tracks: Mus
 export default function Music({ status }: { status: Status }) {
   void status;
   const player = useMusicPlayer();
-  const [tab, setTab] = useState<Tab>("recent");
+  const [tab, setTab] = usePageState<Tab>("music.tab", "recent");
   const [items, setItems] = useState<MusicItem[] | null>(null);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<Open | null>(null);

@@ -115,7 +115,7 @@ export default function Wall({ items, status, problem, onProblem, query, kind }:
     const on = sel.has(e.id);
     const click = () => (selecting ? sel.toggle(e.id) : nav.open(e.id));
     return (
-      <div key={e.id} className={`wall-tile ${on ? "picked" : ""}`} onContextMenu={(ev) => openMenu(ev, [
+      <div key={e.id} className={`wall-tile ${on ? "picked" : ""} ${flags.some((f) => f.key === "art") ? "missing-art" : ""}`} onContextMenu={(ev) => openMenu(ev, [
         { label: on ? "Unselect" : "Select", run: () => sel.toggle(e.id) },
         { sep: true },
         ...itemMenu({ id: e.id, kind: e.kind, title: e.name, played: e.played }, canEdit),

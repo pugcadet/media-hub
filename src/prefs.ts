@@ -92,6 +92,16 @@ export interface Prefs {
   picksFolders: string[];
   /** Folder tabs you added per screen ("intros" → ["Kids", "Anime"]). */
   folderTabs: Record<string, string[]>;
+  /**
+   * What the library check renames. "messy": only names with release tags or dots (what
+   * Jellyfin might misread); "style": everything that differs from the naming style.
+   */
+  tidy: "messy" | "style";
+  /** What auto-detect looks for. */
+  detectIntro: boolean;
+  detectCredits: boolean;
+  /** Screens' own settings (filters, sorts, tabs), so they open the way you left them. */
+  pageState: Record<string, unknown>;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -125,6 +135,10 @@ export const DEFAULT_PREFS: Prefs = {
   accent: "#6d66f0",
   picksFolders: [],
   folderTabs: {},
+  tidy: "messy",
+  detectIntro: true,
+  detectCredits: true,
+  pageState: {},
 };
 
 /** Ready-made highlight colours for Settings → Look. */
@@ -183,6 +197,7 @@ function load(): Prefs {
       keepSubLangs: p.keepSubLangs ?? ["eng", "dut"],
       picksFolders: p.picksFolders ?? [],
       folderTabs: p.folderTabs ?? {},
+      pageState: p.pageState ?? {},
     };
   } catch {
     return DEFAULT_PREFS;
@@ -230,6 +245,11 @@ export function withShowYear(template: string, mode: Prefs["showYear"] = current
 }
 
 /** Shows: leave names that only differ by a year alone (all modes but "everywhere"). */
+/** Only messy names get renamed by the library check (see `Prefs.tidy`). */
+export function minimalNames(): boolean {
+  return current.tidy !== "style";
+}
+
 export function yearOptional(): boolean {
   return current.showYear !== "everywhere";
 }

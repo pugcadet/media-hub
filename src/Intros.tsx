@@ -5,7 +5,7 @@ import Hls from "hls.js";
 import { api, errorText, SegEpisode, SegOverview, Span } from "./api";
 import { track, type JobHandle } from "./activity";
 import { askConfirm } from "./confirm";
-import { usePrefs } from "./prefs";
+import { prefs, setPrefs, usePrefs } from "./prefs";
 
 const autoTried = new Set<string>();
 
@@ -23,7 +23,8 @@ export async function autoDetectSeason(seasonId: string, seasonLabel: string): P
     const un = await listen<{ done: number; total: number; label: string }>("detect-progress", (e) => job.update(e.payload.label, e.payload.total ? e.payload.done / e.payload.total : null));
     let saved = 0;
     try {
-      const res = await api.detectSeason(seasonId, 6 * 60, 5 * 60);
+      const { detectIntro, detectCredits } = prefs();
+      const res = await api.detectSeason(seasonId, 6 * 60, 5 * 60, detectIntro, detectCredits);
       for (const r of res) {
         if (r.problem || (!r.intro && !r.credits)) continue;
         await api.saveSegments(r.id, r.intro, r.credits, null, []).then(() => saved++).catch(() => undefined);
@@ -149,7 +150,8 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
   const [shiftBy, setShiftBy] = useState(2);
   const [drawing, setDrawing] = useState<Part>("intro");
   const [preview, setPreview] = useState<string | null>(null);
-  const { recapsOff } = usePrefs();
+  const p = usePrefs();
+  const { recapsOff } = p;
   const parts: Part[] = recapsOff ? ["intro", "credits"] : ["intro", "recap", "credits"];
 
   async function load() {
@@ -185,7 +187,17 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
     setNote(null);
     setProgress("Starting…");
     try {
-      const res = await api.detectSeason(seasonId, 6 * 60, 5 * 60);
+      const { detectIntro, detectCredits } = prefs();
+      const what = detectIntro && detectCredits ? "intros and credits" : detectIntro ? "intros" : "credits";
+      // Shown in the top bar too, with a progress bar and Stop.
+      const res = await track(`Finding ${what}`, async (job) => {
+        const un = await listen<{ done: number; total: number; label: string }>("detect-progress", (e) => job.update(e.payload.label, e.payload.total ? e.payload.done / e.payload.total : null));
+        try {
+          return await api.detectSeason(seasonId, 6 * 60, 5 * 60, detectIntro, detectCredits);
+        } finally {
+          un();
+        }
+      }, { reload: false, stop: "detect" });
       setDrafts((old) => {
         const next = { ...old };
         for (const r of res) {
@@ -382,7 +394,11 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
             <span className="muted small">s</span>
             <button onClick={() => shift(1)} aria-label="Later">+</button>
           </div>
-          <button className="outline" disabled={!!progress || !ov.ffmpeg} onClick={() => void detect()}>{progress ? "Listening…" : "Auto-detect this season"}</button>
+          <div className="detect-what">
+            <label className="check small"><input type="checkbox" checked={p.detectIntro} onChange={(e) => setPrefs({ detectIntro: e.target.checked })} />Intros</label>
+            <label className="check small"><input type="checkbox" checked={p.detectCredits} onChange={(e) => setPrefs({ detectCredits: e.target.checked })} />Credits</label>
+          </div>
+          <button className="outline" disabled={!!progress || !ov.ffmpeg || (!p.detectIntro && !p.detectCredits)} onClick={() => void detect()}>{progress ? "Listening…" : "Auto-detect this season"}</button>
           {!ov.ffmpeg && <p className="muted small">Auto-detect needs ffmpeg. <SettingsLink section="tools">How to install</SettingsLink></p>}
           <button className="primary" disabled={!changes.length || saving || !canEdit || !ov.canWriteSegments} onClick={() => void saveAll()}>
             {saving ? "Saving…" : `Save ${changes.length || ""} change${changes.length === 1 ? "" : "s"} to Jellyfin`}
