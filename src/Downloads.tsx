@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { api, DlRequest, errorText, Probe, remoteImageUrl } from "./api";
 import { addJob, clearFinished, useJobs } from "./downloadsStore";
 import { fmt } from "./Intros";
-import Nav from "./Nav";
 import type { View } from "./App";
 
 type Tool = { path: string | null; version: string | null; managed: boolean; folder: string | null };
@@ -29,7 +28,7 @@ function loadPrefs(): Omit<DlRequest, "url"> {
   }
 }
 
-export default function Downloads({ onNav }: { onNav: (v: View) => void }) {
+export default function Downloads(_props: { onNav: (v: View) => void }) {
   const [tool, setTool] = useState<Tool | null>(null);
   const [url, setUrl] = useState("");
   const [probe, setProbe] = useState<Probe | null>(null);
@@ -89,7 +88,6 @@ export default function Downloads({ onNav }: { onNav: (v: View) => void }) {
     <div className="app">
       <header>
         <div className="brand"><span className="logo" />Media Hub</div>
-        <Nav current="downloads" onNav={onNav} />
       </header>
       <main className="settings">
         {message && <p className={message.error ? "error" : "note"}>{message.text}</p>}

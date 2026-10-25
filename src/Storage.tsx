@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, Change, errorText, FileRow, Status } from "./api";
 import { askConfirm } from "./confirm";
 import { fmt } from "./Intros";
-import Nav from "./Nav";
 import { cancel, clearDone, enqueue, useQueue } from "./storageStore";
 import type { View } from "./App";
 
@@ -22,7 +21,7 @@ function estimate(r: FileRow): number {
   return r.info.size * factor;
 }
 
-export default function Storage({ status, onNav }: { status: Status; onNav: (v: View) => void }) {
+export default function Storage({ status }: { status: Status; onNav: (v: View) => void }) {
   const [base, setBase] = useState("");
   const [folders, setFolders] = useState<{ name: string }[]>([]);
   const [rows, setRows] = useState<FileRow[] | null>(null);
@@ -136,7 +135,6 @@ export default function Storage({ status, onNav }: { status: Status; onNav: (v: 
     <div className="app">
       <header>
         <div className="brand"><span className="logo" />Media Hub</div>
-        <Nav current="storage" onNav={onNav} />
       </header>
       {!status.libraryRoot ? (
         <main><p className="muted">Choose your library folder first (Renamer or Settings).</p></main>
