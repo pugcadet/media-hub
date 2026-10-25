@@ -1,26 +1,28 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, CheckRow, Details, errorText, HealthRow, imageUrl, Status } from "./api";
 import { followEvent, track, useEpoch } from "./activity";
 import { nav } from "./nav";
-import { prefs } from "./prefs";
-import { fixTitles, FixKind, targetOf } from "./fixers";
+import { artSkipped, fixTitles, FixKind, noSubsOf, targetOf } from "./fixers";
+import { askFixes } from "./FixDialog";
 import { Studio, StudioItem } from "./Studio";
 import ItemPage from "./ItemPage";
-import { Icon, itemMenu, openMenu, SettingsLink } from "./ui";
-import { askConfirm } from "./confirm";
+import { CheckMenu, Icon, itemMenu, openMenu, SettingsLink, useUndoableSet } from "./ui";
 
 type Check = "name" | "identified" | "poster" | "backdrop" | "logo" | "thumb" | "banner" | "subs";
 
 const LABEL: Record<Check, string> = {
   name: "Names", identified: "Identified", poster: "Poster", backdrop: "Backdrop", logo: "Logo", thumb: "Thumb", banner: "Banner", subs: "Subtitles",
 };
-const ART: Check[] = ["poster", "backdrop", "logo", "thumb", "banner"];
+// Banner, clear art and disc pictures are optional: Infuse doesn't show them, so they don't count.
+const ART: Check[] = ["poster", "backdrop", "logo", "thumb"];
+const KIND_OF: Record<string, string> = { poster: "Primary", backdrop: "Backdrop", logo: "Logo", thumb: "Thumb", banner: "Banner" };
 
 interface Row extends HealthRow {
   check: CheckRow | null;
 }
 
 function status(r: Row, c: Check): boolean | null {
+  if (KIND_OF[c] && artSkipped(r.id).includes(KIND_OF[c])) return true; // you said: can't be found, fine
   switch (c) {
     case "name": return r.check ? !r.check.error && r.check.toRename + r.check.folders + r.check.problems === 0 : null;
     case "identified": return r.identified;
@@ -29,7 +31,7 @@ function status(r: Row, c: Check): boolean | null {
     case "logo": return r.logo;
     case "thumb": return r.thumb;
     case "banner": return r.banner;
-    case "subs": return r.noSubs === 0;
+    case "subs": return noSubsOf(r) === 0;
   }
 }
 
@@ -43,7 +45,8 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<"todo" | "all" | "ok">(focus === "art" ? "all" : "todo");
-  const [folder, setFolder] = useState<string>("");
+  const folderSel = useUndoableSet<string>();
+  const seenFolders = useRef<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<"" | "series" | "movie">("");
   const checks: Check[] = focus === "art" ? ["identified", ...ART] : ["name", "identified", "poster", "backdrop", "logo", "subs"];
@@ -84,9 +87,16 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
     const s = checks.map((c) => status(r, c)).filter((x) => x !== null) as boolean[];
     return s.length ? s.filter(Boolean).length / s.length : 1;
   };
-  const folders = useMemo(() => [...new Set((rows ?? []).map((r) => r.libraryFolder).filter(Boolean))].sort(), [rows]);
+  const folders = useMemo(() => [...new Set((rows ?? []).map((r) => r.libraryFolder || "Other"))].sort(), [rows]);
+  // New folders start ticked; what you unticked stays unticked.
+  useEffect(() => {
+    const fresh = folders.filter((f) => !seenFolders.current.has(f));
+    if (!fresh.length) return;
+    fresh.forEach((f) => seenFolders.current.add(f));
+    folderSel.reset([...folderSel.set, ...fresh]);
+  }, [folders.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
   const shown = (rows ?? [])
-    .filter((r) => (!folder || r.libraryFolder === folder) && (!kind || r.kind === kind) && (!query || r.name.toLowerCase().includes(query.toLowerCase())))
+    .filter((r) => folderSel.has(r.libraryFolder || "Other") && (!kind || r.kind === kind) && (!query || r.name.toLowerCase().includes(query.toLowerCase())))
     .filter((r) => (filter === "all" ? true : filter === "ok" ? score(r) === 1 : score(r) < 1))
     .sort((a, b) => (filter === "todo" ? score(a) - score(b) : 0) || a.name.localeCompare(b.name));
   const total = rows?.length ?? 0;
@@ -109,14 +119,10 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
   async function fixAll() {
     const list = shown.filter((r) => score(r) < 1);
     if (!list.length) return;
-    const parts = [
-      "fill in missing artwork (identified titles only)",
-      focus === "all" ? `get missing subtitles that score ${prefs().minSubScore}` : "",
-      focus === "all" ? "rename titles that are a 100% match" : "",
-    ].filter(Boolean);
-    if (!(await askConfirm(`For ${list.length} titles: ${parts.join(", ")}? Titles that need a decision (not identified, unsure names) are left for you. Everything can be undone.`, { okLabel: "Fix what's safe" }))) return;
     const what: FixKind[] = focus === "art" ? ["art"] : ["art", "subs", "rename"];
-    await track(`Fixing ${list.length} titles`, (job) => fixTitles(list.map((r) => targetOf(r, r.check, focus === "art")), what, st.subLangs, job).then(() => undefined), { cancellable: true, reload: false }).catch(() => undefined);
+    const plan = await askFixes("Fix what's safe", list.map((r) => targetOf(r, r.check, focus === "art")), what);
+    if (!plan) return;
+    await track(`Fixing ${plan.list.length} titles`, (job) => fixTitles(plan.list, plan.what, st.subLangs, job).then(() => undefined), { cancellable: true, reload: false }).catch(() => undefined);
     void load(true);
   }
 
@@ -130,7 +136,7 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
     const has = (k: string) => d.images.some((i) => i.ImageType === k);
     const ids = d.item.ProviderIds ?? {};
     setRows((rs) => rs?.map((x) => (x.id === d.item.Id.replace(/-/g, "") || x.id === d.item.Id
-      ? { ...x, identified: !!(ids.Tmdb || ids.Tvdb || ids.Imdb), poster: has("Primary"), backdrop: has("Backdrop"), logo: has("Logo"), thumb: has("Thumb"), banner: has("Banner") }
+      ? { ...x, identified: !!(ids.Tmdb || ids.Tvdb), poster: has("Primary"), backdrop: has("Backdrop"), logo: has("Logo"), thumb: has("Thumb"), banner: has("Banner") }
       : x)) ?? null);
   };
   if (focus === "art") {
@@ -168,12 +174,7 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
                 <select value={kind} onChange={(e) => setKind(e.target.value as "" | "series" | "movie")} className="chip-select">
                   <option value="">Shows and movies</option><option value="series">Shows</option><option value="movie">Movies</option>
                 </select>
-                {folders.length > 1 && (
-                  <select value={folder} onChange={(e) => setFolder(e.target.value)} className="chip-select">
-                    <option value="">Every folder</option>
-                    {folders.map((f) => <option key={f} value={f}>{f}</option>)}
-                  </select>
-                )}
+                {folders.length > 1 && <CheckMenu label="Folders" options={folders.map((f) => ({ id: f, label: f, count: (rows ?? []).filter((r) => (r.libraryFolder || "Other") === f).length }))} sel={folderSel} allLabel="All folders" />}
               </div>
             </>
           }
@@ -224,12 +225,7 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
           <select value={kind} onChange={(e) => setKind(e.target.value as "" | "series" | "movie")} className="chip-select">
             <option value="">Shows and movies</option><option value="series">Shows</option><option value="movie">Movies</option>
           </select>
-          {folders.length > 1 && (
-            <select value={folder} onChange={(e) => setFolder(e.target.value)} className="chip-select">
-              <option value="">Every folder</option>
-              {folders.map((f) => <option key={f} value={f}>{f}</option>)}
-            </select>
-          )}
+          {folders.length > 1 && <CheckMenu label="Folders" options={folders.map((f) => ({ id: f, label: f, count: (rows ?? []).filter((r) => (r.libraryFolder || "Other") === f).length }))} sel={folderSel} allLabel="All folders" />}
         </div>
         <label className="searchbox"><Icon name="search" /><input placeholder="Filter" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
       </div>

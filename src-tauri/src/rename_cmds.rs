@@ -155,6 +155,55 @@ async fn episode_titles_for(state: &AppState, c: &Candidate) -> Result<HashMap<(
     }
 }
 
+/// Episode titles from the other databases than the chosen one (TMDB, TVmaze), to see whether
+/// a title already in a file name is right after all. Kept for an hour per show.
+async fn alt_titles_for(state: &AppState, c: &Candidate) -> Vec<HashMap<(u32, u32), String>> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    type Cache = Mutex<HashMap<String, (Instant, Vec<HashMap<(u32, u32), String>>)>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let key = format!("{}:{}", c.source, c.id);
+    if let Some((t, v)) = CACHE.get_or_init(Default::default).lock().ok().and_then(|m| m.get(&key).cloned()) {
+        if t.elapsed() < Duration::from_secs(3600) {
+            return v;
+        }
+    }
+    // The show's ids in every database.
+    let mut ids: HashMap<String, String> = c.ids.iter().map(|(k, v)| (k.to_lowercase(), v.clone())).collect();
+    if c.source == "jellyfin" {
+        if let Ok(item) = async { state.reader().await?.item_json(&c.id).await }.await {
+            if let Some(p) = item.get("ProviderIds").and_then(Value::as_object) {
+                for (k, v) in p {
+                    if let Some(v) = v.as_str() {
+                        ids.insert(k.to_lowercase(), v.to_string());
+                    }
+                }
+            }
+        }
+    } else if c.source == "tmdb" {
+        ids.insert("tmdb".into(), c.id.clone());
+    }
+    let mut out = Vec::new();
+    if c.source != "tmdb" {
+        if let (Some(t), Some(id)) = (tmdb_client(state), ids.get("tmdb")) {
+            if let Ok(m) = t.episodes(id).await {
+                out.push(m);
+            }
+        }
+    }
+    if c.source != "tvmaze" {
+        if let Ok(Some(maze)) = sources::tvmaze_lookup(ids.get("tvdb").map(String::as_str), ids.get("imdb").map(String::as_str)).await {
+            if let Ok(m) = sources::tvmaze_episodes(&maze).await {
+                out.push(m);
+            }
+        }
+    }
+    if let Ok(mut m) = CACHE.get_or_init(Default::default).lock() {
+        m.insert(key, (Instant::now(), out.clone()));
+    }
+    out
+}
+
 async fn movie_candidates(state: &AppState, name: &str, year: Option<i32>) -> Result<Vec<Candidate>> {
     if let Some(t) = tmdb_client(state) {
         return Ok(sources::rank(t.search_movie(name, year).await?, name, year));
@@ -262,6 +311,7 @@ pub(crate) async fn make_plan(state: &AppState, args: PlanArgs) -> Result<(PlanR
                 Ok(t) => titles = t,
                 Err(e) => warn.push(format!("Episode titles could not be loaded ({e}).")),
             }
+            req.alt_titles = alt_titles_for(state, c).await;
             if req.show.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
                 req.show = Some(c.name.clone());
             }
@@ -334,7 +384,9 @@ pub(crate) async fn make_plan(state: &AppState, args: PlanArgs) -> Result<(PlanR
         op.score = if mode == "tv" {
             chosen_score.map(|s| {
                 let known = !titles.is_empty() && op.season.map(|se| op.episodes.iter().all(|e| titles.contains_key(&(se, *e)))).unwrap_or(false);
-                if known { s } else { s.min(60) }
+                // The databases disagree about this one: never a "100% match".
+                let disputed = op.note.as_deref().map(|n| n.contains("under another number")).unwrap_or(false);
+                if known && !disputed { s } else { s.min(60) }
             })
         } else {
             movie_scores.get(&op.from).copied()

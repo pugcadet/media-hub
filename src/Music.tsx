@@ -148,7 +148,7 @@ function Art({ item, size, round }: { item: MusicItem; size: number; round?: boo
   const [ok, setOk] = useState(item.hasArt);
   return (
     <div className={`m-art ${round ? "round" : ""}`}>
-      {ok ? <img src={imageUrl(item.artId, "Primary", size)} alt="" loading="lazy" onError={() => setOk(false)} /> : <div className="m-noart"><Icon name="music" size={28} /></div>}
+      {ok ? <img src={item.artUrl ?? imageUrl(item.artId, "Primary", size)} alt="" loading="lazy" onError={() => setOk(false)} /> : <div className="m-noart"><Icon name="music" size={28} /></div>}
     </div>
   );
 }
@@ -174,7 +174,7 @@ function TrackList({ tracks, current, onPlay, showAlbum }: { tracks: MusicItem[]
         <button key={t.id} className={`m-track ${current?.id === t.id ? "on" : ""}`} onClick={() => onPlay(i)}>
           <span className="m-num muted">{current?.id === t.id ? <Icon name="volume" size={14} /> : t.index ?? i + 1}</span>
           <span className="m-name"><span className="ellipsis">{t.name}</span><span className="muted small ellipsis">{showAlbum ? `${t.artist} · ${t.album}` : t.artist}</span></span>
-          <span className="muted small mono">{fmt(t.duration)}</span>
+          <span className="muted small mono">{t.duration ? fmt(t.duration) : ""}</span>
         </button>
       ))}
     </div>
@@ -191,6 +191,25 @@ export default function Music({ status }: { status: Status }) {
   const [tracks, setTracks] = useState<MusicItem[]>([]);
   const [albums, setAlbums] = useState<MusicItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState<{ folder: string | null; source: "jellyfin" | "folder" } | null>(null);
+  const [srcN, setSrcN] = useState(0);
+  useEffect(() => void api.musicSource().then(setSource).catch(() => setSource(null)), [srcN]);
+  async function useFolder(pick: boolean) {
+    setError(null);
+    try {
+      if (pick || !source?.folder) {
+        const f = await api.pickMusicFolder();
+        if (!f) return;
+      } else {
+        await api.setMusicSource(true);
+      }
+      setOpen(null);
+      setSrcN((n) => n + 1);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  const useJellyfin = () => void api.setMusicSource(false).then(() => { setOpen(null); setSrcN((n) => n + 1); });
 
   useEffect(() => {
     setItems(null);
@@ -200,7 +219,7 @@ export default function Music({ status }: { status: Status }) {
       api.musicList(view, null, query || null, 0, 600).then(setItems).catch((e) => setError(errorText(e)));
     }, query ? 250 : 0);
     return () => clearTimeout(t);
-  }, [tab, query]);
+  }, [tab, query, srcN]);
 
   useEffect(() => {
     setTracks([]);
@@ -242,6 +261,11 @@ export default function Music({ status }: { status: Status }) {
           ))}
         </nav>
         <div className="spacer" />
+        <div className="seg m-source" title={source?.folder ?? ""}>
+          <button className={source?.source !== "folder" ? "on" : ""} onClick={useJellyfin}>Jellyfin</button>
+          <button className={source?.source === "folder" ? "on" : ""} onClick={() => void useFolder(false)}>Music folder</button>
+        </div>
+        {source?.source === "folder" && <button className="icon-btn" title={`Music folder: ${source.folder}. Click to choose another.`} onClick={() => void useFolder(true)}><Icon name="folder" /></button>}
         <label className="searchbox w-search"><Icon name="search" /><input placeholder="Search music" value={query} onChange={(e) => { setQuery(e.target.value); setOpen(null); }} /></label>
       </header>
 
@@ -281,7 +305,13 @@ export default function Music({ status }: { status: Status }) {
               {loose.length > 0 && <div className="pg-actions"><button className="primary" onClick={() => player.playList(loose, 0, true)}><Icon name="shuffle" /> Shuffle songs</button></div>}
             </div>
             {items === null && !error && <div className="m-loading"><span className="spinner big" /> Loading music…</div>}
-            {items && items.length === 0 && <p className="muted">Nothing here. Is there a music library in Jellyfin?</p>}
+            {items && items.length === 0 && (
+              <div className="m-empty">
+                <Icon name="music" size={36} />
+                {source?.source === "folder" ? <p>No music found in {source.folder}. Folders like Artist / Album / 01 - Song.mp3 work best.</p> : <p>No music in Jellyfin. Music doesn't need Jellyfin: play it straight from a folder on this computer or the NAS.</p>}
+                <button className="primary" onClick={() => void useFolder(true)}><Icon name="folder" /> Choose a music folder</button>
+              </div>
+            )}
             <Grid items={tiles} onOpen={openItem} round={tab === "artists" && !query} />
             {loose.length > 0 && <TrackList tracks={loose} current={cur} onPlay={(i) => player.playList(loose, i)} showAlbum />}
           </div>

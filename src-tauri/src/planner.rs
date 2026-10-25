@@ -51,6 +51,10 @@ pub struct PlanRequest {
     /// Ids of the matched show (tmdb/tvdb), used for {tmdbtag}/{tvdbtag}. Filled by the app.
     #[serde(default, skip_deserializing)]
     pub ids: HashMap<String, String>,
+    /// Episode titles from the other databases (TMDB, TVmaze …). When one of them agrees with
+    /// the title already in a file name, that title is kept. Filled by the app.
+    #[serde(default, skip_deserializing)]
+    pub alt_titles: Vec<HashMap<(u32, u32), String>>,
 }
 
 /// What the online match decided for one movie file.
@@ -327,6 +331,20 @@ fn title_similarity(a: &str, b: &str) -> f64 {
     crate::sources::similarity(a, b)
 }
 
+/// Episode titles compared loosely: "Stan of Arabia (1)", "Stan of Arabia, Part 1" and
+/// "Stan Of Arabia Pt. 1" are the same episode.
+pub fn same_episode_title(a: &str, b: &str) -> bool {
+    fn norm(t: &str) -> String {
+        let t = t.to_lowercase().replace("part one", "1").replace("part two", "2").replace("part three", "3");
+        t.split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty() && !matches!(*w, "part" | "pt" | "the" | "a" | "an" | "and"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    let (x, y) = (norm(a), norm(b));
+    !x.is_empty() && (x == y || title_similarity(&x, &y) >= 0.85)
+}
+
 pub fn plan_tv(
     files: &[String],
     req: &PlanRequest,
@@ -361,13 +379,30 @@ pub fn plan_tv(
             continue;
         };
         let looked_up: Vec<&String> = m.episodes.iter().filter_map(|e| titles.get(&(m.season, *e))).collect();
-        let title = if !looked_up.is_empty() && looked_up.len() == m.episodes.len() {
+        let current = title_after(stem, &m);
+        let mut title = if !looked_up.is_empty() && looked_up.len() == m.episodes.len() {
             let mut names: Vec<&str> = looked_up.iter().map(|s| s.as_str()).collect();
             names.dedup();
             names.join(" + ")
         } else {
-            title_after(stem, &m)
+            current.clone()
         };
+        // The databases don't always number episodes the same way. When the title already in
+        // the file matches another database for this number, or this database under another
+        // number, the file is probably right: keep its title and say why.
+        let mut kept: Option<String> = None;
+        if !current.is_empty() && title != current && !same_episode_title(&title, &current) {
+            let same_slot = |a: &HashMap<(u32, u32), String>| m.episodes.iter().all(|e| a.get(&(m.season, *e)).map(|t| same_episode_title(t, &current)).unwrap_or(false));
+            if req.alt_titles.iter().any(same_slot) {
+                kept = Some(format!("Kept “{current}”: another database has it as this episode (the episode order differs between databases)."));
+            } else if titles.iter().any(|(k, t)| !(k.0 == m.season && m.episodes.contains(&k.1)) && same_episode_title(t, &current))
+            {
+                kept = Some(format!("Kept “{current}”: the database lists it under another number, so the order differs. Check it yourself."));
+            }
+            if kept.is_some() {
+                title = current.clone();
+            }
+        }
         let first = m.episodes[0];
         let mut sxe = format!("S{:02}E{:02}", m.season, first);
         for e in &m.episodes[1..] {
@@ -435,6 +470,8 @@ pub fn plan_tv(
         o.title = (!title.is_empty()).then_some(title);
         if !verified {
             o.note = Some("The new name does not read back as the same episode. Check the pattern.".into());
+        } else if kept.is_some() {
+            o.note = kept;
         }
         videos.push((f.clone(), step.clone(), step));
         file_ops.push(o);
@@ -623,7 +660,33 @@ mod tests {
             season_folders: false,
             year_optional: false,
             ids: HashMap::new(),
+            alt_titles: Vec::new(),
         }
+    }
+
+    #[test]
+    fn titles_another_database_agrees_with_are_kept() {
+        let f = files(&["TV/American Dad!/Season 02/American Dad! - S02E05 - Stan of Arabia (1).mkv"]);
+        let mut r = req("TV/American Dad!", "{show}/{seasondir}/{show} - {sxe}< - {title}>.{ext}");
+        r.show = Some("American Dad!".into());
+        let mut primary = HashMap::new();
+        primary.insert((2, 5), "Dungeons and Wagons".to_string());
+        primary.insert((1, 23), "Stan of Arabia (1)".to_string());
+        // Only the main database: the title is found under another number → kept, with a note.
+        let ops = plan_tv(&f, &r, &primary, &nothing_exists).unwrap();
+        assert_eq!(ops[0].status, "unchanged", "{ops:#?}");
+        // Another database agrees with the file → kept too.
+        let mut tvmaze = HashMap::new();
+        tvmaze.insert((2, 5), "Stan of Arabia, Part 1".to_string());
+        r.alt_titles = vec![tvmaze];
+        let mut primary2 = HashMap::new();
+        primary2.insert((2, 5), "Dungeons and Wagons".to_string());
+        let ops = plan_tv(&f, &r, &primary2, &nothing_exists).unwrap();
+        assert!(ops[0].status == "unchanged" || ops[0].note.as_deref().unwrap_or("").starts_with("Kept"), "{ops:#?}");
+        // Nothing agrees: the database title wins.
+        r.alt_titles.clear();
+        let ops = plan_tv(&f, &r, &primary2, &nothing_exists).unwrap();
+        assert!(ops[0].to.ends_with("S02E05 - Dungeons and Wagons.mkv"), "{ops:#?}");
     }
 
     fn files(list: &[&str]) -> Vec<String> {

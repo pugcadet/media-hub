@@ -5,8 +5,8 @@ import { api, CheckRow, cleanTitle, HealthRow, imageUrl, Item, Status } from "./
 import { track, useEpoch } from "./activity";
 import { nav } from "./nav";
 import { addToCollection, Icon, itemMenu, openMenu, playTitle, TriCheck, useUndoableSet } from "./ui";
-import { CORE_ART, fixSummary, fixTitles, FixKind, FixTarget, namesToFix, targetOf } from "./fixers";
-import { askConfirm } from "./confirm";
+import { artSkipped, CORE_ART, fixSummary, fixTitles, FixKind, FixTarget, namesToFix, noSubsOf, targetOf } from "./fixers";
+import { askFixes } from "./FixDialog";
 
 export type Problem = "" | "id" | "art" | "subs" | "names";
 
@@ -34,8 +34,9 @@ function flagsOf(e: Entry): { key: Problem; label: string; bad?: boolean }[] {
   const out: { key: Problem; label: string; bad?: boolean }[] = [];
   const h = e.health;
   if (h && !h.identified) out.push({ key: "id", label: "ID", bad: true });
-  if (h && CORE_ART.some((a) => !h[a.key])) out.push({ key: "art", label: "ART", bad: !h.poster });
-  if (h && h.noSubs > 0) out.push({ key: "subs", label: "SUBS" });
+  const skip = h ? artSkipped(h.id) : [];
+  if (h && CORE_ART.some((a) => !h[a.key] && !skip.includes(a.kind))) out.push({ key: "art", label: "ART", bad: !h.poster && !skip.includes("Primary") });
+  if (h && noSubsOf(h) > 0) out.push({ key: "subs", label: "SUBS" });
   if (namesToFix(e.check)) out.push({ key: "names", label: "NAMES" });
   return out;
 }
@@ -95,20 +96,15 @@ export default function Wall({ items, status, problem, onProblem, query, kind }:
   const count = (p: Problem) => [...health.values()].filter((h) => (!kind || h.kind === kind) && has({ id: h.id, name: h.name, year: h.year, kind: h.kind, hasPoster: h.poster, played: false, sub: "", folder: "", health: h, check: checks.get(h.id) ?? null }, p)).length;
 
   const targets = (): FixTarget[] => picked.filter((e) => e.health).map((e) => targetOf(e.health!, e.check));
-  function run(what: FixKind, label: string) {
-    const list = targets();
-    if (!list.length) return;
-    void track(`${label}: ${list.length} title${list.length === 1 ? "" : "s"}`, async (job) => {
-      const r = await fixTitles(list, [what], status.subLangs, job);
+  async function run(what: FixKind, label: string) {
+    const plan = await askFixes(label, targets(), [what]);
+    if (!plan) return;
+    void track(`${label}: ${plan.list.length} title${plan.list.length === 1 ? "" : "s"}`, async (job) => {
+      const r = await fixTitles(plan.list, plan.what, status.subLangs, job);
       job.update(fixSummary(r), 1);
     }, { cancellable: true }).catch(() => undefined);
   }
-  async function renameSelected() {
-    const sure = picked.filter((e) => e.check?.sure);
-    if (!sure.length) return;
-    if (!(await askConfirm(`Rename ${sure.length} title${sure.length === 1 ? "" : "s"} that are a 100% match? ${picked.length - sure.length ? `${picked.length - sure.length} others need a look in the Renamer first. ` : ""}Nothing is deleted or overwritten; every rename can be undone.`, { okLabel: "Rename" }))) return;
-    run("rename", "Renaming");
-  }
+  const renameSelected = () => void run("rename", "Rename 100% sure matches");
   function lock(on: boolean) {
     const ids = picked.map((e) => e.id);
     void track(`${on ? "Locking" : "Unlocking"} ${ids.length} titles`, () => api.lockAll(on, ids).then(() => undefined), { stop: "bulk" }).catch(() => undefined);
@@ -179,9 +175,9 @@ export default function Wall({ items, status, problem, onProblem, query, kind }:
       {selecting && (
         <div className="wall-actions" role="toolbar">
           <span className="strong">{sel.size} selected</span>
-          <button className="primary" disabled={!canEdit} onClick={() => run("art", "Artwork")}><Icon name="image" /> Fill in art</button>
-          <button disabled={!canEdit} onClick={() => run("subs", "Subtitles")}><Icon name="subtitles" /> Get subtitles</button>
-          <button disabled={!canEdit || !picked.some((e) => e.check?.sure)} title="Only titles that are a 100% match" onClick={() => void renameSelected()}><Icon name="rename" /> Rename</button>
+          <button className="primary" disabled={!canEdit} onClick={() => void run("art", "Fill in missing artwork")}><Icon name="image" /> Fill in art</button>
+          <button disabled={!canEdit} onClick={() => void run("subs", "Get missing subtitles")}><Icon name="subtitles" /> Get subtitles</button>
+          <button disabled={!canEdit || !picked.some((e) => e.check?.sure)} title="Only titles that are a 100% match" onClick={renameSelected}><Icon name="rename" /> Rename</button>
           <button disabled={!canEdit} onClick={() => lock(true)}><Icon name="lock" /> Lock</button>
           <button disabled={!canEdit} onClick={() => lock(false)}>Unlock</button>
           <button disabled={!canEdit} onClick={() => void addToCollection(picked.map((e) => e.id))}><Icon name="stack" /> Collection</button>

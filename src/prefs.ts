@@ -1,6 +1,7 @@
 // Window-side preferences (player look, skipping, schedules). Kept in this computer's app
 // storage; nothing here is secret and nothing here changes Jellyfin.
 import { useSyncExternalStore, type CSSProperties } from "react";
+import type { Pick } from "./api";
 
 export interface SubStyle {
   size: number; // % of the normal size
@@ -10,6 +11,19 @@ export interface SubStyle {
   shadow: "none" | "soft" | "outline";
   bottom: number; // % from the bottom of the picture
   bold: boolean;
+  italic: boolean;
+  /** Outline thickness in px (with the "outline" edge). */
+  stroke: number;
+  /** Widest the text block may get, % of the picture width. */
+  maxWidth: number;
+  /** 0.3..1 */
+  textOpacity: number;
+  /** Extra space between letters, in 1/100 em. */
+  letterSpacing: number;
+  /** 1.0..1.8 */
+  lineHeight: number;
+  /** Box colour behind the text (with "background" > 0). */
+  boxColor: string;
 }
 
 export interface Schedule {
@@ -57,11 +71,26 @@ export interface Prefs {
    * every episode file. "never": no year for shows at all. Movies always get the year.
    */
   showYear: "folder" | "everywhere" | "never";
+  /** Tabs you closed, per screen ("intros" → library ids). */
+  hiddenTabs: Record<string, string[]>;
+  /** Pictures you gave up on per title ("id" → ["Logo", …]): they don't count as missing. */
+  artSkipped: Record<string, string[]>;
+  /** Shows left out of the missing-episodes list, and whether specials count. */
+  missingIgnored: string[];
+  missingSpecials: boolean;
+  /** Folders (top level under the library folder) "Play something" picks from; empty = all. */
+  randomFolders: string[];
+  /** Your changes to today's picks: date → ids added / removed. */
+  pickEdits: Record<string, { add: Pick[]; remove: string[] }>;
+  /** A folder with music on this computer or the NAS (played without Jellyfin). */
+  musicFolder: string | null;
+  /** Subtitle languages to keep (others can be removed in one go). */
+  keepSubLangs: string[];
 }
 
 export const DEFAULT_PREFS: Prefs = {
   mode: "manage",
-  subStyle: { size: 100, font: "sans", color: "#ffffff", background: 0, shadow: "outline", bottom: 8, bold: false },
+  subStyle: { size: 100, font: "sans", color: "#ffffff", background: 0, shadow: "outline", bottom: 8, bold: false, italic: false, stroke: 2, maxWidth: 80, textOpacity: 1, letterSpacing: 0, lineHeight: 1.3, boxColor: "#000000" },
   subLang: "eng",
   autoSkipIntro: false,
   autoSkipCredits: false,
@@ -79,6 +108,14 @@ export const DEFAULT_PREFS: Prefs = {
   subSkipFolders: [],
   autoDetectIntros: true,
   showYear: "folder",
+  hiddenTabs: {},
+  artSkipped: {},
+  missingIgnored: [],
+  missingSpecials: false,
+  randomFolders: [],
+  pickEdits: {},
+  musicFolder: null,
+  keepSubLangs: ["eng", "dut"],
 };
 
 const KEY = "mediahub.prefs.v1";
@@ -99,6 +136,12 @@ function load(): Prefs {
       pickFavs: p.pickFavs ?? [],
       subRequired: p.subRequired ?? ["eng"],
       subSkipFolders: p.subSkipFolders ?? [],
+      hiddenTabs: p.hiddenTabs ?? {},
+      artSkipped: p.artSkipped ?? {},
+      missingIgnored: p.missingIgnored ?? [],
+      randomFolders: p.randomFolders ?? [],
+      pickEdits: p.pickEdits ?? {},
+      keepSubLangs: p.keepSubLangs ?? ["eng", "dut"],
     };
   } catch {
     return DEFAULT_PREFS;
@@ -148,27 +191,39 @@ export function yearOptional(): boolean {
 }
 
 const FONTS: Record<SubStyle["font"], string> = {
-  sans: '"Manrope", -apple-system, "Helvetica Neue", Arial, sans-serif',
+  sans: '"Inter Variable", "Manrope", -apple-system, "Helvetica Neue", Arial, sans-serif',
   serif: 'Georgia, "Times New Roman", serif',
   rounded: '"SF Pro Rounded", "Arial Rounded MT Bold", "Manrope", sans-serif',
   mono: '"JetBrains Mono", Menlo, monospace',
 };
 
 /** CSS for the subtitle text, used by the player and the preview in Settings. */
+function hexToRgb(h: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(h.trim());
+  if (!m) return "0,0,0";
+  const n = parseInt(m[1], 16);
+  return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+}
+
 export function subCss(s: SubStyle): CSSProperties {
-  const shadow =
-    s.shadow === "outline"
-      ? "0 0 2px #000, 0 0 2px #000, 1px 1px 2px #000, -1px -1px 2px #000"
-      : s.shadow === "soft"
-        ? "0 2px 6px rgba(0,0,0,.85)"
-        : "none";
+  const w = Math.max(0, Math.min(6, s.stroke ?? 2));
+  // An outline made of shadows in eight directions (sharper than one blurred shadow).
+  const ring = w > 0
+    ? [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7, 0.7], [-0.7, 0.7], [0.7, -0.7], [-0.7, -0.7]].map(([x, y]) => `${(x * w).toFixed(1)}px ${(y * w).toFixed(1)}px 0 #000`).join(", ") + ", 0 0 3px #000"
+    : "none";
+  const shadow = s.shadow === "outline" ? ring : s.shadow === "soft" ? "0 2px 6px rgba(0,0,0,.85), 0 0 2px rgba(0,0,0,.7)" : "none";
   return {
     fontFamily: FONTS[s.font],
     fontSize: `calc(clamp(16px, 2.6vw, 44px) * ${s.size / 100})`,
     color: s.color,
-    background: s.background > 0 ? `rgba(0,0,0,${s.background})` : "transparent",
+    opacity: s.textOpacity ?? 1,
+    background: s.background > 0 ? `rgba(${hexToRgb(s.boxColor ?? "#000000")},${s.background})` : "transparent",
     textShadow: shadow,
     fontWeight: s.bold ? 700 : 500,
+    fontStyle: s.italic ? "italic" : "normal",
+    letterSpacing: `${(s.letterSpacing ?? 0) / 100}em`,
+    lineHeight: s.lineHeight ?? 1.3,
+    maxWidth: `${s.maxWidth ?? 80}vw`,
   };
 }
 

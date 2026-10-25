@@ -2,7 +2,7 @@
 // screens without passing callbacks through every component.
 export type View =
   | "home" | "library" | "collections" | "renamer" | "metadata" | "subtitles" | "intros" | "add"
-  | "storage" | "downloads" | "settings" | "health" | "missing" | "duplicates" | "tags" | "history";
+  | "storage" | "downloads" | "settings" | "health" | "missing" | "duplicates" | "tags" | "history" | "cleanup";
 
 export interface Route {
   view: View;

@@ -8,7 +8,8 @@ import { HubSwitcher } from "./Sidebar";
 import Home, { Billboard, featured, itemToCard } from "./Home";
 import Collections from "./Collections";
 import { MediaInfo } from "./ItemPage";
-import { CardTile, Icon, itemMenu, openMenu, playTitle, Row } from "./ui";
+import { CardTile, Icon, itemMenu, openMenu, playTitle, Row, Tabs } from "./ui";
+import { prefs } from "./prefs";
 
 type Tab = "home" | "movies" | "shows" | "collections";
 
@@ -58,6 +59,7 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
           ))}
         </nav>
         <div className="spacer" />
+        <button className="w-random" onClick={() => void playRandom()} title="Play something you haven't seen (folders: Settings → Player)"><Icon name="shuffle" /> Play something</button>
         <label className="searchbox w-search">
           <Icon name="search" />
           <input placeholder="Search" value={query} onChange={(e) => { setQuery(e.target.value); if (item && e.target.value) onBack(); }} />
@@ -75,12 +77,33 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
         ) : tab === "shows" ? (
           <Browse kind="series" query="" />
         ) : (
-          <Collections status={{ ...status, readOnly: true }} selected={collection} />
+          <Collections status={{ ...status, readOnly: true }} selected={collection} variant="watch" />
         )}
       </div>
     </div>
   );
 }
+
+/** Plays a random title you haven't watched, from the folders chosen in Settings → Player. */
+export async function playRandom(): Promise<void> {
+  const all = await api.list(null, "", "name", 0, 5000).catch(() => []);
+  let pool = all.filter((i) => !i.played);
+  const folders = prefs().randomFolders;
+  if (folders.length) {
+    const h = await api.libraryHealth(false).catch(() => null);
+    const where = new Map((h?.rows ?? []).map((r) => [r.id, r.libraryFolder || "Other"]));
+    pool = pool.filter((i) => folders.includes(where.get(i.id) ?? "Other"));
+  }
+  if (!pool.length) pool = all;
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  if (pick) await playTitle(pick.id);
+}
+
+const LETTERS = ["#", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"];
+const letterOf = (name: string) => {
+  const c = cleanTitle(name).replace(/^(the|a|an|de|het)\s+/i, "").charAt(0).toUpperCase();
+  return c >= "A" && c <= "Z" ? c : "#";
+};
 
 function Browse({ kind, query }: { kind: "movie" | "series" | null; query: string }) {
   const epoch = useEpoch();
@@ -120,6 +143,23 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
     void load(0);
   }, [load, epoch]);
 
+  /** A–Z: everything sorted by name, then scroll to the first title with that letter. */
+  async function jump(l: string) {
+    if (sort !== "name" || more) {
+      const rows = await api.list(kind, "", "name", 0, 10000);
+      all.current = rows.map((r) => ({ card: itemToCard(r), genres: r.genres }));
+      setItems(all.current.filter((c) => (!genre || c.genres.includes(genre)) && (!onlyNew || !c.card.played)).map((c) => c.card));
+      setMore(false);
+      if (sort !== "name") { busy.current = true; setSort("name"); window.setTimeout(() => { busy.current = false; }, 600); }
+      await new Promise((r) => window.setTimeout(r, 80));
+    }
+    const letters = LETTERS.slice(LETTERS.indexOf(l));
+    for (const x of letters) {
+      const el = document.querySelector(`.w-cell[data-letter="${x}"]`);
+      if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+    }
+  }
+
   useEffect(() => {
     const el = sentinel.current;
     if (!el || !more) return;
@@ -148,7 +188,18 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
           {genres.map((g) => <button key={g} className={`chip ${genre === g ? "on" : ""}`} onClick={() => setGenre(genre === g ? null : g)}>{g}</button>)}
         </div>
       )}
-      <div className="grid">{items.map((c) => <CardTile key={c.id} c={c} canEdit={false} />)}</div>
+      <div className="grid w-grid">
+        {items.map((c, i) => {
+          const l = letterOf(c.title);
+          const first = sort === "name" && (i === 0 || letterOf(items[i - 1].title) !== l);
+          return <div key={c.id} data-letter={first ? l : undefined} className="w-cell"><CardTile c={c} canEdit={false} /></div>;
+        })}
+      </div>
+      {!query && items.length > 30 && (
+        <nav className="az-rail" aria-label="Jump to a letter">
+          {LETTERS.map((l) => <button key={l} onClick={() => void jump(l)}>{l}</button>)}
+        </nav>
+      )}
       {items.length === 0 && <p className="muted">Nothing here.</p>}
       <div ref={sentinel} style={{ height: 1 }} />
     </div>
@@ -196,11 +247,11 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
 
   return (
     <div className="w-item">
+      <button className="w-backfix" onClick={onBack} aria-label="Back" title="Back"><span className="flip"><Icon name="chevron" size={22} /></span></button>
       <section className="w-hero" onContextMenu={(e) => openMenu(e, itemMenu({ id, kind: it.Type, title, seriesId: it.SeriesId, played: it.UserData?.Played }, false))}>
         <img className="w-hero-art" src={isEpisode ? imageUrl(id, "Primary", 1920) : imageUrl(artId, "Backdrop", 1920)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
         <div className="w-hero-shade" />
         <div className="w-hero-body">
-          <button className="w-back" onClick={onBack} aria-label="Back"><span className="flip"><Icon name="chevron" size={18} /></span> Back</button>
           {logo && !isEpisode ? <img className="w-logo" src={imageUrl(artId, "Logo", 800)} alt={title} onError={() => setLogo(false)} /> : <h1 className="w-title">{isEpisode && it.SeriesName ? cleanTitle(it.SeriesName) : title}</h1>}
           {isEpisode && <div className="w-epname">{epCode(it.ParentIndexNumber, it.IndexNumber).trim()}{epCode(it.ParentIndexNumber, it.IndexNumber) ? " — " : ""}{it.Name}</div>}
           <div className="hero-meta">
@@ -229,13 +280,9 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
       <div className="pg">
         {(it.Type === "Series") && d.seasons.length > 0 && (
           <section className="stack">
-            <div className="row between w-eps-head">
+            <div className="w-eps-head">
               <h2 className="big">Episodes</h2>
-              {d.seasons.length > 1 ? (
-                <select className="w-season" value={season ?? ""} onChange={(e) => setSeason(e.target.value)}>
-                  {d.seasons.map((s) => <option key={s.Id} value={s.Id}>{cleanTitle(s.Name)}{s.ChildCount ? ` (${s.ChildCount} episodes)` : ""}</option>)}
-                </select>
-              ) : <span className="muted">{cleanTitle(d.seasons[0].Name)}</span>}
+              <Tabs active={season ?? ""} onChange={setSeason} tabs={d.seasons.map((s) => ({ id: s.Id, label: cleanTitle(s.Name), count: s.ChildCount ?? undefined }))} />
             </div>
             <div className="w-eps list">
               {eps === null && <p className="muted">Loading episodes…</p>}

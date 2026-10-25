@@ -1,5 +1,6 @@
 mod backend;
 mod cancel;
+mod cleanup;
 mod collections;
 mod commands;
 mod config;
@@ -12,6 +13,7 @@ mod images;
 mod import;
 mod jellyfin;
 mod library;
+mod localmusic;
 mod music;
 mod subsync;
 mod local;
@@ -46,6 +48,8 @@ pub fn run() {
         })
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
+            let prune_dir = dir.clone();
+            std::thread::spawn(move || images::prune(&prune_dir));
             let state = state::AppState::new(dir)?;
             app.manage(state);
             Ok(())
@@ -133,6 +137,11 @@ pub fn run() {
             backend::lock_all,
             backend::scan_folders,
             cancel::cancel_job,
+            cleanup::extra_subtitles,
+            localmusic::music_source,
+            localmusic::set_music_source,
+            localmusic::pick_music_folder,
+            cleanup::remove_subtitle_files,
             naming_check::naming_check,
             naming_check::naming_check_last,
             naming_check::naming_check_cancel,

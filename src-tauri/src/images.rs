@@ -118,8 +118,39 @@ async fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<V
                 return Err(Error::msg("bad index"));
             }
             let state = app.state::<AppState>();
+            let width = width_from_query(uri.query());
+            let tag = query_value(uri.query(), "t").unwrap_or_default();
+            let file = cache_file(&state.dir, id, kind, index, width, &tag);
+            // Pictures come from this computer's cache first (instant at start-up); an untagged
+            // one older than a day is fetched again in the background for next time.
+            if let Some(f) = file.as_ref() {
+                if let Ok(bytes) = std::fs::read(f) {
+                    let age = std::fs::metadata(f).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).map(|d| d.as_secs()).unwrap_or(u64::MAX);
+                    if tag.is_empty() && age > 86_400 {
+                        let (app2, id2, kind2, f2) = (app.clone(), id.to_string(), kind.to_string(), f.clone());
+                        tauri::async_runtime::spawn(async move {
+                            if let Ok(Some(c)) = app2.state::<AppState>().client() {
+                                if let Ok((b, _)) = c.image(&id2, &kind2, index, width).await {
+                                    let _ = write_cache(&f2, &b);
+                                }
+                            }
+                        });
+                    }
+                    let ct = if bytes.starts_with(&[0x89, b'P']) { "image/png" } else if bytes.starts_with(b"RIFF") { "image/webp" } else { "image/jpeg" };
+                    return Response::builder()
+                        .status(200)
+                        .header("Content-Type", ct)
+                        .header("Cache-Control", "private, max-age=86400")
+                        .body(bytes)
+                        .map_err(|e| Error::msg(e.to_string()));
+                }
+            }
             let client = state.client()?.ok_or_else(|| Error::msg("not connected"))?;
-            client.image(id, kind, index, width_from_query(uri.query())).await?
+            let (bytes, ct) = client.image(id, kind, index, width).await?;
+            if let Some(f) = file.as_ref() {
+                let _ = write_cache(f, &bytes);
+            }
+            (bytes, ct)
         }
         _ => return Err(Error::msg("bad path")),
     };
@@ -129,6 +160,70 @@ async fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<V
         .header("Cache-Control", "private, max-age=86400")
         .body(bytes)
         .map_err(|e| Error::msg(e.to_string()))
+}
+
+/// Where a picture is kept on this computer (None for odd ids or kinds).
+fn cache_file(dir: &std::path::Path, id: &str, kind: &str, index: u32, width: u32, tag: &str) -> Option<std::path::PathBuf> {
+    let ok = |x: &str| !x.is_empty() && x.len() <= 64 && x.chars().all(|c| c.is_ascii_alphanumeric());
+    if !ok(id) || !ok(kind) {
+        return None;
+    }
+    let tag: String = tag.chars().filter(|c| c.is_ascii_alphanumeric()).take(40).collect();
+    // Two levels so no folder holds too many files.
+    Some(dir.join("imgcache").join(&id[..2.min(id.len())]).join(format!("{id}_{kind}_{index}_{width}_{tag}")))
+}
+
+fn write_cache(f: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if bytes.len() < 64 || bytes.len() > 15 * 1024 * 1024 {
+        return Ok(());
+    }
+    if let Some(p) = f.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let tmp = f.with_extension("part");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(tmp, f)
+}
+
+/// Forgets the cached pictures of one title (after you change its artwork).
+pub fn forget(dir: &std::path::Path, id: &str) {
+    if let Some(f) = cache_file(dir, id, "Primary", 0, 0, "") {
+        if let Some(folder) = f.parent() {
+            if let Ok(rd) = std::fs::read_dir(folder) {
+                for e in rd.flatten() {
+                    if e.file_name().to_string_lossy().starts_with(&format!("{id}_")) {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Keeps the picture cache under about 1.5 GB: the oldest files go first. Run at start-up.
+pub fn prune(dir: &std::path::Path) {
+    let root = dir.join("imgcache");
+    let mut files: Vec<(std::time::SystemTime, u64, std::path::PathBuf)> = Vec::new();
+    for sub in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+        for e in std::fs::read_dir(sub.path()).into_iter().flatten().flatten() {
+            if let Ok(m) = e.metadata() {
+                files.push((m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len(), e.path()));
+            }
+        }
+    }
+    let mut total: u64 = files.iter().map(|f| f.1).sum();
+    if total < 1_500_000_000 {
+        return;
+    }
+    files.sort_by_key(|f| f.0);
+    for (_, len, p) in files {
+        if total < 1_000_000_000 {
+            break;
+        }
+        if std::fs::remove_file(&p).is_ok() {
+            total = total.saturating_sub(len);
+        }
+    }
 }
 
 pub fn handle(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
@@ -141,6 +236,13 @@ pub fn handle(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeRes
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_names_are_safe() {
+        let d = std::path::Path::new("/x");
+        assert!(cache_file(d, "../etc", "Primary", 0, 300, "").is_none());
+        assert!(cache_file(d, "0123abcd", "Primary", 0, 300, "a/b").unwrap().ends_with("01/0123abcd_Primary_0_300_ab"));
+    }
 
     #[test]
     fn reads_width() {

@@ -3,9 +3,21 @@ import Hls from "hls.js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, cleanTitle, errorText, imageUrl, PlayInfo, ScoredSub, Status, SubTrack } from "./api";
 import { autoDetectSeason, fmt } from "./Intros";
-import { prefs, setPrefs, subCss, usePrefs, type SubStyle } from "./prefs";
+import { DEFAULT_PREFS, prefs, setPrefs, subCss, usePrefs, type SubStyle } from "./prefs";
 import { nav } from "./nav";
 import { Icon, SettingsLink } from "./ui";
+import { logProblem } from "./activity";
+
+/** Reports a failed position save once per playback (not every 15 seconds). */
+let reportedProgress = false;
+function progressFailed(e: unknown) {
+  if (reportedProgress) return;
+  reportedProgress = true;
+  logProblem("Saving where you are in Jellyfin", errorText(e));
+}
+
+type Panel = "none" | "subs" | "audio" | "style" | "speed" | "chapters";
+const SPEEDS = [0.75, 1, 1.1, 1.25, 1.5, 2];
 
 const TICKS = 10_000_000;
 
@@ -62,7 +74,10 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   const [subUrls, setSubUrls] = useState<Record<number, string>>({});
   const [cue, setCue] = useState<string>("");
   const [controls, setControls] = useState(true);
-  const [panel, setPanel] = useState<"none" | "subs" | "audio" | "style">("none");
+  const [panel, setPanel] = useState<Panel>("none");
+  const [speed, setSpeed] = useState(1);
+  const [buffered, setBuffered] = useState(0);
+  const [flash, setFlash] = useState<{ icon: "play" | "pause"; n: number } | null>(null);
   const [offset, setOffset] = useState(0);
   const [leveling, setLeveling] = useState(false);
   const [online, setOnline] = useState<ScoredSub[] | null>(null);
@@ -127,9 +142,29 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           startAt = 0;
         }
         if (Hls.isSupported()) {
-          hls = new Hls({ enableWorker: false, backBufferLength: 60, startPosition: startAt > 0 ? startAt : -1 });
+          // A big buffer ahead (minutes, not seconds) so a slow moment on the NAS or the
+          // server never cuts the sound or freezes the picture.
+          hls = new Hls({
+            enableWorker: true,
+            startPosition: startAt > 0 ? startAt : -1,
+            maxBufferLength: 120,
+            maxMaxBufferLength: 600,
+            maxBufferSize: 500 * 1000 * 1000,
+            backBufferLength: 90,
+            maxBufferHole: 0.7,
+            nudgeMaxRetry: 10,
+            startFragPrefetch: true,
+            fragLoadingMaxRetry: 6,
+            manifestLoadingMaxRetry: 4,
+          });
           hls.on(Hls.Events.ERROR, (_e, data) => {
-            if (data.fatal) setError(`Playback stopped (${data.details}). The file may need converting that the server can't do quickly.`);
+            // Recover from hiccups instead of stopping.
+            if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) hls?.startLoad();
+            else if (data.fatal && data.type === Hls.ErrorTypes.MEDIA_ERROR) hls?.recoverMediaError();
+          });
+          let fatal = 0;
+          hls.on(Hls.Events.ERROR, (_e, data) => {
+            if (data.fatal && ++fatal > 3) setError(`Playback stopped (${data.details}). The file may need converting that the server can't do quickly.`);
           });
           hls.loadSource(pi.url);
           hls.attachMedia(v);
@@ -158,19 +193,20 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       if (token) {
         const pos = video.current?.currentTime ?? 0;
         const t = token;
-        void api.playProgress(t, pos, false).catch(() => undefined).finally(() => void api.playStop(t).catch(() => undefined));
+        void api.playProgress(t, pos, false).catch(progressFailed).finally(() => void api.playStop(t).catch(() => undefined));
       }
     };
   }, [id, session]);
 
   useEffect(() => () => blobUrls.current.forEach((u) => URL.revokeObjectURL(u)), []);
 
-  // Tell Jellyfin where we are every 30 seconds while playing.
+  // Tell Jellyfin where we are every 15 seconds while playing (and when pausing, below).
   useEffect(() => {
+    reportedProgress = false;
     const t = window.setInterval(() => {
       const v = video.current;
-      if (v && !v.paused && tokenRef.current) void api.playProgress(tokenRef.current, v.currentTime, false).catch(() => undefined);
-    }, 30000);
+      if (v && !v.paused && tokenRef.current) void api.playProgress(tokenRef.current, v.currentTime, false).catch(progressFailed);
+    }, 15000);
     return () => window.clearInterval(t);
   }, []);
 
@@ -260,7 +296,8 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       setPausedLong(false);
       return;
     }
-    const t = window.setTimeout(() => setPausedLong(true), 1800);
+    // Show the picture right away (a short delay so a quick tap doesn't flash it).
+    const t = window.setTimeout(() => setPausedLong(true), 250);
     return () => window.clearTimeout(t);
   }, [playing, askResume, info]);
 
@@ -282,6 +319,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     if (!v) return;
     if (v.paused) void v.play();
     else v.pause();
+    setFlash((f) => ({ icon: v.paused ? "pause" : "play", n: (f?.n ?? 0) + 1 }));
   };
   const fullscreen = async () => {
     const w = getCurrentWindow();
@@ -488,7 +526,13 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       const idx = await api.subtitleDownload(id, s.sub.Id, subLang, LANG_WORDS[subLang]?.filter((w) => w.length === 3) ?? [subLang]);
       const token = tokenRef.current;
       if (!token) return;
-      const list = await api.playSubtitles(token);
+      // Jellyfin needs a moment to notice the new file: ask again for up to ~20 seconds.
+      let list = await api.playSubtitles(token);
+      for (let i = 0; i < 10 && !list.some((t) => !subUrls[t.index]); i++) {
+        say("Adding the subtitle…", 3000);
+        await new Promise((r) => window.setTimeout(r, 2000));
+        list = await api.playSubtitles(token);
+      }
       setTracks(list);
       const fresh = list.filter((t) => !subUrls[t.index]);
       const loaded: Record<number, string> = { ...subUrls };
@@ -504,9 +548,9 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
         setPanel("none");
         setOnline(null);
       } else if (!quietly) {
-        say("Downloaded; Jellyfin is still adding it. Try C again in a moment.", 3000);
+        say("Downloaded, but Jellyfin hasn't listed it yet. Press C again in a moment.", 3500);
       } else {
-        say("Downloaded; it will show up in a moment. Press C again.", 3000);
+        say("Downloaded, but Jellyfin hasn't listed it yet. Press C again in a moment.", 3500);
       }
     } catch (e) {
       say(errorText(e), 3000);
@@ -518,7 +562,6 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   const pct = (t: number) => `${duration ? (t / duration) * 100 : 0}%`;
   const skipLabel = current?.kind === "Intro" ? "Skip intro" : current?.kind === "Recap" ? "Skip recap" : hasNext ? "Next episode" : "Skip credits";
   const subTitle = sub >= 0 ? tracks.find((t) => t.index === sub)?.title ?? "On" : "Off";
-  const audioTitle = info?.audio.find((a) => a.selected)?.title ?? info?.audio[0]?.title ?? "Default";
   const about = info?.about;
   const tp = info?.trickplay;
   const thumb = (() => {
@@ -544,14 +587,26 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       <video
         ref={video}
         onClick={toggle}
-        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+        onTimeUpdate={(e) => {
+          const v = e.currentTarget;
+          setTime(v.currentTime);
+          // How far ahead it has loaded (the range that contains the playhead).
+          for (let i = 0; i < v.buffered.length; i++) {
+            if (v.buffered.start(i) <= v.currentTime + 0.5 && v.buffered.end(i) >= v.currentTime) { setBuffered(v.buffered.end(i)); break; }
+          }
+        }}
+        onDoubleClick={() => void fullscreen()}
+        onLoadedMetadata={(e) => { e.currentTarget.playbackRate = speed; }}
         onPlay={() => setPlaying(true)}
         onWaiting={() => setLoadState((s) => (s === "start" ? s : "buffer"))}
         onPlaying={() => setLoadState("ok")}
         onCanPlay={() => setLoadState((s) => (s === "start" ? "ok" : s))}
         onSeeking={() => setLoadState((s) => (s === "start" ? s : "buffer"))}
         onSeeked={() => setLoadState((s) => (s === "buffer" ? "ok" : s))}
-        onPause={() => setPlaying(false)}
+        onPause={(e) => {
+          setPlaying(false);
+          if (tokenRef.current && e.currentTarget.currentTime > 5) void api.playProgress(tokenRef.current, e.currentTarget.currentTime, false).catch(progressFailed);
+        }}
         onEnded={() => {
           if (tokenRef.current) void api.playProgress(tokenRef.current, 0, true).catch(() => undefined);
           if (info?.next && onNext) playNext();
@@ -653,60 +708,82 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
         </div>
       )}
 
-      {panel === "subs" && (
-        <div className="p-panel" onClick={(e) => e.stopPropagation()}>
-          <div className="row between"><span className="strong">Subtitles</span><button className="link small" onClick={() => setPanel("style")}>Look and position…</button></div>
-          <button className={`p-opt ${sub === -1 ? "on" : ""}`} onClick={() => setSub(-1)}><span>Off</span></button>
-          {loadedTracks.map((t) => (
-            <button key={t.index} className={`p-opt ${sub === t.index ? "on" : ""}`} onClick={() => setSub(t.index)}>
-              <span>{t.title}</span><span className="small muted">{t.default ? "Default" : ""}</span>
-            </button>
-          ))}
-          {online === null ? (
-            <button className="p-opt" disabled={!!onlineBusy} onClick={() => void searchOnline()}><span>{onlineBusy === "search" ? "Searching…" : "Search more online"}</span></button>
-          ) : (
-            <>
-              {online.length === 0 && <div className="small muted">Nothing found online.</div>}
-              {online.map((o) => (
-                <button key={o.sub.Id} className="p-opt" disabled={!!onlineBusy || status?.readOnly} onClick={() => void downloadOnline(o)} title={o.sub.Name}>
-                  <span className="ellipsis">{o.sub.Name}</span>
-                  <span className={`small strong ${o.score >= 85 ? "ok" : o.score >= 60 ? "warn" : "bad"}`}>{onlineBusy === o.sub.Id ? "…" : `${o.score}${o.score === 100 ? " · Best match" : ""}`}</span>
-                </button>
-              ))}
-              {status?.readOnly && <div className="small muted">Downloading needs changes switched on. <SettingsLink section="changes">Turn them on</SettingsLink></div>}
-            </>
-          )}
-          {sub >= 0 && !status?.readOnly && (
-            <button className="p-opt" disabled={!!onlineBusy} onClick={() => void autoTiming()}><span><Icon name="wand" size={14} /> Fix timing automatically</span><span className="small muted">{onlineBusy === "timing" ? "Listening…" : ""}</span></button>
-          )}
-          <div className="p-timing">
-            <span className="muted small">Timing</span>
-            <span className="row">
-              <button onClick={() => setOffset((o) => Math.round((o - 0.5) * 10) / 10)} aria-label="Earlier">−</button>
-              <span className="mono">{offset.toFixed(1)} s</span>
-              <button onClick={() => setOffset((o) => Math.round((o + 0.5) * 10) / 10)} aria-label="Later">+</button>
-            </span>
+      {panel !== "none" && (
+        <div className="p-settings" onClick={(e) => e.stopPropagation()}>
+          <div className="p-tabs">
+            {([["subs", "Subtitles"], ["style", "Look"], ["audio", "Audio"], ["speed", "Speed"], ...(chapters.length ? [["chapters", "Chapters"]] : [])] as [Panel, string][]).map(([k, label]) => (
+              <button key={k} className={panel === k ? "on" : ""} onClick={() => setPanel(k)}>{label}</button>
+            ))}
+            <span className="spacer" />
+            <button className="p-x" onClick={() => setPanel("none")} aria-label="Close"><Icon name="x" size={14} /></button>
           </div>
-          <div className="muted small">C turns {subLang === "eng" ? "English" : subLang} subtitles on and off · Shift+C goes through all · [ and ] jump between chapters</div>
+          <div className="p-settings-body">
+            {panel === "subs" && (
+              <>
+                <button className={`p-opt ${sub === -1 ? "on" : ""}`} onClick={() => setSub(-1)}><span>Off</span>{sub === -1 && <Icon name="check" size={14} />}</button>
+                {loadedTracks.map((t) => (
+                  <button key={t.index} className={`p-opt ${sub === t.index ? "on" : ""}`} onClick={() => setSub(t.index)}>
+                    <span>{t.title}</span>{sub === t.index ? <Icon name="check" size={14} /> : <span className="small muted">{t.default ? "Default" : ""}</span>}
+                  </button>
+                ))}
+                {online === null ? (
+                  <button className="p-opt" disabled={!!onlineBusy} onClick={() => void searchOnline()}><span><Icon name="search" size={14} /> {onlineBusy === "search" ? "Searching…" : "Find more online"}</span></button>
+                ) : (
+                  <>
+                    {online.length === 0 && <div className="small muted">Nothing found online.</div>}
+                    {online.map((o) => (
+                      <button key={o.sub.Id} className="p-opt" disabled={!!onlineBusy || status?.readOnly} onClick={() => void downloadOnline(o)} title={o.sub.Name}>
+                        <span className="ellipsis">{o.sub.Name}</span>
+                        <span className={`small strong ${o.score >= 85 ? "ok" : o.score >= 60 ? "warn" : "bad"}`}>{onlineBusy === o.sub.Id ? "…" : `${o.score}${o.score === 100 ? " · Best" : ""}`}</span>
+                      </button>
+                    ))}
+                    {status?.readOnly && <div className="small muted">Downloading needs changes switched on. <SettingsLink section="changes">Turn them on</SettingsLink></div>}
+                  </>
+                )}
+                {sub >= 0 && !status?.readOnly && (
+                  <button className="p-opt" disabled={!!onlineBusy} onClick={() => void autoTiming()}><span><Icon name="wand" size={14} /> Fix timing automatically</span><span className="small muted">{onlineBusy === "timing" ? "Listening…" : ""}</span></button>
+                )}
+                <div className="p-timing">
+                  <span className="muted small">Timing</span>
+                  <span className="row">
+                    <button onClick={() => setOffset((o) => Math.round((o - 0.5) * 10) / 10)} aria-label="Earlier">−</button>
+                    <span className="mono">{offset.toFixed(1)} s</span>
+                    <button onClick={() => setOffset((o) => Math.round((o + 0.5) * 10) / 10)} aria-label="Later">+</button>
+                  </span>
+                </div>
+                <div className="muted small">C: {subLang === "eng" ? "English" : subLang} on/off · Shift+C: all tracks</div>
+              </>
+            )}
+            {panel === "style" && <SubStyleEditor compact />}
+            {panel === "audio" && (
+              <>
+                {(info?.audio ?? []).map((a) => (
+                  <button key={a.index} className={`p-opt ${a.selected ? "on" : ""}`} onClick={() => {
+                    if (!a.selected) setSession((x) => ({ start: video.current?.currentTime ?? 0, audio: a.index, n: x.n + 1 }));
+                  }}><span>{a.title}</span>{a.selected && <Icon name="check" size={14} />}</button>
+                ))}
+                <label className="p-opt p-switch"><span>Volume leveling<br /><span className="small muted">Quiet talk louder, loud scenes softer</span></span>
+                  <input type="checkbox" className="switch" checked={leveling} onChange={(e) => setLeveling(e.target.checked)} /></label>
+              </>
+            )}
+            {panel === "speed" && SPEEDS.map((x) => (
+              <button key={x} className={`p-opt ${speed === x ? "on" : ""}`} onClick={() => { setSpeed(x); if (video.current) video.current.playbackRate = x; }}>
+                <span>{x === 1 ? "Normal" : `${x}×`}</span>{speed === x && <Icon name="check" size={14} />}
+              </button>
+            ))}
+            {panel === "chapters" && chapters.map((c, i) => {
+              const on = chapterAt(time) === c;
+              return (
+                <button key={i} className={`p-opt ${on ? "on" : ""}`} onClick={() => seek(c.start)}>
+                  <span className="ellipsis">{c.name || `Chapter ${i + 1}`}</span><span className="mono small muted">{fmt(c.start)}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
-      {panel === "style" && (
-        <div className="p-panel" onClick={(e) => e.stopPropagation()}>
-          <div className="row between"><span className="strong">Subtitle look</span><button className="link small" onClick={() => setPanel("subs")}>← Tracks</button></div>
-          <SubStyleEditor />
-        </div>
-      )}
-      {panel === "audio" && (
-        <div className="p-panel" onClick={(e) => e.stopPropagation()}>
-          <div className="strong">Audio</div>
-          {(info?.audio ?? []).map((a) => (
-            <button key={a.index} className={`p-opt ${a.selected ? "on" : ""}`} onClick={() => {
-              setPanel("none");
-              if (!a.selected) setSession((x) => ({ start: video.current?.currentTime ?? 0, audio: a.index, n: x.n + 1 }));
-            }}><span>{a.title}</span></button>
-          ))}
-        </div>
-      )}
+
+      {flash && <div key={flash.n} className="p-flash"><Icon name={flash.icon} size={34} /></div>}
 
       <div className="p-bottom">
         <div
@@ -726,31 +803,31 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
             </div>
           )}
           <div className="p-rail">
+            <span className="p-buffered" style={{ width: pct(buffered) }} />
             {marks.map((m, i) => <span key={i} className={`p-mark ${m.kind.toLowerCase()}`} style={{ left: pct(m.start), width: `calc(${pct(m.end)} - ${pct(m.start)})` }} />)}
+            <span className="p-fill" style={{ width: pct(time) }}><span className="p-knob" /></span>
             {chapters.filter((c) => c.start > 1).map((c, i) => <span key={`c${i}`} className="p-chapter" style={{ left: pct(c.start) }} title={c.name} />)}
-            <span className="p-fill" style={{ width: pct(time) }} />
+            {hover && <span className="p-hoverline" style={{ left: hover.x }} />}
           </div>
           <input type="range" min={0} max={duration || 1} step={1} value={time} onChange={(e) => seek(Number(e.target.value))} aria-label="Position" />
         </div>
         <div className="p-row">
-          <button className="p-play" onClick={toggle} aria-label={playing ? "Pause" : "Play"}>
-            {playing ? (
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4.5" width="4" height="15" rx="1" /><rect x="14" y="4.5" width="4" height="15" rx="1" /></svg>
-            ) : (
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z" /></svg>
-            )}
+          <button className="p-ic big" onClick={toggle} aria-label={playing ? "Pause" : "Play"} title={playing ? "Pause (space)" : "Play (space)"}>
+            <Icon name={playing ? "pause" : "play"} size={26} />
           </button>
-          <button className="p-chip" onClick={() => seek(time - 10)} aria-label="Back 10 seconds">−10</button>
-          <button className="p-chip" onClick={() => seek(time + 10)} aria-label="Forward 10 seconds">+10</button>
-          <span className="mono small p-time">{fmt(time)} / {fmt(duration)}</span>
-          <div className="spacer" />
-          <input className="p-vol" type="range" min={0} max={1} step={0.05} value={volume} aria-label="Volume"
-            onChange={(e) => { const nv = Number(e.target.value); setVolume(nv); if (video.current) { video.current.volume = nv; video.current.muted = false; } }} />
-          {info?.next && onNext && <button className="p-chip" onClick={playNext} title="Next episode (N)">Next ▸</button>}
-          <button className={`p-chip ${leveling ? "on" : ""}`} onClick={() => setLeveling((l) => !l)}>Volume leveling {leveling ? "on" : "off"}</button>
-          <button className={`p-chip ${panel === "audio" ? "on" : ""}`} onClick={() => setPanel(panel === "audio" ? "none" : "audio")}>Audio: {audioTitle}</button>
-          <button className={`p-chip ${sub >= 0 || panel === "subs" || panel === "style" ? "on" : ""}`} onClick={() => setPanel(panel === "subs" || panel === "style" ? "none" : "subs")}>Subtitles: {subTitle}</button>
-          <button className="p-chip" onClick={() => void fullscreen()} aria-label="Full screen">⛶</button>
+          <button className="p-ic" onClick={() => seek(time - 10)} aria-label="Back 10 seconds" title="Back 10 s (←)"><span className="p-skipnum">10</span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 12a8 8 0 1 0 2.4-5.7" /><path d="M4 4v4h4" /></svg></button>
+          <button className="p-ic" onClick={() => seek(time + 10)} aria-label="Forward 10 seconds" title="Forward 10 s (→)"><span className="p-skipnum">10</span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M20 12a8 8 0 1 1-2.4-5.7" /><path d="M20 4v4h-4" /></svg></button>
+          <div className="p-volwrap">
+            <button className="p-ic" onClick={() => { const v = video.current; if (v) { v.muted = !v.muted; setVolume(v.muted ? 0 : v.volume); } }} aria-label="Mute" title="Mute (M)"><Icon name="volume" size={22} /></button>
+            <input className="p-vol" type="range" min={0} max={1} step={0.05} value={volume} aria-label="Volume"
+              onChange={(e) => { const nv = Number(e.target.value); setVolume(nv); if (video.current) { video.current.volume = nv; video.current.muted = false; } }} />
+          </div>
+          <span className="mono small p-time">{fmt(time)} <span className="muted">/ {fmt(duration)}</span></span>
+          <div className="p-center-title ellipsis">{info ? cleanTitle(info.title) : ""}{info?.subtitle ? <span className="muted"> · {info.subtitle}</span> : null}</div>
+          {info?.next && onNext && <button className="p-ic" onClick={playNext} title={`Next: ${info.next.label} (N)`} aria-label="Next episode"><Icon name="next" size={22} /></button>}
+          <button className={`p-ic ${sub >= 0 ? "on" : ""}`} onClick={() => setPanel(panel === "subs" ? "none" : "subs")} title={`Subtitles: ${subTitle} (C)`} aria-label="Subtitles"><Icon name="subtitles" size={22} /></button>
+          <button className={`p-ic ${panel !== "none" && panel !== "subs" ? "on" : ""}`} onClick={() => setPanel(panel === "none" || panel === "subs" ? "audio" : "none")} title="Audio, speed, chapters" aria-label="Settings"><Icon name="settings" size={22} /></button>
+          <button className="p-ic" onClick={() => void fullscreen()} aria-label="Full screen" title="Full screen (F)"><Icon name="expand" size={20} /></button>
         </div>
       </div>
     </div>
@@ -762,17 +839,27 @@ function PauseLogo({ artId, title }: { artId: string; title: string }) {
   return ok ? <img className="p-pause-logo" src={imageUrl(artId, "Logo", 700)} alt={title} onError={() => setOk(false)} /> : <div className="p-pause-title">{cleanTitle(title)}</div>;
 }
 
-/** Size, font, colour, box, shadow and height of subtitles. Used in the player and in Settings. */
-export function SubStyleEditor() {
+/** Everything about how subtitles look. Used in the player (compact) and in Settings. */
+export function SubStyleEditor({ compact }: { compact?: boolean }) {
   const { subStyle: s } = usePrefs();
   const set = (patch: Partial<SubStyle>) => setPrefs({ subStyle: { ...prefs().subStyle, ...patch } });
+  const slider = (label: string, value: number, min: number, max: number, step: number, show: string, f: (v: number) => void) => (
+    <label>{label} · {show}<input type="range" min={min} max={max} step={step} value={value} onChange={(e) => f(Number(e.target.value))} /></label>
+  );
   return (
-    <div className="stack-s sub-editor">
-      <div className="sub-sample"><span style={{ ...subCss(s), fontSize: `${Math.round(22 * s.size / 100)}px` }}>The quick brown fox jumps.</span></div>
-      <label>Size · {s.size}%<input type="range" min={60} max={200} step={5} value={s.size} onChange={(e) => set({ size: Number(e.target.value) })} /></label>
-      <label>Height from the bottom · {s.bottom}%<input type="range" min={2} max={40} step={1} value={s.bottom} onChange={(e) => set({ bottom: Number(e.target.value) })} /></label>
-      <label>Background box · {Math.round(s.background * 100)}%<input type="range" min={0} max={1} step={0.05} value={s.background} onChange={(e) => set({ background: Number(e.target.value) })} /></label>
-      <div className="row">
+    <div className={`stack-s sub-editor ${compact ? "compact" : ""}`}>
+      {!compact && <div className="sub-sample"><span style={{ ...subCss(s), fontSize: `${Math.round(22 * s.size / 100)}px`, maxWidth: "90%" }}>The quick brown fox jumps over the lazy dog.</span></div>}
+      <div className="fields2">
+        {slider("Size", s.size, 60, 200, 5, `${s.size}%`, (v) => set({ size: v }))}
+        {slider("Height from the bottom", s.bottom, 2, 40, 1, `${s.bottom}%`, (v) => set({ bottom: v }))}
+        {slider("Outline thickness", s.stroke, 0, 6, 0.5, `${s.stroke}px`, (v) => set({ stroke: v, shadow: v > 0 && s.shadow === "none" ? "outline" : s.shadow }))}
+        {slider("Widest line", s.maxWidth, 40, 100, 5, `${s.maxWidth}%`, (v) => set({ maxWidth: v }))}
+        {slider("Text opacity", s.textOpacity, 0.3, 1, 0.05, `${Math.round(s.textOpacity * 100)}%`, (v) => set({ textOpacity: v }))}
+        {slider("Box behind the text", s.background, 0, 1, 0.05, `${Math.round(s.background * 100)}%`, (v) => set({ background: v }))}
+        {slider("Letter spacing", s.letterSpacing, -4, 12, 1, `${s.letterSpacing}`, (v) => set({ letterSpacing: v }))}
+        {slider("Line height", s.lineHeight, 1, 1.8, 0.05, s.lineHeight.toFixed(2), (v) => set({ lineHeight: v }))}
+      </div>
+      <div className="fields3">
         <label>Font
           <select value={s.font} onChange={(e) => set({ font: e.target.value as SubStyle["font"] })}>
             <option value="sans">Clean (sans)</option><option value="rounded">Rounded</option><option value="serif">Classic (serif)</option><option value="mono">Typewriter</option>
@@ -783,14 +870,21 @@ export function SubStyleEditor() {
             <option value="outline">Outline</option><option value="soft">Drop shadow</option><option value="none">None</option>
           </select>
         </label>
-      </div>
-      <div className="row">
         <label>Colour
           <select value={s.color} onChange={(e) => set({ color: e.target.value })}>
-            <option value="#ffffff">White</option><option value="#fff6a8">Yellow</option><option value="#cfe9ff">Light blue</option><option value="#d9d9d9">Grey</option>
+            <option value="#ffffff">White</option><option value="#fff6a8">Yellow</option><option value="#cfe9ff">Light blue</option><option value="#d9d9d9">Grey</option><option value="#b9f5c8">Light green</option>
           </select>
         </label>
-        <label className="check small" style={{ alignSelf: "flex-end", height: 40 }}><input type="checkbox" checked={s.bold} onChange={(e) => set({ bold: e.target.checked })} />Bold</label>
+        <label>Box colour
+          <select value={s.boxColor} onChange={(e) => set({ boxColor: e.target.value })}>
+            <option value="#000000">Black</option><option value="#1c1f26">Dark grey</option><option value="#0b1d3a">Navy</option>
+          </select>
+        </label>
+      </div>
+      <div className="row">
+        <label className="check small"><input type="checkbox" checked={s.bold} onChange={(e) => set({ bold: e.target.checked })} />Bold</label>
+        <label className="check small"><input type="checkbox" checked={s.italic} onChange={(e) => set({ italic: e.target.checked })} />Italic</label>
+        <button className="link small" onClick={() => set(DEFAULT_PREFS.subStyle)}>Back to the standard look</button>
       </div>
     </div>
   );

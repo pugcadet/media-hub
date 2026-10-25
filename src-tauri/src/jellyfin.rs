@@ -139,7 +139,7 @@ impl RawItem {
         let matched = self
             .provider_ids
             .as_ref()
-            .map(|p| ["Tmdb", "Tvdb", "Imdb"].iter().any(|k| p.get(*k).map(|v| !v.is_empty()).unwrap_or(false)))
+            .map(|p| ["Tmdb", "Tvdb"].iter().any(|k| p.get(*k).map(|v| !v.is_empty()).unwrap_or(false)))
             .unwrap_or(false);
         let is_series = kind == "series";
         Some(NewItem {
@@ -215,7 +215,7 @@ impl Client {
         match resp.status().as_u16() {
             200..=299 => Ok(resp),
             401 | 403 => Err(Error::Unauthorized),
-            404 => Err(Error::msg("Jellyfin does not know this item (it may have been removed).")),
+            404 => Err(Error::msg("This title is no longer in Jellyfin (removed, or renamed and found again under a new id). Scan the library to update Media Hub's list.")),
             s => {
                 // Jellyfin usually says why in the body; show a short, single-line version.
                 let body = resp.text().await.unwrap_or_default();
@@ -629,7 +629,8 @@ impl Client {
         if !valid_item_id(item_id) {
             return Err(Error::msg("bad id"));
         }
-        let body = serde_json::json!({ "PlaybackPositionTicks": (seconds * TICKS_PER_SECOND) as i64 });
+        let now = chrono_now();
+        let body = serde_json::json!({ "PlaybackPositionTicks": (seconds * TICKS_PER_SECOND) as i64, "LastPlayedDate": now, "Played": false });
         let req = self.http.post(self.url(&format!("/UserItems/{item_id}/UserData"))).query(&[("userId", user.as_str())]).json(&body);
         if self.send(req).await.is_ok() {
             return Ok(());
@@ -689,6 +690,25 @@ impl Client {
         let v: serde_json::Value = self.get_json(&format!("/MediaSegments/{id}"), &[]).await?;
         Ok(v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default())
     }
+}
+
+/// The current time as Jellyfin writes dates ("2026-10-25T12:00:00.000Z").
+fn chrono_now() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // Civil date from days since 1970 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z", rem / 3600, (rem % 3600) / 60, rem % 60)
 }
 
 /// The only type that can change anything in Jellyfin.
@@ -1089,6 +1109,16 @@ pub fn apply_edits(item: &mut serde_json::Value, e: &ItemEdits) -> Result<()> {
         obj.insert("PreferredMetadataLanguage".into(), json!(v));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod date_tests {
+    #[test]
+    fn dates_look_right() {
+        let d = super::chrono_now();
+        assert_eq!(d.len(), 24);
+        assert!(d.starts_with("20") && d.ends_with(".000Z") && &d[10..11] == "T");
+    }
 }
 
 #[cfg(test)]

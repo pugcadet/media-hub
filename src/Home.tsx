@@ -5,6 +5,7 @@ import { nav } from "./nav";
 import { CardTile, Icon, itemMenu, openMenu, playTitle, Row, scanLibrary, SettingsLink } from "./ui";
 import { prefs, setPrefs, usePrefs } from "./prefs";
 import { syncPicks } from "./scheduler";
+import { getPicks, PicksEditor } from "./Picks";
 import { askConfirm } from "./confirm";
 
 export function itemToCard(i: Item): Card {
@@ -135,7 +136,7 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
 
   useEffect(() => {
     api.homeFeed().then(setFeed).catch((e) => setError(String(e)));
-    api.picks(localDate()).then(setPicks).catch(() => setPicks([]));
+    getPicks(localDate()).then(setPicks).catch(() => setPicks([]));
     api.list("movie", "", "added", 0, 30).then((r) => setMovies(r.map(itemToCard))).catch(() => setMovies([]));
     api.list("series", "", "added", 0, 30).then((r) => setShows(r.map(itemToCard))).catch(() => setShows([]));
     api.list(null, "", "rating", 0, 30).then((r) => setTop(r.map(itemToCard))).catch(() => setTop([]));
@@ -161,6 +162,7 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
     void track("Putting shows back in Watching", () => unhideInJellyfin());
   };
   const syncNow = () => void syncPicks();
+  const [editing, setEditing] = useState(false);
 
   return (
     <div className={`pg home ${variant}`}>
@@ -193,6 +195,7 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
             <h2>Picks of the day</h2>
             <div className="row end">
               <span className="muted small">New ones at midnight · also in Jellyfin as a playlist and collection · <SettingsLink section="picks">where to find them in Infuse</SettingsLink></span>
+              <button className="link small" onClick={() => setEditing(true)}>Edit</button>
               {canEdit && <button className="link small" onClick={syncNow}>Update in Jellyfin now</button>}
             </div>
           </div>
@@ -215,6 +218,7 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
           </div>
         </section>
       )}
+      {editing && <PicksEditor onClose={() => setEditing(false)} />}
       {!feed && !error && <p className="muted">Loading…</p>}
       {feed && !hero && !resume.length && !movies.length && !shows.length && (
         <p className="muted">Nothing here yet. Scan the library or add a show.</p>
@@ -224,7 +228,7 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
 }
 
 /** First-run checklist: the few things that make everything else work. Closes for good. */
-function SetupChecklist({ status }: { status: Status }) {
+export function SetupChecklist({ status }: { status: Status }) {
   const p = usePrefs();
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
   const [inbox, setInbox] = useState<string | null>(null);

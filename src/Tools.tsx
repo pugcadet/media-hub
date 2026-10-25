@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, AutoResult, codesFor, cultures, Culture, errorText, imageUrl, Item, JfChild, languageName, Status } from "./api";
+import { api, AutoResult, codesFor, cultures, Culture, errorText, ExtraSub, imageUrl, Item, JfChild, languageName, Status } from "./api";
 import type { Route } from "./App";
-import { track, useEpoch } from "./activity";
+import { followEvent, track, useEpoch } from "./activity";
+import { askConfirm } from "./confirm";
 import { prefs, setPrefs, subSkipped, usePrefs } from "./prefs";
-import { itemMenu, openMenu, SettingsLink } from "./ui";
+import { BulkSelect, itemMenu, openMenu, SettingsLink, TriCheck, useUndoableSet } from "./ui";
 
 /** Metadata and art: titles that need a match or a poster. */
 export function MetadataTool({ onOpen, onRoute }: { onOpen: (id: string) => void; onRoute: (r: Route) => void }) {
@@ -146,6 +147,93 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
         ))}
         {items.length === 0 && !error && <p className="muted small">Every video has subtitles.</p>}
       </div>
+    </div>
+  );
+}
+
+/** Extra subtitles: subtitle files in languages you never use, removed in one go (to the trash, undoable). */
+export function SubtitleCleanup({ status }: { status: Status }) {
+  const p = usePrefs();
+  const [list, setList] = useState<Culture[]>([]);
+  const [rows, setRows] = useState<ExtraSub[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const sel = useUndoableSet<string>();
+  const key = (r: ExtraSub) => `${r.id}|${r.path}`;
+  useEffect(() => void cultures().then(setList).catch(() => setList([])), []);
+
+  async function scan() {
+    setError(null);
+    try {
+      const r = await track("Looking for subtitles in other languages", async (job) => {
+        const un = await followEvent(job, "bulk-progress");
+        try { return await api.extraSubtitles(p.keepSubLangs); } finally { un(); }
+      }, { reload: false, cancellable: true });
+      setRows(r);
+      sel.reset(r.map(key));
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  async function remove() {
+    const files = (rows ?? []).filter((r) => sel.has(key(r))).map((r) => ({ id: r.id, path: r.path }));
+    if (!files.length) return;
+    if (!(await askConfirm(`Move ${files.length} subtitle file${files.length === 1 ? "" : "s"} to the trash folder in your library? Nothing is deleted; History can put them back.`, { okLabel: "Remove" }))) return;
+    try {
+      await track(`Removing ${files.length} subtitle files`, async (job) => {
+        const un = await followEvent(job, "bulk-progress");
+        try { job.update(`${await api.removeSubtitleFiles(files)} removed`, 1); } finally { un(); }
+      }, { stop: "bulk" });
+      setRows((r) => r?.filter((x) => !sel.has(key(x))) ?? null);
+      sel.reset();
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  const toggleKeep = (l: string) => setPrefs({ keepSubLangs: p.keepSubLangs.includes(l) ? p.keepSubLangs.filter((x) => x !== l) : [...p.keepSubLangs, l] });
+  const name = (c: string) => languageName(c, list);
+  const byLang = new Map<string, ExtraSub[]>();
+  for (const r of rows ?? []) byLang.set(r.language || "?", [...(byLang.get(r.language || "?") ?? []), r]);
+
+  return (
+    <div className="stack">
+      <section className="card form">
+        <div className="strong">Languages to keep</div>
+        <div className="chips">
+          {[...new Set([...p.keepSubLangs, ...status.subLangs, "eng", "dut"])].map((l) => (
+            <label key={l} className={`chip ${p.keepSubLangs.includes(l) ? "on" : ""}`}><input type="checkbox" checked={p.keepSubLangs.includes(l)} onChange={() => toggleKeep(l)} /> {name(l)}</label>
+          ))}
+        </div>
+        <p className="muted small">Subtitle files in every other language can go. Subtitles built into the video file stay (they can't be taken out without changing the video), and files without a language tag are left alone.</p>
+        <div className="row"><button className="primary" onClick={() => void scan()}>Find subtitles in other languages</button></div>
+        {error && <p className="error">{error}</p>}
+      </section>
+      {rows && (
+        <section className="card list-card">
+          <div className="section-head pad">
+            <h2>{rows.length ? `${rows.length} subtitle files in other languages` : "No subtitle files in other languages"}</h2>
+            {rows.length > 0 && (
+              <div className="row end">
+                <BulkSelect sel={sel} keys={rows.map(key)} noun="files" />
+                <button className="danger-outline" disabled={!sel.size || status.readOnly} onClick={() => void remove()}>Remove {sel.size || ""}</button>
+              </div>
+            )}
+          </div>
+          {[...byLang.entries()].sort((a, b) => b[1].length - a[1].length).map(([lang, list]) => (
+            <div key={lang}>
+              <div className="change-group">
+                <TriCheck state={sel.state(list.map(key))} onChange={(on) => sel.setMany(list.map(key), on)} />
+                <span className="strong small">{name(lang)}</span><span className="muted small">{list.length} files</span>
+              </div>
+              {list.slice(0, 300).map((r) => (
+                <label key={key(r)} className="tool-row">
+                  <input type="checkbox" checked={sel.has(key(r))} onChange={() => sel.toggle(key(r))} />
+                  <div className="names"><div className="title">{r.name}</div><div className="muted small mono ellipsis">{r.path.split(/[\\/]/).pop()}</div></div>
+                </label>
+              ))}
+            </div>
+          ))}
+        </section>
+      )}
     </div>
   );
 }

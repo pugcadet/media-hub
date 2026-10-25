@@ -2,6 +2,7 @@
 // "Picks of the day" collection, fill in missing artwork and fetch missing subtitles.
 import { api, localDate, Status } from "./api";
 import { track } from "./activity";
+import { getPicks } from "./Picks";
 import { scanLibrary } from "./ui";
 import { prefs, setPrefs, subPlan, subSkipped } from "./prefs";
 
@@ -75,7 +76,7 @@ export async function runDaily(status: Status, force = false): Promise<void> {
  */
 export async function syncPicks(today: string = localDate()): Promise<void> {
   await track("“Picks of the day” in Jellyfin", async (job) => {
-    const picks = await api.picks(today);
+    const picks = await getPicks(today);
     if (!picks.length) return;
     const ids = picks.map((x) => x.id);
     await api.syncPicksCollection(ids).catch(() => undefined);

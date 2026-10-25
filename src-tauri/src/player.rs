@@ -101,8 +101,9 @@ fn device_profile() -> Value {
             "VideoCodec": video,
             "Context": "Streaming",
             "MaxAudioChannels": "2",
-            "BreakOnNonKeyFrames": true,
-            "MinSegments": 1
+            // Cutting only on keyframes keeps copied video smooth (no stutter at segment edges).
+            "BreakOnNonKeyFrames": false,
+            "MinSegments": 2
         }],
         "SubtitleProfiles": [
             {"Format": "vtt", "Method": "External"},
@@ -479,10 +480,17 @@ pub async fn play_progress(state: State<'_, AppState>, token: String, position: 
     let Some(item) = item else { return Ok(()) };
     let c = state.reader().await?;
     if finished {
-        c.mark_played(&item).await
-    } else {
-        c.save_position(&item, position.max(0.0)).await
+        return c.mark_played(&item).await;
     }
+    c.save_position(&item, position.max(0.0)).await?;
+    // Read it back: if Jellyfin didn't keep it, say so (shown in the Problems log).
+    if position > 30.0 {
+        let saved = c.item_json(&item).await.ok().and_then(|v| v.pointer("/UserData/PlaybackPositionTicks").and_then(Value::as_f64)).unwrap_or(0.0) / TICKS_PER_SECOND;
+        if (saved - position).abs() > 60.0 {
+            return Err(Error::msg(format!("Jellyfin didn't keep the position (it has {saved:.0} s, sent {position:.0} s). Check that the chosen user in Settings → Jellyfin is the one Infuse uses.")));
+        }
+    }
+    Ok(())
 }
 
 /// Ends the stream so Jellyfin stops converting.
@@ -502,6 +510,21 @@ fn plain(status: u16) -> Response<Vec<u8>> {
 async fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<Vec<u8>>> {
     let uri = request.uri();
     let path = uri.path();
+    // Songs and covers from your music folder (no Jellyfin involved).
+    if path.starts_with("/lf/") || path.starts_with("/lc/") {
+        let (app2, p) = (app.clone(), path.to_string());
+        let (bytes, ct) = tauri::async_runtime::spawn_blocking(move || crate::localmusic::serve(&app2, &p))
+            .await
+            .map_err(|e| Error::msg(e.to_string()))?
+            .ok_or_else(|| Error::msg("not found"))?;
+        return Response::builder()
+            .status(200)
+            .header("Content-Type", ct)
+            .header("Cache-Control", "private, max-age=3600")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(bytes)
+            .map_err(|e| Error::msg(e.to_string()));
+    }
     let rest = path.strip_prefix("/s/").ok_or_else(|| Error::msg("bad path"))?;
     let (tok, file) = rest.split_once('/').ok_or_else(|| Error::msg("bad path"))?;
     // Only plain relative names: no "..", no encoded characters that a server could decode into "..".

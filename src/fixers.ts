@@ -3,7 +3,7 @@
 // is journaled by the backend, so it can be undone in History.
 import { api, CheckRow, HealthRow, ImageKind, scanAround } from "./api";
 import type { JobHandle } from "./activity";
-import { subPlan, subSkipped, withShowYear, yearOptional } from "./prefs";
+import { prefs, subPlan, subSkipped, withShowYear, yearOptional } from "./prefs";
 
 export type FixKind = "art" | "subs" | "rename";
 
@@ -27,13 +27,32 @@ export const CORE_ART: { key: "poster" | "backdrop" | "logo"; kind: ImageKind; l
   { key: "logo", kind: "Logo", label: "logo" },
 ];
 
+/** Pictures you said can't be found for this title (they don't count as missing). */
+export function artSkipped(id: string): string[] {
+  return prefs().artSkipped[id] ?? [];
+}
+
+/** Videos without subtitles, unless the title sits in a folder you don't want subtitles for. */
+export function noSubsOf(r: HealthRow): number {
+  return r.path && subSkipped(r.path) ? 0 : r.noSubs;
+}
+
 export function targetOf(r: HealthRow, check: CheckRow | null, extraArt = false): FixTarget {
-  const missingArt = CORE_ART.filter((a) => !r[a.key]).map((a) => a.kind);
-  if (extraArt) {
-    if (!r.thumb) missingArt.push("Thumb");
-    if (!r.banner) missingArt.push("Banner");
-  }
-  return { id: r.id, name: r.name, kind: r.kind, identified: r.identified, missingArt, noSubs: r.noSubs, check };
+  const skip = artSkipped(r.id);
+  const missingArt = CORE_ART.filter((a) => !r[a.key] && !skip.includes(a.kind)).map((a) => a.kind);
+  if (extraArt && !r.thumb && !skip.includes("Thumb")) missingArt.push("Thumb");
+  return { id: r.id, name: r.name, kind: r.kind, identified: r.identified, missingArt, noSubs: noSubsOf(r), check };
+}
+
+/** In words, what the safe fixes will do for one title ("poster, logo · subtitles · 52 files renamed"). */
+export function describeFixes(t: FixTarget, what: FixKind[]): string[] {
+  const out: string[] = [];
+  const names: Record<string, string> = { Primary: "poster", Backdrop: "background", Logo: "logo", Thumb: "thumbnail", Banner: "banner" };
+  if (what.includes("art") && t.identified && t.missingArt.length) out.push(`look for ${t.missingArt.map((k) => names[k] ?? k).join(", ")}`);
+  if (what.includes("art") && !t.identified && t.missingArt.length) out.push("artwork skipped: identify it first");
+  if (what.includes("subs") && t.noSubs > 0) out.push(t.kind === "series" ? `subtitles for ${t.noSubs} episode${t.noSubs === 1 ? "" : "s"}` : "subtitles");
+  if (what.includes("rename") && t.check?.sure) out.push(`rename ${t.check.toRename + t.check.folders} file${t.check.toRename + t.check.folders === 1 ? "" : "s"} and folders`);
+  return out;
 }
 
 /** True when the names need changing (and the check knows it). */

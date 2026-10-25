@@ -23,6 +23,8 @@ export default function Duplicates({ status }: { status: Status }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const canEdit = !status.readOnly;
+  const real = groups?.filter((g) => g.kind !== "mixed") ?? null;
+  const mixed = groups?.filter((g) => g.kind === "mixed") ?? [];
 
   async function find() {
     setBusy(true);
@@ -38,8 +40,12 @@ export default function Duplicates({ status }: { status: Status }) {
 
   async function trash(items: DupItem[], label: string) {
     if (!(await askConfirm(`Move ${items.length} file${items.length === 1 ? "" : "s"} (with their subtitles) to the trash folder in your library? Nothing is deleted; you can undo it in History.`, { okLabel: "Move to trash", danger: true }))) return;
-    await track(label, async () => {
+    await track(label, async (job) => {
       for (const d of items) await api.trashItemFile(d.id);
+      // Let Jellyfin notice, then update Media Hub's own list so the titles disappear everywhere.
+      job.update("Updating the library", null);
+      await new Promise((r) => window.setTimeout(r, 4000));
+      await api.sync().catch(() => undefined);
     });
     setGroups((g) => g?.map((x) => ({ ...x, items: x.items.filter((i) => !items.includes(i)) })).filter((x) => x.items.length > 1) ?? null);
   }
@@ -59,14 +65,36 @@ export default function Duplicates({ status }: { status: Status }) {
         <div className="pg-actions"><button className="primary" disabled={busy} onClick={() => void find()}>{groups ? "Look again" : "Find duplicates"}</button></div>
       </div>
       {error && <p className="error">{error}</p>}
-      {groups && groups.length === 0 && <p className="ok strong">No duplicates.</p>}
-      {groups && groups.length > 0 && (
+      {real && real.length === 0 && <p className="ok strong">No duplicates.</p>}
+      {real && real.length > 0 && (
         <div className="row">
-          <span className="muted small">{groups.length} titles have more than one copy · {size(groups.reduce((n, g) => n + g.items.filter((i) => !i.best).reduce((m, i) => m + i.size, 0), 0))} in extra copies.</span>
-          <button className="danger-outline" disabled={!canEdit} onClick={() => void trash(groups.flatMap((g) => g.items.filter((i) => !i.best)), "Keeping the best copies")}>Keep the best of every title</button>
+          <span className="muted small">{real.length} titles have more than one copy · {size(real.reduce((n, g) => n + g.items.filter((i) => !i.best).reduce((m, i) => m + i.size, 0), 0))} in extra copies.</span>
+          <button className="danger-outline" disabled={!canEdit} onClick={() => void trash(real.flatMap((g) => g.items.filter((i) => !i.best)), "Keeping the best copies")}>Keep the best of every title</button>
         </div>
       )}
-      {(groups ?? []).map((g) => (
+      {mixed.length > 0 && (
+        <section className="card form">
+          <div className="section-head">
+            <div>
+              <h2>Two shows mixed up ({mixed.length})</h2>
+              <div className="muted small">Different episodes with the same number in one show, like “Planet Earth” and “Planet Earth III”. Not duplicates: Jellyfin has put two shows together. Give each show its own folder (with the year), or identify them separately.</div>
+            </div>
+          </div>
+          {mixed.map((g) => (
+            <div key={g.title + g.items[0]?.id} className="dup-row">
+              <div className="names">
+                <div className="strong small">{g.title}</div>
+                {g.items.map((d) => <div key={d.id} className="mono small ellipsis muted" title={d.path}>{d.name} · {fileName(d.path)}</div>)}
+              </div>
+              <div className="row end">
+                <button className="icon-btn" title="Show in Finder" onClick={() => void api.revealItem(g.items[0].id).catch(() => undefined)}><Icon name="folder" /></button>
+                <button onClick={() => nav.open(g.items[0].id)}>Open</button>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+      {(real ?? []).map((g) => (
         <section key={g.title + g.items[0]?.id} className="card form">
           <div className="section-head">
             <h2>{g.title}</h2>

@@ -13,17 +13,13 @@ interface Props {
   onRoute: (r: Route) => void;
 }
 
-const TOOLS: { view: View; label: string; icon: IconName }[] = [
+const TOOLS: { view: View; label: string; icon: IconName; also?: View[] }[] = [
   { view: "health", label: "Library health", icon: "check" },
-  { view: "add", label: "Add show or movie", icon: "inbox" },
-  { view: "renamer", label: "Renamer", icon: "rename" },
   { view: "metadata", label: "Metadata and art", icon: "image" },
   { view: "subtitles", label: "Subtitles", icon: "subtitles" },
   { view: "intros", label: "Intros and credits", icon: "skip" },
-  { view: "missing", label: "Missing episodes", icon: "missing" },
-  { view: "duplicates", label: "Duplicates", icon: "copy" },
-  { view: "tags", label: "Genres and tags", icon: "tag" },
-  { view: "storage", label: "Storage", icon: "disk" },
+  { view: "renamer", label: "Renamer", icon: "rename" },
+  { view: "cleanup", label: "Clean-up", icon: "wand", also: ["missing", "duplicates", "tags", "storage"] },
   // Downloads is parked for now (code kept, hidden from the menu).
 ];
 
@@ -112,9 +108,9 @@ export default function Sidebar({ status, libraries, attention, route, onRoute }
         </button>
       ))}
       <button className={`sb-item ${route.view === "collections" ? "on" : ""}`} onClick={() => onRoute({ view: "collections" })}><span><Icon name="stack" />Collections</span></button>
-      <div className="sb-head">Tools</div>
+      <div className="sb-head">Fix</div>
       {TOOLS.map((t) => (
-        <button key={t.view} className={`sb-item ${route.view === t.view ? "on" : ""}`} onClick={() => onRoute({ view: t.view })}>
+        <button key={t.view} className={`sb-item ${route.view === t.view || t.also?.includes(route.view) ? "on" : ""}`} onClick={() => onRoute({ view: t.view })}>
           <span><Icon name={t.icon} />{t.label}</span>
           <span className="sb-badge">{badge(t.view)}</span>
         </button>
@@ -122,6 +118,10 @@ export default function Sidebar({ status, libraries, attention, route, onRoute }
       <button className={`sb-item ${route.view === "history" ? "on" : ""}`} onClick={() => onRoute({ view: "history" })}><span><Icon name="history" />History and undo</span></button>
       <div className="spacer" />
       <UpdateBadge />
+      <button className={`sb-item ${route.view === "add" ? "on" : ""}`} onClick={() => onRoute({ view: "add" })}>
+        <span><Icon name="plus" />Add show or movie</span>
+        <span className="sb-badge">{badge("add")}</span>
+      </button>
       <button className={`sb-item ${route.view === "settings" ? "on" : ""}`} onClick={() => onRoute({ view: "settings" })}>
         <span><Icon name="settings" />Settings</span>
         <span className="sb-badge">{status.readOnly ? "read-only" : ""}</span>

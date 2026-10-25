@@ -400,7 +400,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
               <span className="mono small muted">{c.from ? fmt(c.from.start) : "none"} <span className="accent">→ {c.to ? `${fmt(c.to.start)}–${fmt(c.to.end)}` : "removed"}</span></span>
             </div>
           ))}
-          {changes.length > 0 && <button className="link small" onClick={() => void load()}>Discard all changes</button>}
+          {changes.length > 0 && <button className="link small" onClick={() => void load()}>Go back to what's in Jellyfin</button>}
           <p className="muted small">Every saved change goes into the undo list, so you can put it back.</p>
         </div>
 
@@ -427,7 +427,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
             <span><span className="key recap" />Recap</span>
             <span><span className="key credits" />Credits</span>
             <span><span className="key wrong" />Looks wrong</span>
-            <span><span className="key saved" />Saved</span>
+            <span title="The dashed outline is what Jellyfin (and Infuse) have right now. Coloured bars are your version; Save sends it."><span className="key saved" />In Jellyfin now</span>
           </div>
         </div>
         {progress && <p className="muted small">{progress}. This reads the start and end of each episode from your NAS.</p>}
@@ -564,7 +564,7 @@ function SegPreview({ ep, draft, parts, onSet }: { ep: SegEpisode; draft: Draft;
       if (cancelled) { void api.playStop(p.token).catch(() => undefined); return; }
       const v = video.current!;
       if (Hls.isSupported()) {
-        hls = new Hls({ enableWorker: false, startPosition: Math.max(0, startAt - 5) });
+        hls = new Hls({ enableWorker: true, maxBufferLength: 60, startPosition: Math.max(0, startAt - 5) });
         hls.on(Hls.Events.ERROR, (_e, data) => data.fatal && setError(`Preview stopped (${data.details}).`));
         hls.loadSource(p.url);
         hls.attachMedia(v);

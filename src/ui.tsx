@@ -4,6 +4,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalSto
 import { Alert, api, Card, errorText, imageUrl } from "./api";
 import { dismiss, followEvent, isStopped, reloadAll, track, useEpoch, useJobs } from "./activity";
 import { nav } from "./nav";
+import { setPrefs as setPrefsLite, usePrefs as usePrefsLite } from "./prefs";
 
 /* ------------------------------------------------------------------ store */
 
@@ -620,5 +621,105 @@ export function BulkSelect<K>({ sel, keys, noun = "" }: { sel: ReturnType<typeof
       <button className="link small" disabled={picked === 0} onClick={() => sel.setMany(keys, false)}>None</button>
       {sel.canUndo && <button className="link small" onClick={sel.undo} title="Undo the last bulk change"><Icon name="undo" size={12} /> Undo</button>}
     </span>
+  );
+}
+
+/* ------------------------------------------------------------- tabs */
+
+export interface TabDef {
+  id: string;
+  label: ReactNode;
+  count?: number | string;
+}
+
+/**
+ * A row of tabs. With `screen` set, tabs can be closed (×) and brought back (+); what you
+ * closed is remembered per screen.
+ */
+export function Tabs({ tabs, active, onChange, screen, fixed = [] }: { tabs: TabDef[]; active: string; onChange: (id: string) => void; screen?: string; fixed?: string[] }) {
+  const { hiddenTabs } = usePrefsLite();
+  const hidden = screen ? hiddenTabs[screen] ?? [] : [];
+  const shown = tabs.filter((t) => !hidden.includes(t.id) || fixed.includes(t.id));
+  const closed = tabs.filter((t) => hidden.includes(t.id) && !fixed.includes(t.id));
+  const [adding, setAdding] = useState(false);
+  const hide = (id: string) => {
+    if (!screen) return;
+    setPrefsLite((p) => ({ hiddenTabs: { ...p.hiddenTabs, [screen]: [...new Set([...(p.hiddenTabs[screen] ?? []), id])] } }));
+    if (active === id) onChange(shown.find((t) => t.id !== id)?.id ?? fixed[0] ?? "");
+  };
+  const show = (id: string) => {
+    if (!screen) return;
+    setPrefsLite((p) => ({ hiddenTabs: { ...p.hiddenTabs, [screen]: (p.hiddenTabs[screen] ?? []).filter((x) => x !== id) } }));
+    setAdding(false);
+    onChange(id);
+  };
+  return (
+    <div className="tabs ui-tabs">
+      {shown.map((t) => (
+        <span key={t.id} className={`ui-tab ${active === t.id ? "on" : ""}`}>
+          <button onClick={() => onChange(t.id)}>{t.label}{t.count != null && t.count !== "" && <span className="tab-count">{t.count}</span>}</button>
+          {screen && !fixed.includes(t.id) && <button className="tab-x" onClick={() => hide(t.id)} aria-label="Hide this tab" title="Hide this tab"><Icon name="x" size={11} /></button>}
+        </span>
+      ))}
+      {screen && closed.length > 0 && (
+        <span className="tab-add">
+          <button className="tab-plus" onClick={() => setAdding(!adding)} title="Show a hidden tab" aria-label="Show a hidden tab"><Icon name="plus" size={14} /></button>
+          {adding && (
+            <span className="tab-menu">
+              {closed.map((t) => <button key={t.id} onClick={() => show(t.id)}>{t.label}</button>)}
+            </span>
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------- check menu */
+
+/**
+ * A compact dropdown of checkboxes ("Folders: TV, Kids ▾"). The box on the button is
+ * striped when only some are ticked; All / None / Undo inside.
+ */
+export function CheckMenu({ label, options, sel, allLabel = "All" }: {
+  label: string;
+  options: { id: string; label: ReactNode; count?: number }[];
+  sel: ReturnType<typeof useUndoableSet<string>>;
+  allLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    window.addEventListener("mousedown", close);
+    return () => window.removeEventListener("mousedown", close);
+  }, [open]);
+  const ids = options.map((o) => o.id);
+  const on = options.filter((o) => sel.has(o.id));
+  const summary = on.length === options.length ? allLabel : on.length === 0 ? "None" : on.length <= 2 ? on.map((o) => o.label).join(", ") : `${on.length} of ${options.length}`;
+  return (
+    <div className="scope" ref={ref}>
+      <button className={`scope-btn ${open ? "on" : ""}`} onClick={() => setOpen(!open)}>
+        <TriCheck state={sel.state(ids)} onChange={(v) => sel.setMany(ids, v)} />
+        <span className="muted small">{label}</span>
+        <span className="ellipsis">{summary}</span>
+        <span className={`chev down ${open ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
+      </button>
+      {open && (
+        <div className="scope-pop">
+          <div className="scope-head"><BulkSelect sel={sel} keys={ids} /></div>
+          <div className="scope-list">
+            {options.map((o) => (
+              <label key={o.id} className="scope-row">
+                <input type="checkbox" checked={sel.has(o.id)} onChange={() => sel.toggle(o.id)} />
+                <span className="grow ellipsis">{o.label}</span>
+                {o.count != null && <span className="muted small">{o.count}</span>}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

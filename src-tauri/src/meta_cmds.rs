@@ -69,7 +69,7 @@ pub(crate) fn sync_row(state: &AppState, id: &str, item: &Value) -> Result<()> {
     let matched = item
         .get("ProviderIds")
         .and_then(Value::as_object)
-        .map(|p| ["Tmdb", "Tvdb", "Imdb"].iter().any(|k| p.get(*k).and_then(Value::as_str).map(|v| !v.is_empty()).unwrap_or(false)))
+        .map(|p| ["Tmdb", "Tvdb"].iter().any(|k| p.get(*k).and_then(Value::as_str).map(|v| !v.is_empty()).unwrap_or(false)))
         .unwrap_or(false);
     let has_poster = item.get("ImageTags").and_then(|t| t.get("Primary")).is_some();
     store.patch_flags(id, matched, has_poster)
@@ -170,6 +170,8 @@ pub async fn identify_apply(state: State<'_, AppState>, id: String, result: Valu
 
 /// After a picture you chose by hand: lock the title so Jellyfin keeps it (Settings).
 pub(crate) async fn lock_after_edit(state: &AppState, w: &crate::jellyfin::Writer, id: &str) {
+    // The picture changed: don't show the old one from this computer's cache.
+    crate::images::forget(&state.dir, id);
     if !state.settings().map(|s| s.lock_edits).unwrap_or(false) {
         return;
     }
@@ -400,6 +402,9 @@ pub async fn fill_missing_art(state: State<'_, AppState>, id: String, kinds: Vec
     }
     if !added.is_empty() {
         resync(&state, &id).await;
+    }
+    if !added.is_empty() {
+        crate::images::forget(&state.dir, &id);
     }
     Ok(added)
 }

@@ -29,6 +29,16 @@ pub struct MusicItem {
     has_art: bool,
     count: Option<i64>,
     favorite: bool,
+    /// Picture address for songs from a music folder (Jellyfin items use `art_id`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    art_url: Option<String>,
+}
+
+impl MusicItem {
+    #[allow(clippy::too_many_arguments)]
+    pub fn local(id: String, kind: &'static str, name: String, artist: String, album: String, album_id: Option<String>, year: Option<i64>, index: Option<i64>, disc: Option<i64>, art_url: Option<String>, count: Option<i64>) -> Self {
+        MusicItem { id, kind, name, artist, album, album_id, year, index, disc, duration: 0.0, art_id: String::new(), has_art: art_url.is_some(), count, favorite: false, art_url }
+    }
 }
 
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {
@@ -76,6 +86,7 @@ pub fn to_item(v: &Value) -> Option<MusicItem> {
         art_id,
         count: v.get("ChildCount").and_then(Value::as_i64).or_else(|| v.get("SongCount").and_then(Value::as_i64)),
         favorite: v.pointer("/UserData/IsFavorite").and_then(Value::as_bool).unwrap_or(false),
+        art_url: None,
         id,
     })
 }
@@ -84,8 +95,12 @@ pub fn to_item(v: &Value) -> Option<MusicItem> {
 /// "recent" | "favorites" | "search".
 #[tauri::command]
 pub async fn music_list(state: State<'_, AppState>, view: String, parent: Option<String>, query: Option<String>, start: u64, limit: u64) -> Result<Vec<MusicItem>> {
-    let c = state.reader().await?;
     let query = query.unwrap_or_default().chars().take(100).collect::<String>();
+    let settings = state.settings()?;
+    if settings.music_from_folder && settings.music_dir.is_some() {
+        return crate::localmusic::list(&state, &view, parent.as_deref(), &query, start, limit);
+    }
+    let c = state.reader().await?;
     if view == "artists" {
         let v = c.album_artists(&query, start, limit).await?;
         return Ok(v.get("Items").and_then(Value::as_array).into_iter().flatten().filter_map(to_item).collect());
@@ -142,6 +157,9 @@ pub async fn music_list(state: State<'_, AppState>, view: String, parent: Option
 /// Starts a song: returns a private address that delivers it as MP3.
 #[tauri::command]
 pub async fn music_play(state: State<'_, AppState>, id: String) -> Result<String> {
+    if id.starts_with('L') {
+        return crate::localmusic::play_url(&id);
+    }
     if !valid_item_id(&id) {
         return Err(Error::msg("bad id"));
     }

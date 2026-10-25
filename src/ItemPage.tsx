@@ -10,18 +10,19 @@ import Renamer from "./Renamer";
 import { askConfirm } from "./confirm";
 import { track, useEpoch } from "./activity";
 import { nav, type View } from "./nav";
-import { Icon, itemMenu, openMenu, playTitle, Row, showPicture, SettingsLink } from "./ui";
-import { usePrefs } from "./prefs";
-import { CORE_ART, fixTitles, FixTarget, namesToFix, safeFixes } from "./fixers";
+import { Icon, itemMenu, openMenu, playTitle, Row, scanLibrary, showPicture, SettingsLink } from "./ui";
+import { setPrefs, subSkipped, usePrefs } from "./prefs";
+import { artSkipped, CORE_ART, fixTitles, FixTarget, namesToFix, noSubsOf, safeFixes } from "./fixers";
+import { askFixes } from "./FixDialog";
 
 export const ART_KINDS: { kind: ImageKind; label: string; wide: boolean; hint: string }[] = [
   { kind: "Primary", label: "Poster", wide: false, hint: "The main picture in every app." },
   { kind: "Backdrop", label: "Backdrop", wide: true, hint: "Big picture behind the title. A title can have several; the first is the main one." },
   { kind: "Logo", label: "Logo", wide: true, hint: "The title as artwork, shown over the backdrop (Infuse uses it a lot)." },
   { kind: "Thumb", label: "Thumbnail", wide: true, hint: "Landscape picture used for rows like “Continue watching”." },
-  { kind: "Banner", label: "Banner", wide: true, hint: "Wide strip. Mostly from TheTVDB or Fanart.tv." },
-  { kind: "Art", label: "Clear art", wide: true, hint: "Characters with a see-through background (Fanart.tv)." },
-  { kind: "Disc", label: "Disc", wide: false, hint: "Disc picture (Fanart.tv, movies)." },
+  { kind: "Banner", label: "Banner", wide: true, hint: "Optional: Infuse and Media Hub don't show banners. Some other Jellyfin apps do." },
+  { kind: "Art", label: "Clear art", wide: true, hint: "Optional: not shown by Infuse or Media Hub." },
+  { kind: "Disc", label: "Disc", wide: false, hint: "Optional: not shown anywhere you use." },
 ];
 
 const ACTION_LABEL: Record<string, string> = {
@@ -147,7 +148,12 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
     return (
       <div className="pg">
         <div className="item-top"><button onClick={onBack}>← Back</button></div>
-        {message ? <p className="error">{message.text}</p> : <p className="muted">Loading…</p>}
+        {message ? (
+          <div className="stack-s">
+            <p className="error">{message.text}</p>
+            {/no longer in Jellyfin/.test(message.text) && <div className="row"><button className="primary" onClick={() => void scanLibrary().then(onBack)}>Scan the library</button><button onClick={onBack}>Back</button></div>}
+          </div>
+        ) : <div className="pg-loading"><span className="spinner" /> Loading…</div>}
       </div>
     );
   }
@@ -369,10 +375,10 @@ function TitleHealth({ d, kind, canEdit, subLangs, onTab }: { d: Details; kind: 
   }, [item.Id, kind, epoch]);
 
   const has = (k: ImageKind) => d.images.some((i) => i.ImageType === k);
-  const identified = ["Tmdb", "Tvdb", "Imdb"].some((k) => !!item.ProviderIds?.[k]);
-  const missingArt = CORE_ART.filter((a) => !has(a.kind));
+  const identified = ["Tmdb", "Tvdb"].some((k) => !!item.ProviderIds?.[k]);
+  const missingArt = CORE_ART.filter((a) => !has(a.kind) && !artSkipped(item.Id.replace(/-/g, "")).includes(a.kind));
   const streams = item.MediaSources?.[0]?.MediaStreams ?? item.MediaStreams ?? [];
-  const noSubs = kind === "movie" ? (streams.some((m) => m.Type === "Subtitle") ? 0 : 1) : row?.noSubs ?? 0;
+  const noSubs = kind === "movie" ? (streams.some((m) => m.Type === "Subtitle") || subSkipped(item.Path) ? 0 : 1) : row ? noSubsOf(row) : 0;
   const firstSeason = d.seasons.find((x) => (x.IndexNumber ?? 0) > 0) ?? d.seasons[0];
   const chips: Chip[] = [
     { ok: identified, label: identified ? "Identified" : "Not identified", go: () => onTab("identify") },
@@ -389,8 +395,10 @@ function TitleHealth({ d, kind, canEdit, subLangs, onTab }: { d: Details; kind: 
   const auto = safeFixes(target);
   const todo = chips.filter((c) => c.ok === false).length;
 
-  function fix() {
-    void track(`Fixing ${target.name}`, (job) => fixTitles([target], auto, subLangs, job).then(() => undefined), { cancellable: true }).catch(() => undefined);
+  async function fix() {
+    const plan = await askFixes(`Fix ${target.name}`, [target], auto);
+    if (!plan) return;
+    void track(`Fixing ${target.name}`, (job) => fixTitles(plan.list, plan.what, subLangs, job).then(() => undefined), { cancellable: true }).catch(() => undefined);
   }
 
   return (
@@ -407,7 +415,7 @@ function TitleHealth({ d, kind, canEdit, subLangs, onTab }: { d: Details; kind: 
           <Icon name="play" size={20} /> {item.UserData?.PlaybackPositionTicks ? "Resume" : "Play"}
         </button>
         {auto.length > 0 && canEdit && (
-          <button className="bb-more" onClick={fix} title={`Does it for you: ${auto.map((a) => (a === "art" ? "artwork" : a === "subs" ? "subtitles" : "100% sure names")).join(", ")}. Can be undone.`}>
+          <button className="bb-more" onClick={() => void fix()} title={`Does it for you: ${auto.map((a) => (a === "art" ? "artwork" : a === "subs" ? "subtitles" : "100% sure names")).join(", ")}. Can be undone.`}>
             <Icon name="wand" size={18} /> Fix {auto.length} thing{auto.length === 1 ? "" : "s"}
           </button>
         )}
@@ -482,7 +490,14 @@ function ArtworkTab({ id, title, images, canEdit, isEpisode }: { id: string; tit
   const [error, setError] = useState<string | null>(null);
   const info = ART_KINDS.find((k) => k.kind === kind)!;
   const have = (k: ImageKind) => images.filter((i) => i.ImageType === k);
-  const missing = kinds.filter((k) => have(k.kind).length === 0);
+  const { artSkipped: skippedAll } = usePrefs();
+  const skipped = skippedAll[id] ?? [];
+  const OPTIONAL = ["Banner", "Art", "Disc"];
+  const missing = kinds.filter((k) => have(k.kind).length === 0 && !OPTIONAL.includes(k.kind) && !skipped.includes(k.kind));
+  const toggleSkip = (k: ImageKind) => setPrefs((p) => {
+    const cur = p.artSkipped[id] ?? [];
+    return { artSkipped: { ...p.artSkipped, [id]: cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k] } };
+  });
   const current = have(kind).sort((a, b) => (a.ImageIndex ?? 0) - (b.ImageIndex ?? 0));
 
   useEffect(() => {
@@ -508,7 +523,7 @@ function ArtworkTab({ id, title, images, canEdit, isEpisode }: { id: string; tit
   return (
     <div className="stack">
       <div className="row between">
-        <div className="muted small">{missing.length ? `Missing: ${missing.map((k) => k.label).join(", ")}` : "Every kind of artwork is there."}</div>
+        <div className="muted small">{missing.length ? `Missing: ${missing.map((k) => k.label).join(", ")}` : "Every picture Infuse uses is there."}{skipped.length ? ` Skipped (can't be found): ${skipped.map((k) => ART_KINDS.find((a) => a.kind === k)?.label ?? k).join(", ")}.` : ""}</div>
         <div className="row end">
           <button disabled={!canEdit || !!saving || !missing.length} onClick={() => void act(`Filling in artwork for ${title}`, () => api.fillMissingArt(id, missing.map((k) => k.kind)))}>Fill in missing artwork</button>
           <button disabled={!canEdit || !!saving} onClick={() => void act("Uploading picture", () => api.uploadImageFile(id, kind))}>Upload {info.label.toLowerCase()}…</button>
@@ -521,9 +536,9 @@ function ArtworkTab({ id, title, images, canEdit, isEpisode }: { id: string; tit
           return (
             <button key={k.kind} className={`art-kind ${kind === k.kind ? "on" : ""}`} onClick={() => setKind(k.kind)}>
               <div className={`art ${k.wide ? "wide" : ""}`}>
-                {cur.length ? <img src={artSrc(id, k.kind, 400, images)} alt="" loading="lazy" /> : <div className="noart small muted">Missing</div>}
+                {cur.length ? <img src={artSrc(id, k.kind, 400, images)} alt="" loading="lazy" /> : <div className="noart small muted">{OPTIONAL.includes(k.kind) ? "Optional" : skipped.includes(k.kind) ? "Skipped" : "Missing"}</div>}
               </div>
-              <span className="small strong">{k.label}{cur.length > 1 ? ` · ${cur.length}` : ""}</span>
+              <span className="small strong">{k.label}{cur.length > 1 ? ` · ${cur.length}` : ""}{OPTIONAL.includes(k.kind) && <span className="muted thin"> · optional</span>}</span>
             </button>
           );
         })}
@@ -531,7 +546,14 @@ function ArtworkTab({ id, title, images, canEdit, isEpisode }: { id: string; tit
 
       <section className="card form">
         <div className="section-head"><h2>{info.label}</h2><span className="muted small">{info.hint}</span></div>
-        {current.length === 0 && <p className="muted small">None yet. Pick one below, upload one, or use “Fill in missing artwork”.</p>}
+        {current.length === 0 && (
+          <div className="row between">
+            <p className="muted small">None yet. Pick one below, upload one, or use “Fill in missing artwork”.</p>
+            {!OPTIONAL.includes(kind) && (
+              <button className="link small" onClick={() => toggleSkip(kind)}>{skipped.includes(kind) ? "Count it as missing again" : "Skip: there isn't one, that's OK"}</button>
+            )}
+          </div>
+        )}
         <div className={`art-current ${info.wide ? "wide" : ""}`}>
           {current.map((img) => {
             const idx = img.ImageIndex ?? 0;

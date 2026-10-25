@@ -121,6 +121,7 @@ fn req(template: &str, folder: &str) -> PlanRequest {
         season_folders: false,
         year_optional: YEAR_OPTIONAL.load(Ordering::SeqCst),
         ids: HashMap::new(),
+        alt_titles: Vec::new(),
     }
 }
 

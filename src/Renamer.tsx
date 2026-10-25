@@ -61,6 +61,15 @@ function stateOf(o: PlanOp): { label: string; cls: string } {
   return { label: "Will rename", cls: "ok" };
 }
 
+/** Right-click on a file or folder in a rename list. */
+function fileMenu(o: PlanOp) {
+  return [
+    { label: navigator.userAgent.includes("Windows") ? "Show in Explorer" : "Show in Finder", run: () => void api.revealRel(o.from).catch(() => undefined) },
+    { label: "Copy the current name", run: () => void navigator.clipboard?.writeText(last(o.from)).catch(() => undefined) },
+    ...(o.from !== o.to ? [{ label: "Copy the new name", run: () => void navigator.clipboard?.writeText(last(o.to)).catch(() => undefined) }] : []),
+  ];
+}
+
 /** Folder tree of the result, with renamed folders marked. */
 function FolderTree({ ops, base }: { ops: PlanOp[]; base: string }) {
   const tree = useMemo(() => {
@@ -174,7 +183,8 @@ function FolderFix({ status, onChanged, preset, embedded, onDone }: { status: St
   const [seasonFolders, setSeasonFolders] = useState(false);
   const [rules, setRules] = useState<FindReplace[]>([]);
   const [plan, setPlan] = useState<PlanResult | null>(null);
-  const [tab, setTab] = useState<"infuse" | "files">("infuse");
+  // What changes, file by file, comes first; the Infuse preview is one click away.
+  const [tab, setTab] = useState<"infuse" | "files">("files");
   const sel = useUndoableSet<string>();
   const picked = sel.set;
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set());
@@ -483,8 +493,8 @@ function FolderFix({ status, onChanged, preset, embedded, onDone }: { status: St
               <span className="step-dot">3</span>
               <div className="strong grow">Check the result</div>
               <div className="seg">
+                <button className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>What changes</button>
                 <button className={tab === "infuse" ? "on" : ""} onClick={() => setTab("infuse")}>How Infuse shows it</button>
-                <button className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>Files and folders</button>
               </div>
             </div>
 
@@ -527,7 +537,7 @@ function FolderFix({ status, onChanged, preset, embedded, onDone }: { status: St
                     const st = stateOf(o);
                     const can = o.status === "ok";
                     return (
-                      <div className={`file-row ${o.kind}`} key={o.from}>
+                      <div className={`file-row ${o.kind}`} key={o.from} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
                         <input type="checkbox" disabled={!can} checked={picked.has(o.from)} onChange={() => sel.toggle(o.from)} aria-label="Include" />
                         <div className="names">
                           <div className="mono">{last(o.from)}</div>
@@ -736,8 +746,8 @@ function CheckDetail({ r, onFix, onDone }: { r: CheckRow; onFix: () => void; onD
         <ul>
           {r.kind === "series" ? (
             <>
-              <li className={ids.Tmdb || ids.Tvdb || ids.Imdb ? "ok" : "warn"}>
-                {ids.Tmdb || ids.Tvdb || ids.Imdb ? `Identified in Jellyfin as “${r.name}${r.year ? ` (${r.year})` : ""}” (${idText})` : "Not identified in Jellyfin yet, so the name and year aren't certain"}
+              <li className={ids.Tmdb || ids.Tvdb ? "ok" : "warn"}>
+                {ids.Tmdb || ids.Tvdb ? `Identified in Jellyfin as “${r.name}${r.year ? ` (${r.year})` : ""}” (${idText})` : "Not identified in Jellyfin yet, so the name and year aren't certain"}
               </li>
               <li className={known === videos.length && videos.length ? "ok" : "warn"}>{known} of {videos.length} episode files were found in the episode list{plan.titlesFound ? ` (${plan.titlesFound} titles known)` : ""}</li>
               {plan.unparsed > 0 && <li className="warn">{plan.unparsed} file{plan.unparsed === 1 ? "" : "s"} without a season/episode number: left alone</li>}
@@ -759,7 +769,7 @@ function CheckDetail({ r, onFix, onDone }: { r: CheckRow; onFix: () => void; onD
           <label className="check small"><input type="checkbox" checked={showRight} onChange={(e) => setShowRight(e.target.checked)} />Also show what's already right ({plan.unchanged})</label>
         </div>
         <div className="row end">
-          {!(ids.Tmdb || ids.Tvdb || ids.Imdb) && <button onClick={() => nav.open(r.id, { tab: "identify" })}>Identify first…</button>}
+          {!(ids.Tmdb || ids.Tvdb) && <button onClick={() => nav.open(r.id, { tab: "identify" })}>Identify first…</button>}
           <button onClick={onFix}>More options…</button>
           <button className="primary" disabled={!picked.size || busy} onClick={() => void apply()}>{busy ? "Renaming…" : `Rename ${picked.size} selected`}</button>
         </div>
@@ -781,7 +791,7 @@ function CheckDetail({ r, onFix, onDone }: { r: CheckRow; onFix: () => void; onD
             {isOpen(g) && ops.map((o) => {
               const can = o.status === "ok";
               return (
-                <label key={o.from} className={`change ${can ? "" : "off"}`}>
+                <label key={o.from} className={`change ${can ? "" : "off"}`} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
                   <input type="checkbox" disabled={!can} checked={picked.has(o.from)} onChange={() => toggle(o.from)} />
                   <div className="names">
                     <div className="mono small"><span className="muted">{last(o.from)}</span></div>
@@ -979,31 +989,19 @@ function CheckList({ status, onFix }: { status: Status; onFix: (r: CheckRow) => 
   if (!status.libraryRoot) return null;
   return (
     <div className="stack grow-col">
-      <section className="card form">
-        <div className="row between">
-          <div>
-            <div className="strong">Which shows and movies are named wrong, and why</div>
-            <div className="muted small">{res ? `Last checked ${new Date(res.at * 1000).toLocaleString()} · ${rows.length} titles` : "Not checked yet. Checking renames nothing."} Pick a title to see every change and why.</div>
-          </div>
-          <div className="row end">
-            {checking ? <button onClick={() => void api.namingCheckCancel()}>Stop</button> : (
-              <>
-                {narrowed && scope.size > 0 && <button onClick={() => void check(rows.filter((r) => scope.has(r.id)).map((r) => r.id))}>Check only these {scope.size}</button>}
-                <button className="primary" onClick={() => void check()}>{res ? "Check everything again" : "Check my library"}</button>
-              </>
-            )}
-          </div>
-        </div>
-        {rows.length > 0 && (
-          <div className="row">
-            <span className="muted small">Showing</span>
-            <FolderScope rows={rows} top={top} sel={scope} />
-            {scope.canUndo && <button className="link small" onClick={scope.undo}><Icon name="undo" size={12} /> Undo</button>}
-          </div>
+      <div className="ren-bar">
+        {rows.length > 0 && <FolderScope rows={rows} top={top} sel={scope} />}
+        {scope.canUndo && <button className="link small" onClick={scope.undo}><Icon name="undo" size={12} /> Undo</button>}
+        <span className="spacer" />
+        <span className="muted small">{checking ? `Checking ${checking}…` : res ? `${rows.length} titles · checked ${new Date(res.at * 1000).toLocaleString()}` : "Not checked yet. Checking renames nothing."}</span>
+        {checking ? <button onClick={() => void api.namingCheckCancel()}>Stop</button> : (
+          <>
+            {narrowed && scope.size > 0 && <button onClick={() => void check(rows.filter((r) => scope.has(r.id)).map((r) => r.id))}>Check these {scope.size}</button>}
+            <button className="primary" onClick={() => void check()}>{res ? "Check again" : "Check my library"}</button>
+          </>
         )}
-        {checking && <div className="muted small">Checking {checking}…</div>}
-        {error && <p className="error">{error}</p>}
-      </section>
+      </div>
+      {error && <p className="error">{error}</p>}
 
       {res && (
         <Studio
@@ -1099,11 +1097,8 @@ export default function Renamer({ status, onChanged, start, embedded }: {
 
   return (
     <div className={`pg ${mode === "check" && status.libraryRoot ? "studio-page" : ""}`}>
-      <div className="pg-head">
-        <div>
-          <h1>Renamer</h1>
-          <div className="muted small">Fixes file and folder names so Jellyfin and Infuse recognise every show, season and movie.</div>
-        </div>
+      <div className="pg-head compact-head">
+        <h1 title="Fixes file and folder names so Jellyfin and Infuse recognise every show, season and movie.">Renamer</h1>
         <div className="seg">
           <button className={mode === "check" ? "on" : ""} onClick={() => setMode("check")}>Library check</button>
           <button className={mode === "folder" ? "on" : ""} onClick={() => { setPreset(undefined); setMode("folder"); }}>Pick a folder</button>

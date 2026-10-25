@@ -8,7 +8,7 @@ import { setPrefs, usePrefs } from "./prefs";
 import { SubStyleEditor } from "./Player";
 import { runDaily, syncPicks } from "./scheduler";
 import { clearProblems, followEvent, track, useEpoch, useProblems } from "./activity";
-import { Icon, TriCheck, type IconName, type TriState } from "./ui";
+import { CheckMenu, Icon, TriCheck, useUndoableSet, type IconName, type TriState } from "./ui";
 
 const TITLE_LANGS: [string, string][] = [["en-US", "English"], ["nl-NL", "Nederlands"], ["de-DE", "Deutsch"], ["fr-FR", "Français"], ["es-ES", "Español"], ["it-IT", "Italiano"]];
 const META_LANGS: [string, string, string][] = [["", "", "Server default"], ["en", "US", "English"], ["nl", "NL", "Nederlands"], ["de", "DE", "Deutsch"], ["fr", "FR", "Français"], ["es", "ES", "Español"], ["it", "IT", "Italiano"]];
@@ -183,9 +183,36 @@ function PlayerSettings({ status }: { status: Status }) {
       <Switch checked={p.upNextAutoplay} onChange={(v) => setPrefs({ upNextAutoplay: v })}>Play the next episode by itself when the credits start</Switch>
       <Switch checked={p.recapsOff} onChange={(v) => setPrefs({ recapsOff: v })}>Turn recaps off completely (no recap markers in the player or the intros tool)</Switch>
       <Switch checked={p.autoDetectIntros} onChange={(v) => setPrefs({ autoDetectIntros: v })} disabled={status.readOnly}>Find intros and credits in the background when I play a season without markers (needs ffmpeg; only sure finds are saved)</Switch>
+      <RandomFolders />
       <div className="strong small">Subtitle look</div>
       <SubStyleEditor />
     </Section>
+  );
+}
+
+/** Which folders "Play something" picks from. */
+function RandomFolders() {
+  const p = usePrefs();
+  const [folders, setFolders] = useState<string[]>([]);
+  const sel = useUndoableSet<string>();
+  useEffect(() => {
+    api.libraryHealth(false).then((h) => {
+      const f = [...new Set(h.rows.map((r) => r.libraryFolder || "Other"))].sort();
+      setFolders(f);
+      sel.reset(p.randomFolders.length ? p.randomFolders.filter((x) => f.includes(x)) : f);
+    }).catch(() => setFolders([]));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!folders.length) return;
+    const on = folders.filter((f) => sel.has(f));
+    setPrefs({ randomFolders: on.length === folders.length ? [] : on });
+  }, [sel.set]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (folders.length < 2) return null;
+  return (
+    <div className="row">
+      <span className="small strong">“Play something” picks from</span>
+      <CheckMenu label="Folders" options={folders.map((f) => ({ id: f, label: f }))} sel={sel} allLabel="Every folder" />
+    </div>
   );
 }
 
@@ -263,7 +290,7 @@ function SubtitleSettings({ status, onChanged }: { status: Status; onChanged: ()
       </label>
 
       <div className="strong small" id="set-subfolders">Folders</div>
-      <p className="muted small">Untick a folder to leave it alone (for example home videos or foreign-language shows); folders inside it follow. A stripe means some folders inside are left alone.</p>
+      <p className="muted small">Tick a folder to check it for subtitles. A stripe means only some folders inside it are ticked.</p>
       {status.libraryRoot ? (
         <div className="skip-picker">
           <div className="small muted">
@@ -285,9 +312,9 @@ function SubtitleSettings({ status, onChanged }: { status: Status; onChanged: ()
             return (
               <div key={f.name} className="skip-row">
                 <span className="row">
-                  <TriCheck state={st} disabled={parentOff} title={st === "some" ? "Some folders inside are left alone" : st === "all" ? "Gets subtitles" : "Left alone"} onChange={(on) => setFolder([rel(f.name)], on)} />
+                  <TriCheck state={st} disabled={parentOff} title={st === "some" ? "Some folders inside are not checked" : st === "all" ? "Checked for subtitles" : "Not checked for subtitles"} onChange={(on) => setFolder([rel(f.name)], on)} />
                   <button className={`link-plain ${st === "none" ? "muted" : ""}`} onClick={() => setBase(rel(f.name))}><Icon name="folder" size={14} /> {f.name}</button>
-                  {st === "some" && <span className="muted small">some folders inside left alone</span>}
+                  {st === "some" && <span className="muted small">only some folders inside</span>}
                 </span>
                 <button className="link small" onClick={() => setBase(rel(f.name))}>open ›</button>
               </div>
@@ -295,11 +322,8 @@ function SubtitleSettings({ status, onChanged }: { status: Status; onChanged: ()
           })}
         </div>
       ) : <p className="muted small">Choose your library folder first.</p>}
-      {p.subSkipFolders.length > 0 && (
-        <div className="chips"><span className="muted small">Left alone:</span>{p.subSkipFolders.map((f) => <span key={f} className="chip static">{f}<button className="link x" onClick={() => toggleSkip(f)} aria-label="Switch back on">×</button></span>)}</div>
-      )}
       <div className="row">
-        <label>Or leave alone every folder named<input value={custom} placeholder="e.g. Anime" onChange={(e) => setCustom(e.target.value)} /></label>
+        <label>Never check folders named<input value={custom} placeholder="e.g. Anime" onChange={(e) => setCustom(e.target.value)} /></label>
         <button disabled={!custom.trim()} onClick={() => { toggleSkip(custom.trim()); setCustom(""); }}>Add</button>
       </div>
     </Section>

@@ -57,6 +57,9 @@ pub struct HealthRow {
     /// Videos without any subtitles.
     no_subs: i64,
     library_folder: String,
+    /// Where it is, as Jellyfin sees it (for "leave this folder alone" settings).
+    #[serde(default)]
+    path: String,
 }
 
 fn has_img(v: &Value, kind: &str) -> bool {
@@ -69,7 +72,7 @@ fn has_img(v: &Value, kind: &str) -> bool {
 fn identified(v: &Value) -> bool {
     v.get("ProviderIds")
         .and_then(Value::as_object)
-        .map(|p| ["Tmdb", "Tvdb", "Imdb"].iter().any(|k| p.get(*k).and_then(Value::as_str).map(|x| !x.is_empty()).unwrap_or(false)))
+        .map(|p| ["Tmdb", "Tvdb"].iter().any(|k| p.get(*k).and_then(Value::as_str).map(|x| !x.is_empty()).unwrap_or(false)))
         .unwrap_or(false)
 }
 
@@ -177,6 +180,7 @@ async fn health_rows(app: &AppHandle, state: &AppState) -> Result<Vec<HealthRow>
                 videos: if series { v.get("RecursiveItemCount").and_then(Value::as_i64).unwrap_or(0) } else { 1 },
                 no_subs: count.get(&id).copied().unwrap_or(0),
                 library_folder: lib,
+                path: path.to_string(),
                 id,
             })
         })
@@ -345,6 +349,12 @@ fn dup_item(v: &Value) -> DupItem {
     }
 }
 
+/// True when the episodes in a group have clearly different titles.
+fn episodes_differ(ids: &[String], names: &HashMap<String, String>) -> bool {
+    let titles: Vec<&String> = ids.iter().filter_map(|i| names.get(i)).filter(|t| !t.trim().is_empty()).collect();
+    titles.len() > 1 && titles.iter().skip(1).any(|t| !crate::planner::same_episode_title(t, titles[0]) && crate::sources::similarity(t, titles[0]) < 0.6)
+}
+
 /// Higher resolution, then HDR, then a newer codec, then bitrate.
 pub fn quality(d: &DupItem) -> (i64, bool, u8, i64) {
     let codec = match d.codec.to_lowercase().as_str() {
@@ -371,6 +381,7 @@ pub async fn find_duplicates(state: State<'_, AppState>) -> Result<Vec<DupGroup>
         )
         .await?;
     let mut groups: BTreeMap<String, (String, &'static str, Vec<String>)> = BTreeMap::new();
+    let mut names: HashMap<String, String> = HashMap::new();
     for v in light.iter().filter(|v| !s(v, "Path").is_empty()) {
         let id = clean_id(s(v, "Id"));
         if s(v, "Type") == "Movie" {
@@ -390,10 +401,24 @@ pub async fn find_duplicates(state: State<'_, AppState>) -> Result<Vec<DupGroup>
             let (Some(sn), Some(en)) = (v.get("ParentIndexNumber").and_then(Value::as_i64), v.get("IndexNumber").and_then(Value::as_i64)) else { continue };
             let key = format!("e|{}|{sn}|{en}", clean_id(s(v, "SeriesId")));
             let title = format!("{} · S{sn:02}E{en:02}", s(v, "SeriesName"));
+            names.insert(id.clone(), s(v, "Name").to_string());
             groups.entry(key).or_insert((title, "episode", Vec::new())).2.push(id);
         }
     }
-    let dups: Vec<(String, &'static str, Vec<String>)> = groups.into_values().filter(|g| g.2.len() > 1).take(300).collect();
+    // Same number but clearly different episodes ("Planet Earth III · Heroes" and "Planet Earth ·
+    // Jungles"): not a duplicate, but two shows Jellyfin has mixed into one.
+    let dups: Vec<(String, &'static str, Vec<String>)> = groups
+        .into_values()
+        .filter(|g| g.2.len() > 1)
+        .map(|(title, kind, ids)| {
+            if kind == "episode" && episodes_differ(&ids, &names) {
+                (title, "mixed", ids)
+            } else {
+                (title, kind, ids)
+            }
+        })
+        .take(300)
+        .collect();
     let all_ids: Vec<String> = dups.iter().flat_map(|g| g.2.clone()).collect();
     let mut detail: HashMap<String, DupItem> = HashMap::new();
     for chunk in all_ids.chunks(100) {

@@ -40,6 +40,10 @@ pub struct Settings {
     /// Lock a title in Jellyfin once you change it in Media Hub, so Jellyfin's own
     /// refreshes never overwrite your details and pictures.
     pub lock_edits: bool,
+    /// A folder with music, played without Jellyfin.
+    pub music_dir: Option<String>,
+    /// Music comes from that folder instead of Jellyfin.
+    pub music_from_folder: bool,
 }
 
 impl Default for Settings {
@@ -61,6 +65,8 @@ impl Default for Settings {
             read_only: true,
             inbox_dir: None,
             lock_edits: true,
+            music_dir: None,
+            music_from_folder: false,
         }
     }
 }

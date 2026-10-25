@@ -119,6 +119,15 @@ export interface PlanArgs {
   itemId?: string | null;
 }
 
+export interface ExtraSub {
+  id: string;
+  name: string;
+  index: number;
+  language: string;
+  title: string;
+  path: string;
+}
+
 export interface TuneRow {
   scope: "library" | "task";
   target: string;
@@ -462,6 +471,8 @@ export interface HealthRow {
   videos: number;
   noSubs: number;
   libraryFolder: string;
+  /** Server path (older checks: empty). */
+  path?: string;
 }
 
 export interface EpInfo {
@@ -496,7 +507,7 @@ export interface DupItem {
 
 export interface DupGroup {
   title: string;
-  kind: "movie" | "episode";
+  kind: "movie" | "episode" | "mixed";
   items: DupItem[];
 }
 
@@ -529,6 +540,8 @@ export interface MusicItem {
   hasArt: boolean;
   count: number | null;
   favorite: boolean;
+  /** Picture for music from a folder. */
+  artUrl?: string;
 }
 
 export interface LibraryLang {
@@ -738,6 +751,8 @@ export const api = {
   /** Asks Jellyfin to look only at these folders (relative to the library folder); "" or none = everything. */
   scanFolders: (folders: string[]) => invoke<"folders" | "all">("scan_folders", { folders }),
   cancelJob: (kind: string) => invoke<void>("cancel_job", { kind }),
+  extraSubtitles: (keep: string[]) => invoke<ExtraSub[]>("extra_subtitles", { keep }),
+  removeSubtitleFiles: (files: { id: string; path: string }[]) => invoke<number>("remove_subtitle_files", { files }),
   namingCheckLast: () => invoke<CheckResult | null>("naming_check_last"),
   namingCheckCancel: () => invoke<void>("naming_check_cancel"),
   playSubtitles: (token: string) => invoke<SubTrack[]>("play_subtitles", { token }),
@@ -760,6 +775,9 @@ export const api = {
     invoke<MusicItem[]>("music_list", { view, parent, query, start, limit }),
   musicPlay: (id: string) => invoke<string>("music_play", { id }),
   musicStop: (token: string) => invoke<void>("music_stop", { token }),
+  musicSource: () => invoke<{ folder: string | null; source: "jellyfin" | "folder" }>("music_source"),
+  setMusicSource: (folder: boolean) => invoke<void>("set_music_source", { folder }),
+  pickMusicFolder: () => invoke<string | null>("pick_music_folder"),
   missingEpisodes: (seriesId: string) => invoke<MissingReport>("missing_episodes", { seriesId }),
   findDuplicates: () => invoke<DupGroup[]>("find_duplicates"),
   mergeVersions: (ids: string[]) => invoke<void>("merge_versions", { ids }),

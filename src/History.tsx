@@ -5,7 +5,7 @@ import { askConfirm } from "./confirm";
 import { nav } from "./nav";
 import { Icon, SettingsLink } from "./ui";
 
-const KIND: Record<string, string> = {
+export const KIND: Record<string, string> = {
   item_update: "Details", identify: "Identified", image: "Picture", image_removed: "Picture removed", collection: "Collection",
   subtitle: "Subtitle", segment: "Intro/credits", storage: "Storage", file_trashed: "Moved to trash", rename: "Renamed files",
 };

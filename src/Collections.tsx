@@ -5,7 +5,7 @@ import { nav } from "./nav";
 import { askChoice, CardTile, SettingsLink } from "./ui";
 
 /** Jellyfin collections (box sets): browse, make new ones, add and remove titles. */
-export default function Collections({ status, selected }: { status: Status; selected: string | null }) {
+export default function Collections({ status, selected, variant = "manage" }: { status: Status; selected: string | null ; variant?: "manage" | "watch" }) {
   const epoch = useEpoch();
   const [list, setList] = useState<Card[] | null>(null);
   const [items, setItems] = useState<Card[] | null>(null);
@@ -46,14 +46,16 @@ export default function Collections({ status, selected }: { status: Status; sele
         <div className="item-top">
           <button onClick={() => nav.route({ view: "collections" })}>← All collections</button>
         </div>
-        <div className="coll-hero">
+        {variant === "manage" ? (
+          <div className="pg-head"><div><h1>{current?.title ?? "Collection"}</h1><div className="muted small">{items ? `${items.length} title${items.length === 1 ? "" : "s"}` : "Loading…"}</div></div></div>
+        ) : <div className="coll-hero">
           <img src={imageUrl(selected, "Backdrop", 1400)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
           <div className="bb-shade" />
           <div className="coll-hero-text">
             <h1>{current?.title ?? "Collection"}</h1>
             <div className="muted">{items ? `${items.length} title${items.length === 1 ? "" : "s"}` : "Loading…"}</div>
           </div>
-        </div>
+        </div>}
         <div className="row">
           <button className="primary" disabled={!canEdit} onClick={() => void addTitles()}>+ Add a title</button>
           <button onClick={() => void api.revealItem(selected).catch(() => undefined)}>Show in Finder</button>
@@ -72,7 +74,7 @@ export default function Collections({ status, selected }: { status: Status; sele
   const spot = list && list.length ? list[day % list.length] : null;
   return (
     <div className="pg">
-      {spot && (
+      {spot && variant === "watch" && (
         <section className="billboard" onClick={() => nav.route({ view: "collections", collection: spot.id })}>
           <img className="bb-art" src={imageUrl(spot.artId, "Backdrop", 1600)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
           <div className="bb-shade" />

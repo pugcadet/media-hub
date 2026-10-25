@@ -3,7 +3,8 @@ import { api, cleanTitle, errorText, imageUrl, Item, JfItem, Library, SegSummary
 import { IntrosTab } from "./Intros";
 import { useEpoch } from "./activity";
 import type { View } from "./nav";
-import { Icon } from "./ui";
+import { Icon, Tabs } from "./ui";
+import { usePrefs } from "./prefs";
 
 // Marker counts per show, kept while the app is open.
 const summaries = new Map<string, SegSummary>();
@@ -83,12 +84,16 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
     }).catch(() => setLibs([]));
   }, []);
 
+  const hidden = usePrefs().hiddenTabs.intros ?? [];
   useEffect(() => {
     const t = setTimeout(() => {
-      api.list("series", query, "name", 0, 3000, lib).then(setShows).catch((e) => setError(errorText(e)));
+      api.list("series", query, "name", 0, 3000, lib)
+        // "All shown" leaves out the libraries whose tab you closed.
+        .then((rows) => setShows(lib ? rows : rows.filter((r) => !hidden.includes(r.library))))
+        .catch((e) => setError(errorText(e)));
     }, 200);
     return () => clearTimeout(t);
-  }, [query, lib, epoch]);
+  }, [query, lib, epoch, hidden.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setSeasons([]);
@@ -120,11 +125,9 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
 
       {!show && (
         <>
-          {libs.length > 1 && (
-            <div className="tabs">
-              <button className={lib === null ? "on" : ""} onClick={() => setLib(null)}>All</button>
-              {libs.map((l) => <button key={l.id} className={lib === l.id ? "on" : ""} onClick={() => setLib(l.id)}>{l.name} <span className="muted small">{l.count}</span></button>)}
-            </div>
+          {libs.length > 0 && (
+            <Tabs screen="intros" fixed={["all"]} active={lib ?? "all"} onChange={(id) => setLib(id === "all" ? null : id)}
+              tabs={[{ id: "all", label: "All shown" }, ...libs.map((l) => ({ id: l.id, label: l.name, count: l.count }))]} />
           )}
           <div className="toolbar">
             <label className="check small"><input type="checkbox" checked={onlyGaps} onChange={(e) => setOnlyGaps(e.target.checked)} />Only shows with missing markers</label>
@@ -139,11 +142,7 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
 
       {show && (
         <>
-          <div className="tabs">
-            {seasons.map((s) => (
-              <button key={s.Id} className={season?.Id === s.Id ? "on" : ""} onClick={() => setSeason(s)}>{s.Name}</button>
-            ))}
-          </div>
+          <Tabs active={season?.Id ?? ""} onChange={(id) => setSeason(seasons.find((x) => x.Id === id) ?? null)} tabs={seasons.map((x) => ({ id: x.Id, label: x.Name }))} />
           {season && (
             <IntrosTab key={season.Id} seasonId={season.Id} seasonName={season.Name} canEdit={!status.readOnly} onSettings={() => onNav("settings")}
               show={{ name: show.name, seasonIds: seasons.map((s) => s.Id), onChanged: () => summaries.delete(show.id) }} />

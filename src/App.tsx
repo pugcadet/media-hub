@@ -5,12 +5,11 @@ import Library from "./Library";
 import Renamer from "./Renamer";
 import Settings from "./Settings";
 import Downloads from "./Downloads";
-import Storage from "./Storage";
 import ItemPage from "./ItemPage";
 import Sidebar from "./Sidebar";
 import { SubtitlesTool } from "./Tools";
 import IntrosTool from "./IntrosTool";
-import Home from "./Home";
+import Dashboard from "./Dashboard";
 import Collections from "./Collections";
 import AddMedia from "./AddMedia";
 import Watch from "./Watch";
@@ -20,12 +19,10 @@ import { UpdateToast } from "./Updates";
 import Music from "./Music";
 import { setNav, type OpenOpts, type Route, type View } from "./nav";
 import { useEpoch } from "./activity";
-import { usePrefs } from "./prefs";
+import { prefs, setPrefs, usePrefs } from "./prefs";
 import { startScheduler } from "./scheduler";
 import Health from "./Health";
-import Missing from "./Missing";
-import Duplicates from "./Duplicates";
-import Tags from "./Tags";
+import Cleanup from "./Cleanup";
 import History from "./History";
 
 export type { Route, View } from "./nav";
@@ -67,7 +64,21 @@ export default function App() {
   const go = useCallback((r: Route) => {
     setItemStack([]);
     setRoute({ ...r, n: Date.now() });
+    // A link to a manager screen (e.g. "Turn them on" in the player) switches to the manager.
+    if (prefs().mode !== "manage") setPrefs({ mode: "manage" });
   }, []);
+
+  // ⌘, (Ctrl+, on Windows) opens Settings, like every Mac app.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        e.preventDefault();
+        go({ view: "settings" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [go]);
   const navTo = useCallback((v: View) => go({ view: v }), [go]);
   const open = useCallback((id: string, opts?: OpenOpts) => {
     setItemStack((s) => {
@@ -135,19 +146,16 @@ export default function App() {
   } else {
     switch (route.view) {
       case "home":
-        page = <Home status={status} canEdit={!status.readOnly} />;
+        page = <Dashboard status={status} />;
         break;
       case "health":
         page = <Health status={status} focus="all" />;
         break;
+      case "cleanup":
       case "missing":
-        page = <Missing status={status} />;
-        break;
       case "duplicates":
-        page = <Duplicates status={status} />;
-        break;
       case "tags":
-        page = <Tags status={status} />;
+        page = <Cleanup status={status} tab={route.view === "cleanup" ? route.section : route.view} onNav={navTo} />;
         break;
       case "history":
         page = <History status={status} />;
@@ -171,7 +179,7 @@ export default function App() {
         page = <IntrosTool status={status} onNav={navTo} />;
         break;
       case "storage":
-        page = <Storage status={status} onNav={navTo} />;
+        page = <Cleanup status={status} tab="storage" onNav={navTo} />;
         break;
       case "downloads":
         page = <Downloads onNav={navTo} />;
