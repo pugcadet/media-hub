@@ -92,7 +92,18 @@ fn health_path(state: &AppState) -> PathBuf {
 pub async fn library_health(app: AppHandle, state: State<'_, AppState>, fresh: bool) -> Result<HealthResult> {
     if !fresh {
         if let Some(r) = std::fs::read(health_path(&state)).ok().and_then(|b| serde_json::from_slice::<HealthResult>(&b).ok()) {
-            return Ok(r);
+            // Checks saved by older versions have no file locations, so folders you switched
+            // off for subtitles couldn't be left out: those are checked again.
+            let has_paths = r.rows.is_empty() || r.rows.iter().any(|x| !x.path.is_empty());
+            if has_paths {
+                let mut r = r;
+                if let Ok(known) = state.store().and_then(|s| s.known_ids()) {
+                    if !known.is_empty() {
+                        r.rows.retain(|x| known.contains(&x.id.replace('-', "")));
+                    }
+                }
+                return Ok(r);
+            }
         }
     }
     let rows = health_rows(&app, &state).await?;

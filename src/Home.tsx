@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Alert, api, Card, cleanTitle, HomeFeed, imageUrl, Item, localDate, Pick, Status } from "./api";
 import { track, useEpoch } from "./activity";
 import { nav } from "./nav";
-import { CardTile, Icon, itemMenu, openMenu, playTitle, Row, scanLibrary, SettingsLink } from "./ui";
+import { CardTile, Icon, Img, imageLoaded, itemMenu, openMenu, playTitle, preloadImages, Row, scanLibrary, SettingsLink } from "./ui";
 import { prefs, setPrefs, usePrefs } from "./prefs";
 import { syncPicks } from "./scheduler";
 import { getPicks, PicksEditor } from "./Picks";
@@ -53,23 +53,28 @@ export function featured(items: Item[], why: string): Pick | null {
 
 /** The big picture at the top: one of today's picks, with its logo when there is one. */
 export function Billboard({ pick, onPlay, full, children }: { pick: Pick; onPlay?: () => void; full?: boolean; children?: ReactNode }) {
+  const logoUrl = imageUrl(pick.artId, "Logo", 700);
   const [logo, setLogo] = useState(true);
-  const [overview, setOverview] = useState<string | null>(null);
+  const [overview, setOverview] = useState<string | null>(() => overviews.get(pick.id) ?? null);
+  // The text waits for the logo (a moment at most), so the two don't pop in one after the other.
+  const [ready, setReady] = useState(() => imageLoaded(logoUrl));
   useEffect(() => {
     setLogo(true);
-    setOverview(null);
+    setReady(imageLoaded(logoUrl));
+    const t = window.setTimeout(() => setReady(true), 1200);
+    setOverview(overviews.get(pick.id) ?? null);
     let live = true;
-    api.details(pick.id).then((d) => live && setOverview(d.item.Overview ?? null)).catch(() => undefined);
-    return () => { live = false; };
-  }, [pick.id, pick.artId]);
+    if (!overviews.has(pick.id)) api.details(pick.id).then((d) => { overviews.set(pick.id, d.item.Overview ?? ""); if (live) setOverview(d.item.Overview ?? null); }).catch(() => undefined);
+    return () => { live = false; window.clearTimeout(t); };
+  }, [pick.id, pick.artId]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <section className={`billboard ${full ? "full" : ""}`} onContextMenu={(e) => openMenu(e, itemMenu({ id: pick.id, kind: "other", title: pick.title }))}>
-      <img key={pick.artId} className="bb-art" src={imageUrl(pick.artId, "Backdrop", 1920)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+      <Img key={pick.artId} className="bb-art" src={imageUrl(pick.artId, "Backdrop", 1920)} />
       <div className="bb-shade" />
-      <div className="bb-text" key={pick.id}>
+      <div className={`bb-text ${ready ? "" : "wait"}`} key={pick.id}>
         <div className="bb-why">{pick.why}</div>
         {logo ? (
-          <img className="bb-logo" src={imageUrl(pick.artId, "Logo", 700)} alt={pick.title} onError={() => setLogo(false)} />
+          <Img className="bb-logo" src={logoUrl} alt={pick.title} onFail={() => setLogo(false)} onReady={() => setReady(true)} />
         ) : (
           <div className="bb-title">{pick.title}</div>
         )}
@@ -85,10 +90,17 @@ export function Billboard({ pick, onPlay, full, children }: { pick: Pick; onPlay
   );
 }
 
+const homeCache: { feed: HomeFeed | null; picks: Pick[]; movies: Card[]; shows: Card[]; top: Card[] } = { feed: null, picks: [], movies: [], shows: [], top: [] };
+
+/** Overviews already fetched for the big picture (so going back doesn't wait again). */
+const overviews = new Map<string, string>();
+
 /** Netflix-style hero: today's top picks take turns every 12 seconds (paused while you point at it). */
 export function HeroCarousel({ picks, full }: { picks: Pick[]; full?: boolean }) {
   const list = picks.slice(0, 5);
   const [i, setI] = useState(0);
+  // Every slide's pictures load up front, so a slide never changes half-drawn.
+  useEffect(() => preloadImages(list.flatMap((p) => [imageUrl(p.artId, "Backdrop", 1920), imageUrl(p.artId, "Logo", 700)])), [list.map((p) => p.id).join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
   const [hover, setHover] = useState(false);
   useEffect(() => {
     if (hover || list.length < 2) return;
@@ -127,12 +139,18 @@ function PickTile({ p, canEdit }: { p: Pick; canEdit: boolean }) {
 /** Home: everything in one place — continue, watching, picks, new, collections, movies and shows. */
 export default function Home({ status, canEdit, variant = "manage" }: { status: Status; canEdit: boolean; variant?: "manage" | "watch" }) {
   const epoch = useEpoch();
-  const [feed, setFeed] = useState<HomeFeed | null>(null);
-  const [picks, setPicks] = useState<Pick[]>([]);
-  const [movies, setMovies] = useState<Card[]>([]);
-  const [shows, setShows] = useState<Card[]>([]);
-  const [top, setTop] = useState<Card[]>([]);
+  // Shown straight away from the last visit, then refreshed.
+  const [feed, setFeedS] = useState<HomeFeed | null>(homeCache.feed);
+  const [picks, setPicksS] = useState<Pick[]>(homeCache.picks);
+  const [movies, setMoviesS] = useState<Card[]>(homeCache.movies);
+  const [shows, setShowsS] = useState<Card[]>(homeCache.shows);
+  const [top, setTopS] = useState<Card[]>(homeCache.top);
   const [error, setError] = useState<string | null>(null);
+  const setFeed = (v: HomeFeed) => { homeCache.feed = v; setFeedS(v); };
+  const setPicks = (v: Pick[]) => { homeCache.picks = v; setPicksS(v); };
+  const setMovies = (v: Card[]) => { homeCache.movies = v; setMoviesS(v); };
+  const setShows = (v: Card[]) => { homeCache.shows = v; setShowsS(v); };
+  const setTop = (v: Card[]) => { homeCache.top = v; setTopS(v); };
 
   useEffect(() => {
     api.homeFeed().then(setFeed).catch((e) => setError(String(e)));
@@ -140,7 +158,7 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
     api.list("movie", "", "added", 0, 30).then((r) => setMovies(r.map(itemToCard))).catch(() => setMovies([]));
     api.list("series", "", "added", 0, 30).then((r) => setShows(r.map(itemToCard))).catch(() => setShows([]));
     api.list(null, "", "rating", 0, 30).then((r) => setTop(r.map(itemToCard))).catch(() => setTop([]));
-  }, [epoch, status.lastSync]);
+  }, [epoch, status.lastSync]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { hiddenNextUp } = usePrefs();
   const [cleared, setCleared] = useState<Set<string>>(new Set());
@@ -165,7 +183,7 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
   const [editing, setEditing] = useState(false);
 
   return (
-    <div className={`pg home ${variant}`}>
+    <div className={`pg home ${variant} ${variant === "watch" ? "layered" : ""}`}>
       {variant === "manage" && (
         <div className="pg-head">
           <h1>Home</h1>

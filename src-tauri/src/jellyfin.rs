@@ -341,8 +341,10 @@ impl Client {
             ("HasSubtitles", "false".to_string()),
             ("SortBy", "SeriesSortName,ParentIndexNumber,IndexNumber,SortName".to_string()),
             ("Fields", "Path".to_string()),
+            ("EnableImages", "false".to_string()),
+            ("EnableUserData", "false".to_string()),
             ("StartIndex", start.to_string()),
-            ("Limit", limit.min(500).to_string()),
+            ("Limit", limit.min(3000).to_string()),
         ];
         self.get_json("/Items", &self.with_user(q)).await
     }
@@ -635,9 +637,27 @@ impl Client {
         if self.send(req).await.is_ok() {
             return Ok(());
         }
-        // Jellyfin before 10.9
+        self.save_position_legacy(item_id, seconds).await
+    }
+
+    /// The pre-10.9 route (some servers and proxies only accept this one).
+    pub async fn save_position_legacy(&self, item_id: &str, seconds: f64) -> Result<()> {
+        let user = self.user.clone().ok_or_else(|| Error::msg("no user"))?;
+        if !valid_item_id(item_id) {
+            return Err(Error::msg("bad id"));
+        }
+        let body = serde_json::json!({ "PlaybackPositionTicks": (seconds * TICKS_PER_SECOND) as i64, "LastPlayedDate": chrono_now(), "Played": false });
         let req = self.http.post(self.url(&format!("/Users/{user}/Items/{item_id}/UserData"))).json(&body);
         self.send(req).await.map(|_| ())
+    }
+
+    /// The saved position (seconds) for the chosen user.
+    pub async fn saved_position(&self, item_id: &str) -> Result<f64> {
+        if self.user.is_none() {
+            return Err(Error::msg("No Jellyfin user chosen in Settings → Jellyfin."));
+        }
+        let v = self.item_json(item_id).await?;
+        Ok(v.pointer("/UserData/PlaybackPositionTicks").and_then(serde_json::Value::as_f64).unwrap_or(0.0) / TICKS_PER_SECOND)
     }
 
     /// Marks an item as watched for the chosen user (only with "sync watched" on).
@@ -783,6 +803,20 @@ impl Writer {
             return Err(Error::msg("bad request"));
         }
         self.post(&format!("/Items/{id}/RemoteSearch/Subtitles/{subtitle_id}"), &[], None).await
+    }
+
+    /// The subtitle file itself, straight from the provider (Media Hub saves it next to the video).
+    pub async fn subtitle_file(&self, subtitle_id: &str) -> Result<Vec<u8>> {
+        let plain = subtitle_id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+        if subtitle_id.is_empty() || subtitle_id.len() > 200 || !plain {
+            return Err(Error::msg("bad request"));
+        }
+        let resp = self.c.get(&format!("/Providers/Subtitles/Subtitles/{subtitle_id}"), &[]).await?;
+        let bytes = resp.bytes().await.map_err(|e| Error::Network(e.without_url().to_string()))?;
+        if bytes.len() > 20 * 1024 * 1024 {
+            return Err(Error::msg("subtitle file too large"));
+        }
+        Ok(bytes.to_vec())
     }
 
     /// Removes an external subtitle stream. Only used to undo a download made by this app.

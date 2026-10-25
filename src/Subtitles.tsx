@@ -72,10 +72,13 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
     setBusy(subId);
     setNote(null);
     try {
-      const idx = await track("Downloading subtitle", () => api.subtitleDownload(id, subId, lang, codesFor(lang, list)));
-      setNote(idx != null
-        ? "Downloaded and ready. It's saved next to the video; you can undo it under Changes made here."
-        : "Downloaded. Jellyfin hasn't listed it yet; it shows up after its next look at the folder (Refresh from internet speeds that up).");
+      const fmt = opts?.results.find((r) => r.sub.Id === subId)?.sub.Format ?? null;
+      const d = await track("Downloading subtitle", () => api.subtitleDownload(id, subId, lang, codesFor(lang, list), fmt));
+      setNote(d.file
+        ? `Saved next to the video as ${d.file.split(/[\\/]/).pop()}. Jellyfin picks it up on its next look at the folder; you can undo it under Changes made here.`
+        : d.index != null
+          ? "Downloaded and ready. It's saved next to the video; you can undo it under Changes made here."
+          : "Downloaded. Jellyfin hasn't listed it yet; it shows up after its next look at the folder.");
       await load();
     } catch (e) {
       setError(errorText(e));

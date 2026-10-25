@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, cleanTitle, errorText, imageUrl, PlayInfo, ScoredSub, Status, SubTrack } from "./api";
+import { api, cleanTitle, errorText, imageUrl, PlayInfo, ScoredSub, Status, SubTrack, toVtt } from "./api";
 import { autoDetectSeason, fmt } from "./Intros";
 import { DEFAULT_PREFS, prefs, setPrefs, subCss, usePrefs, type SubStyle } from "./prefs";
 import { nav } from "./nav";
@@ -87,6 +87,8 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   const audioGraph = useRef<{ ctx: AudioContext; src: MediaElementAudioSourceNode; comp: DynamicsCompressorNode; gain: GainNode } | null>(null);
   const appliedOffset = useRef(0);
   const tokenRef = useRef<string | null>(null);
+  // Last known position: on close the video element is already gone, so this is what gets saved.
+  const lastPos = useRef(0);
   const blobUrls = useRef<string[]>([]);
   const [askResume, setAskResume] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -191,7 +193,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       cancelled = true;
       hls?.destroy();
       if (token) {
-        const pos = video.current?.currentTime ?? 0;
+        const pos = video.current?.currentTime || lastPos.current;
         const t = token;
         void api.playProgress(t, pos, false).catch(progressFailed).finally(() => void api.playStop(t).catch(() => undefined));
       }
@@ -199,6 +201,14 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   }, [id, session]);
 
   useEffect(() => () => blobUrls.current.forEach((u) => URL.revokeObjectURL(u)), []);
+
+  // Nothing behind the player scrolls while it's open.
+  useEffect(() => {
+    const els = [document.documentElement, document.body, ...document.querySelectorAll<HTMLElement>(".page")].filter(Boolean) as HTMLElement[];
+    const before = els.map((e) => e.style.overflow);
+    els.forEach((e) => (e.style.overflow = "hidden"));
+    return () => els.forEach((e, i) => (e.style.overflow = before[i]));
+  }, []);
 
   // Tell Jellyfin where we are every 15 seconds while playing (and when pausing, below).
   useEffect(() => {
@@ -523,7 +533,23 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     if (!s.sub.Id) return;
     setOnlineBusy(s.sub.Id);
     try {
-      const idx = await api.subtitleDownload(id, s.sub.Id, subLang, LANG_WORDS[subLang]?.filter((w) => w.length === 3) ?? [subLang]);
+      const d = await api.subtitleDownload(id, s.sub.Id, subLang, LANG_WORDS[subLang]?.filter((w) => w.length === 3) ?? [subLang], s.sub.Format ?? null);
+      const done = (pick: number) => {
+        setSub(pick);
+        say(`Subtitles on (match ${s.score})`);
+        setPanel("none");
+        setOnline(null);
+      };
+      // Saved by Media Hub: show it straight away; Jellyfin lists it on its next look.
+      if (d.text && (d.format === "srt" || d.format === "vtt")) {
+        const idx = 100000 + Object.keys(subUrls).length;
+        const u = URL.createObjectURL(new Blob([toVtt(d.text)], { type: "text/vtt" }));
+        blobUrls.current.push(u);
+        setTracks((l) => [...l, { index: idx, language: subLang, title: `${s.sub.Name ?? subLang} (downloaded)`.slice(0, 60), url: u, default: false }]);
+        setSubUrls((m) => ({ ...m, [idx]: u }));
+        done(idx);
+        return;
+      }
       const token = tokenRef.current;
       if (!token) return;
       // Jellyfin needs a moment to notice the new file: ask again for up to ~20 seconds.
@@ -541,17 +567,9 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
         if (u) loaded[t.index] = u;
       }
       setSubUrls(loaded);
-      const pick = idx != null && loaded[idx] ? idx : fresh.find((t) => loaded[t.index] && isLang(t, subLang))?.index ?? fresh[0]?.index;
-      if (pick != null) {
-        setSub(pick);
-        say(`Subtitles on (match ${s.score})`);
-        setPanel("none");
-        setOnline(null);
-      } else if (!quietly) {
-        say("Downloaded, but Jellyfin hasn't listed it yet. Press C again in a moment.", 3500);
-      } else {
-        say("Downloaded, but Jellyfin hasn't listed it yet. Press C again in a moment.", 3500);
-      }
+      const pick = d.index != null && loaded[d.index] ? d.index : fresh.find((t) => loaded[t.index] && isLang(t, subLang))?.index ?? fresh[0]?.index;
+      if (pick != null) done(pick);
+      else say(quietly ? "Downloaded; it appears once Jellyfin lists it." : "Downloaded, but Jellyfin hasn't listed it yet. Press C again in a moment.", 3500);
     } catch (e) {
       say(errorText(e), 3000);
     } finally {
@@ -590,6 +608,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
         onTimeUpdate={(e) => {
           const v = e.currentTarget;
           setTime(v.currentTime);
+          if (v.currentTime > 0) lastPos.current = v.currentTime;
           // How far ahead it has loaded (the range that contains the playhead).
           for (let i = 0; i < v.buffered.length; i++) {
             if (v.buffered.start(i) <= v.currentTime + 0.5 && v.buffered.end(i) >= v.currentTime) { setBuffered(v.buffered.end(i)); break; }
@@ -823,7 +842,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
               onChange={(e) => { const nv = Number(e.target.value); setVolume(nv); if (video.current) { video.current.volume = nv; video.current.muted = false; } }} />
           </div>
           <span className="mono small p-time">{fmt(time)} <span className="muted">/ {fmt(duration)}</span></span>
-          <div className="p-center-title ellipsis">{info ? cleanTitle(info.title) : ""}{info?.subtitle ? <span className="muted"> · {info.subtitle}</span> : null}</div>
+          <div className="p-center-title" />
           {info?.next && onNext && <button className="p-ic" onClick={playNext} title={`Next: ${info.next.label} (N)`} aria-label="Next episode"><Icon name="next" size={22} /></button>}
           <button className={`p-ic ${sub >= 0 ? "on" : ""}`} onClick={() => setPanel(panel === "subs" ? "none" : "subs")} title={`Subtitles: ${subTitle} (C)`} aria-label="Subtitles"><Icon name="subtitles" size={22} /></button>
           <button className={`p-ic ${panel !== "none" && panel !== "subs" ? "on" : ""}`} onClick={() => setPanel(panel === "none" || panel === "subs" ? "audio" : "none")} title="Audio, speed, chapters" aria-label="Settings"><Icon name="settings" size={22} /></button>

@@ -1,6 +1,6 @@
 [package]
 name = "media-hub"
-version = "0.15.0"
+version = "0.16.0"
 description = "Media Hub: companion app for Jellyfin and Infuse"
 edition = "2021"
 rust-version = "1.77"
@@ -26,8 +26,13 @@ base64 = "0.22"
 getrandom = "0.2"
 sha2 = "0.10"
 tauri-plugin-dialog = "2"
+lofty = "0.22"
 
 [profile.release]
 lto = true
 codegen-units = 1
 strip = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Only to let the window draw at the screen's full refresh rate (120 Hz on ProMotion).
+objc2 = "0.6"

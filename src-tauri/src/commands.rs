@@ -264,16 +264,24 @@ fn episode_pick(e: &serde_json::Value, why: &str) -> Option<Pick> {
 /// Up to twelve picks for today: something you left halfway, the next episode, then one from
 /// several shelves (unwatched, top rated, your genres, quick movies, …). Same picks all day, new ones tomorrow.
 #[tauri::command]
-pub async fn todays_picks(state: State<'_, AppState>, date: String) -> Result<Vec<Pick>> {
+pub async fn todays_picks(state: State<'_, AppState>, date: String, only: Option<Vec<String>>) -> Result<Vec<Pick>> {
     if !picks::valid_date(&date) {
         return Err(Error::msg("bad date"));
     }
+    // "Picks come from these folders": the titles (movies and shows) allowed.
+    let only: Option<std::collections::HashSet<String>> = only.filter(|o| !o.is_empty()).map(|o| o.into_iter().map(|i| i.replace('-', "")).collect());
+    let allowed = |v: &serde_json::Value| -> bool {
+        let Some(set) = &only else { return true };
+        let key = v.get("SeriesId").and_then(|i| i.as_str()).or_else(|| v.get("Id").and_then(|i| i.as_str())).unwrap_or("");
+        set.contains(&key.replace('-', ""))
+    };
     let client = state.reader().await.ok();
     let mut out: Vec<Pick> = Vec::new();
     let choose = |list: &[serde_json::Value], salt: &str| -> Option<serde_json::Value> {
+        let list: Vec<&serde_json::Value> = list.iter().filter(|v| allowed(v)).collect();
         let ids: Vec<String> = list.iter().filter_map(|v| v.get("Id").and_then(|i| i.as_str()).map(String::from)).collect();
         let id = picks::pick_ids(&ids, &date, salt, 1).into_iter().next()?;
-        list.iter().find(|v| v.get("Id").and_then(|i| i.as_str()) == Some(id.as_str())).cloned()
+        list.iter().find(|v| v.get("Id").and_then(|i| i.as_str()) == Some(id.as_str())).map(|v| (*v).clone())
     };
     if let Some(c) = &client {
         if let Ok(list) = c.resume().await {
@@ -293,7 +301,10 @@ pub async fn todays_picks(state: State<'_, AppState>, date: String) -> Result<Ve
             }
         }
     }
-    let rows = state.store()?.pick_rows()?;
+    let mut rows = state.store()?.pick_rows()?;
+    if let Some(set) = &only {
+        rows.retain(|r| set.contains(&r.id.replace('-', "")));
+    }
     for (why, salt, list) in pick_shelves(&rows) {
         if out.len() >= MAX_PICKS {
             break;

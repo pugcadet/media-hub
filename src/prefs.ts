@@ -86,6 +86,12 @@ export interface Prefs {
   musicFolder: string | null;
   /** Subtitle languages to keep (others can be removed in one go). */
   keepSubLangs: string[];
+  /** The app's highlight colour (buttons, selection, focus). Status colours stay green/amber/red. */
+  accent: string;
+  /** Folders (top level under the library folder) picks of the day come from; empty = all. */
+  picksFolders: string[];
+  /** Folder tabs you added per screen ("intros" → ["Kids", "Anime"]). */
+  folderTabs: Record<string, string[]>;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -116,7 +122,40 @@ export const DEFAULT_PREFS: Prefs = {
   pickEdits: {},
   musicFolder: null,
   keepSubLangs: ["eng", "dut"],
+  accent: "#6d66f0",
+  picksFolders: [],
+  folderTabs: {},
 };
+
+/** Ready-made highlight colours for Settings → Look. */
+export const ACCENTS: { name: string; hex: string }[] = [
+  { name: "Indigo", hex: "#6d66f0" }, { name: "Blue", hex: "#3b82f6" }, { name: "Teal", hex: "#14b8a6" },
+  { name: "Green", hex: "#22c55e" }, { name: "Amber", hex: "#f59e0b" }, { name: "Orange", hex: "#f97316" },
+  { name: "Red", hex: "#e5484d" }, { name: "Pink", hex: "#ec4899" }, { name: "Slate", hex: "#94a3b8" },
+];
+
+function hexRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** Sets the highlight colour and the shades derived from it on the whole app. */
+export function applyAccent(hex: string): void {
+  const rgb = hexRgb(hex) ?? hexRgb(DEFAULT_PREFS.accent)!;
+  const [r, g, b] = rgb;
+  const mix = (t: number) => rgb.map((c) => Math.round(c + (255 - c) * t));
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  const st = document.documentElement.style;
+  st.setProperty("--accent", `rgb(${r},${g},${b})`);
+  st.setProperty("--accent-rgb", `${r},${g},${b}`);
+  st.setProperty("--accent-hover", `rgb(${mix(0.14).join(",")})`);
+  st.setProperty("--accent-on", `rgb(${mix(0.45).join(",")})`);
+  st.setProperty("--accent-soft", `rgba(${r},${g},${b},.16)`);
+  st.setProperty("--nav-on", `rgba(${r},${g},${b},.18)`);
+  st.setProperty("--accent-ink", lum > 0.6 ? "#111827" : "#ffffff");
+}
 
 const KEY = "mediahub.prefs.v1";
 
@@ -142,6 +181,8 @@ function load(): Prefs {
       randomFolders: p.randomFolders ?? [],
       pickEdits: p.pickEdits ?? {},
       keepSubLangs: p.keepSubLangs ?? ["eng", "dut"],
+      picksFolders: p.picksFolders ?? [],
+      folderTabs: p.folderTabs ?? {},
     };
   } catch {
     return DEFAULT_PREFS;
@@ -150,6 +191,7 @@ function load(): Prefs {
 
 let current: Prefs = load();
 const subs = new Set<() => void>();
+if (typeof document !== "undefined") applyAccent(current.accent);
 
 export function prefs(): Prefs {
   return current;
@@ -157,7 +199,9 @@ export function prefs(): Prefs {
 
 export function setPrefs(patch: Partial<Prefs> | ((p: Prefs) => Partial<Prefs>)): void {
   const next = typeof patch === "function" ? patch(current) : patch;
+  const accentBefore = current.accent;
   current = { ...current, ...next };
+  if (current.accent !== accentBefore) applyAccent(current.accent);
   try {
     localStorage.setItem(KEY, JSON.stringify(current));
   } catch {

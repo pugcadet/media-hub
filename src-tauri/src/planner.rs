@@ -510,7 +510,9 @@ pub fn plan_tv(
     };
     let mut top_map: Option<(String, String)> = None;
     if let (true, Some(top)) = (rename_top && !folder.is_empty(), &top_name) {
-        if folder_name != top && !(req.year_optional && without_year(folder_name) == without_year(top)) {
+        // Show folders all follow the same pattern (with the year where the style has one), so
+        // the year being optional only applies to episode file names.
+        if folder_name != top {
             let parent = split_path(folder).0;
             let new_full = join(parent, top);
             top_map = Some((folder.to_string(), new_full.clone()));
@@ -788,13 +790,15 @@ mod tests {
         r.year_optional = true;
         let ops = plan_tv(&f[..1], &r, &HashMap::new(), &nothing_exists).unwrap();
         assert!(ops.iter().all(|o| o.status == "unchanged"), "{ops:#?}");
-        // A show folder without the year isn't renamed only to add it.
+        // Show folders are kept alike: one without the year gets it, the files stay as they are.
         let f = files(&["TV/Bluey/Season 01/Bluey - S01E01 - Magic Xylophone.mkv"]);
         let mut r = req("TV/Bluey", TV);
         r.year = Some(2018);
         r.year_optional = true;
         let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
-        assert!(ops.iter().all(|o| o.status == "unchanged"), "{ops:#?}");
+        let folders: Vec<_> = ops.iter().filter(|o| o.status == "ok").collect();
+        assert_eq!(folders.len(), 1, "{ops:#?}");
+        assert_eq!(folders[0].to, "TV/Bluey (2018)");
         assert_eq!(without_year("Bluey (2018) - S01E01.mkv"), "Bluey - S01E01.mkv");
     }
 

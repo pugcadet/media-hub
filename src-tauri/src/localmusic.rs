@@ -1,21 +1,27 @@
 //! Music straight from a folder (on this computer or the NAS), without Jellyfin.
-//! The layout is read from the folders: Artist / Album (Year) / 01 - Song.flac, with
-//! cover.jpg or folder.jpg as the album picture.
+//! Song details come from the files' tags (title, artist, album, year, track, cover art),
+//! falling back to the folder layout: Artist / Album (Year) / 01 - Song.flac, with
+//! cover.jpg or folder.jpg as the album picture. What was read is kept in a library file in
+//! the music folder (`.mediahub/library.json`, covers in `.mediahub/covers/`), so opening
+//! the app again is instant and only new or changed songs are read.
 
 use crate::error::{Error, Result};
 use crate::music::MusicItem;
 use crate::state::AppState;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
-use tauri::{AppHandle, State};
+use std::time::{Duration, Instant, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, State};
 
 const AUDIO: &[&str] = &["mp3", "flac", "m4a", "aac", "ogg", "opus", "wav", "alac", "aiff", "aif"];
 const COVERS: &[&str] = &["cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg", "album.jpg", "Cover.jpg", "Folder.jpg"];
+const LIB_DIR: &str = ".mediahub";
 
 #[derive(Clone, Debug)]
 pub struct Track {
@@ -28,6 +34,9 @@ pub struct Track {
     pub year: Option<i64>,
     pub index: Option<i64>,
     pub disc: Option<i64>,
+    pub duration: f64,
+    /// When the file was added (for "New").
+    pub added: u64,
 }
 
 struct Index {
@@ -36,12 +45,40 @@ struct Index {
     tracks: Vec<Track>,
     /// album key -> cover file
     covers: HashMap<String, PathBuf>,
+    /// Read from the files' tags (not only from folder names).
+    tagged: bool,
+}
+
+/// One song in the library file.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+struct Entry {
+    rel: String,
+    size: u64,
+    mtime: u64,
+    title: Option<String>,
+    artist: Option<String>,
+    album_artist: Option<String>,
+    album: Option<String>,
+    year: Option<i64>,
+    track: Option<i64>,
+    disc: Option<i64>,
+    duration: f64,
+    #[serde(default)]
+    embedded_art: bool,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct LibFile {
+    version: u32,
+    entries: Vec<Entry>,
 }
 
 fn index() -> &'static Mutex<Option<Index>> {
     static I: OnceLock<Mutex<Option<Index>>> = OnceLock::new();
     I.get_or_init(|| Mutex::new(None))
 }
+
+static SCANNING: AtomicBool = AtomicBool::new(false);
 
 fn key_of(s: &str) -> String {
     let mut h = DefaultHasher::new();
@@ -80,69 +117,241 @@ pub fn parse_album(name: &str) -> (String, Option<i64>) {
     }
 }
 
-fn scan(root: &Path) -> Index {
+fn rel_of(root: &Path, p: &Path) -> String {
+    p.strip_prefix(root).map(|r| r.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")).unwrap_or_default()
+}
+
+fn lib_dir(root: &Path) -> PathBuf {
+    root.join(LIB_DIR)
+}
+
+fn load_lib(root: &Path) -> LibFile {
+    std::fs::read(lib_dir(root).join("library.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+fn save_lib(root: &Path, lib: &LibFile) {
+    let dir = lib_dir(root);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    if let Ok(b) = serde_json::to_vec(lib) {
+        let tmp = dir.join("library.json.tmp");
+        if std::fs::write(&tmp, b).is_ok() {
+            let _ = std::fs::rename(&tmp, dir.join("library.json"));
+        }
+    }
+}
+
+/// Reads a song's tags. `None` when the file can't be read as audio.
+fn read_tags(path: &Path) -> Option<Entry> {
+    use lofty::prelude::*;
+    let opts = lofty::config::ParseOptions::new().read_cover_art(false);
+    let file = lofty::probe::Probe::open(path).ok()?.options(opts).read().ok()?;
+    let mut e = Entry { duration: file.properties().duration().as_secs_f64(), ..Default::default() };
+    if let Some(tag) = file.primary_tag().or_else(|| file.first_tag()) {
+        let clean = |s: Option<std::borrow::Cow<'_, str>>| s.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+        e.title = clean(tag.title());
+        e.artist = clean(tag.artist());
+        e.album = clean(tag.album());
+        e.album_artist = tag.get_string(&ItemKey::AlbumArtist).map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+        e.year = tag.year().map(i64::from).filter(|y| (1000..3000).contains(y)).or_else(|| {
+            tag.get_string(&ItemKey::RecordingDate).and_then(|d| d.get(..4)).and_then(|y| y.parse().ok())
+        });
+        e.track = tag.track().map(i64::from).filter(|n| *n > 0);
+        e.disc = tag.disk().map(i64::from).filter(|n| *n > 0);
+    }
+    Some(e)
+}
+
+/// The first picture inside a song file, with its file extension.
+fn embedded_cover(path: &Path) -> Option<(Vec<u8>, &'static str)> {
+    use lofty::prelude::*;
+    let file = lofty::probe::Probe::open(path).ok()?.options(lofty::config::ParseOptions::new().read_properties(false)).read().ok()?;
+    for tag in file.tags() {
+        let pics = tag.pictures();
+        let pic = pics.iter().find(|p| p.pic_type() == lofty::picture::PictureType::CoverFront).or_else(|| pics.first());
+        if let Some(p) = pic {
+            let ext = match p.mime_type() {
+                Some(lofty::picture::MimeType::Png) => "png",
+                _ => "jpg",
+            };
+            return Some((p.data().to_vec(), ext));
+        }
+    }
+    None
+}
+
+/// Walks the folder. With `tags`, reads new or changed songs' tags (and keeps the library
+/// file up to date); without, uses the library file as it is plus folder names.
+fn scan(root: &Path, tags: bool) -> Index {
+    let old = load_lib(root);
+    let known: HashMap<&str, &Entry> = old.entries.iter().map(|e| (e.rel.as_str(), e)).collect();
+    let mut entries: Vec<Entry> = Vec::new();
     let mut tracks = Vec::new();
     let mut covers = HashMap::new();
+    let cover_dir = lib_dir(root).join("covers");
     let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut changed = false;
     while let Some((dir, depth)) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-        let mut files: Vec<PathBuf> = Vec::new();
+        let mut files: Vec<(PathBuf, std::fs::Metadata)> = Vec::new();
         for e in rd.flatten() {
             let p = e.path();
             let name = e.file_name().to_string_lossy().into_owned();
             if name.starts_with('.') {
                 continue;
             }
-            if p.is_dir() {
+            let Ok(md) = e.metadata() else { continue };
+            if md.is_dir() {
                 if depth < 6 {
                     stack.push((p, depth + 1));
                 }
             } else {
-                files.push(p);
+                files.push((p, md));
             }
         }
-        let rel: Vec<String> = dir.strip_prefix(root).map(|r| r.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect()).unwrap_or_default();
-        let (album_name, year) = parse_album(rel.last().map(String::as_str).unwrap_or("Unsorted"));
-        let artist = if rel.len() >= 2 { rel[rel.len() - 2].clone() } else { "Unknown artist".to_string() };
-        let album_key = key_of(&dir.to_string_lossy());
-        let mut any = false;
-        for f in &files {
+        let rel_dir = rel_of(root, &dir);
+        let parts: Vec<&str> = rel_dir.split('/').filter(|x| !x.is_empty()).collect();
+        let (folder_album, folder_year) = parse_album(parts.last().copied().unwrap_or("Unsorted"));
+        let folder_artist = if parts.len() >= 2 { parts[parts.len() - 2].to_string() } else { "Unknown artist".to_string() };
+        let album_key = key_of(&rel_dir);
+        let mut album_tracks: Vec<Track> = Vec::new();
+        let mut art_in_file: Option<PathBuf> = None;
+        for (f, md) in &files {
             let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
             if !AUDIO.contains(&ext.as_str()) {
                 continue;
             }
-            any = true;
+            let rel = rel_of(root, f);
+            let size = md.len();
+            let mtime = md.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+            let entry = match known.get(rel.as_str()) {
+                Some(e) if e.size == size && e.mtime == mtime => (*e).clone(),
+                _ if tags => {
+                    changed = true;
+                    let mut e = read_tags(f).unwrap_or_default();
+                    e.rel = rel.clone();
+                    e.size = size;
+                    e.mtime = mtime;
+                    e
+                }
+                Some(e) => (*e).clone(),
+                None => Entry { rel: rel.clone(), size, mtime, ..Default::default() },
+            };
             let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            let (mut title, index, disc) = parse_file(stem);
-            // "Artist - Song" inside the artist's own folder: drop the repeated artist.
-            if let Some(rest) = title.strip_prefix(&format!("{artist} - ")) {
-                title = rest.to_string();
+            let (mut file_title, file_index, file_disc) = parse_file(stem);
+            if let Some(rest) = file_title.strip_prefix(&format!("{folder_artist} - ")) {
+                file_title = rest.to_string();
             }
-            tracks.push(Track { key: key_of(&f.to_string_lossy()), path: f.clone(), title, artist: artist.clone(), album: album_name.clone(), album_key: album_key.clone(), year, index, disc });
+            if entry.embedded_art && art_in_file.is_none() {
+                art_in_file = Some(f.clone());
+            }
+            album_tracks.push(Track {
+                key: key_of(&rel),
+                path: f.clone(),
+                title: entry.title.clone().unwrap_or(file_title),
+                artist: entry.album_artist.clone().or_else(|| entry.artist.clone()).unwrap_or_else(|| folder_artist.clone()),
+                album: entry.album.clone().unwrap_or_else(|| folder_album.clone()),
+                album_key: album_key.clone(),
+                year: entry.year.or(folder_year),
+                index: entry.track.or(file_index),
+                disc: entry.disc.or(file_disc),
+                duration: entry.duration,
+                added: mtime,
+            });
+            entries.push(entry);
         }
-        if any {
-            if let Some(c) = COVERS.iter().map(|c| dir.join(c)).find(|p| p.is_file()) {
-                covers.insert(album_key.clone(), c);
-            } else if let Some(img) = files.iter().find(|f| matches!(f.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(), Some("jpg" | "jpeg" | "png"))) {
-                covers.insert(album_key.clone(), img.clone());
+        if album_tracks.is_empty() {
+            continue;
+        }
+        // One album name and artist for the whole folder (the most common tag wins).
+        let common = |f: &dyn Fn(&Track) -> String| -> String {
+            let mut c: HashMap<String, usize> = HashMap::new();
+            for t in &album_tracks {
+                *c.entry(f(t)).or_default() += 1;
+            }
+            c.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0))).map(|x| x.0).unwrap_or_default()
+        };
+        let album = common(&|t| t.album.clone());
+        let artist = common(&|t| t.artist.clone());
+        let year = album_tracks.iter().filter_map(|t| t.year).min();
+        for t in &mut album_tracks {
+            t.album = album.clone();
+            t.artist = artist.clone();
+            t.year = year;
+        }
+        // The album picture: a picture file in the folder, then one saved earlier, then the
+        // one inside a song (saved to the library folder for next time).
+        if let Some(c) = COVERS.iter().map(|c| dir.join(c)).find(|p| p.is_file()) {
+            covers.insert(album_key.clone(), c);
+        } else if let Some((img, _)) = files.iter().find(|(f, _)| matches!(f.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(), Some("jpg" | "jpeg" | "png"))) {
+            covers.insert(album_key.clone(), img.clone());
+        } else if let Some(saved) = ["jpg", "png"].iter().map(|e| cover_dir.join(format!("{album_key}.{e}"))).find(|p| p.is_file()) {
+            covers.insert(album_key.clone(), saved);
+        } else if tags {
+            let source = art_in_file.or_else(|| album_tracks.first().map(|t| t.path.clone()));
+            if let Some((bytes, ext)) = source.as_deref().and_then(embedded_cover) {
+                let out = cover_dir.join(format!("{album_key}.{ext}"));
+                if std::fs::create_dir_all(&cover_dir).is_ok() && std::fs::write(&out, bytes).is_ok() {
+                    covers.insert(album_key.clone(), out);
+                }
             }
         }
+        tracks.extend(album_tracks);
         if tracks.len() > 200_000 {
             break;
         }
     }
+    if tags && (changed || entries.len() != old.entries.len()) {
+        entries.sort_by(|a, b| a.rel.cmp(&b.rel));
+        save_lib(root, &LibFile { version: 1, entries });
+    }
     tracks.sort_by(|a, b| (a.artist.to_lowercase(), a.year, a.album.to_lowercase(), a.disc, a.index, a.title.to_lowercase()).cmp(&(b.artist.to_lowercase(), b.year, b.album.to_lowercase(), b.disc, b.index, b.title.to_lowercase())));
-    Index { root: root.to_path_buf(), at: Instant::now(), tracks, covers }
+    Index { root: root.to_path_buf(), at: Instant::now(), tracks, covers, tagged: tags }
 }
 
-/// The scanned folder (scanned again after 10 minutes or when the folder changes).
-fn with_index<T>(root: &Path, f: impl FnOnce(&Index) -> T) -> Result<T> {
-    let mut g = index().lock().map_err(|_| Error::msg("internal error"))?;
-    let stale = g.as_ref().map(|i| i.root != root || i.at.elapsed() > Duration::from_secs(600)).unwrap_or(true);
-    if stale {
-        *g = Some(scan(root));
+/// Reads tags in the background and swaps the result in; the window is told to reload.
+fn refresh_in_background(root: PathBuf, app: Option<AppHandle>) {
+    if SCANNING.swap(true, Ordering::SeqCst) {
+        return;
     }
-    Ok(f(g.as_ref().expect("just set")))
+    std::thread::spawn(move || {
+        let ix = scan(&root, true);
+        if let Ok(mut g) = index().lock() {
+            if g.as_ref().map(|i| i.root == root).unwrap_or(true) {
+                *g = Some(ix);
+            }
+        }
+        SCANNING.store(false, Ordering::SeqCst);
+        if let Some(app) = app {
+            let _ = app.emit("music-updated", ());
+        }
+    });
+}
+
+/// The music index. The first time it comes from the library file and folder names (fast),
+/// and the tags are read in the background; after 10 minutes it's refreshed in the background.
+fn with_index<T>(root: &Path, app: Option<&AppHandle>, f: impl FnOnce(&Index) -> T) -> Result<T> {
+    let mut g = index().lock().map_err(|_| Error::msg("internal error"))?;
+    let missing = g.as_ref().map(|i| i.root != root).unwrap_or(true);
+    if missing {
+        *g = Some(scan(root, false));
+    }
+    let ix = g.as_ref().expect("just set");
+    if !ix.tagged || ix.at.elapsed() > Duration::from_secs(600) {
+        refresh_in_background(root.to_path_buf(), app.cloned());
+    }
+    Ok(f(ix))
+}
+
+/// Settings / Music → refresh: reads the folder again now (tags of new and changed songs).
+#[tauri::command]
+pub async fn music_rescan(state: State<'_, AppState>) -> Result<usize> {
+    let root = root_of(&state)?;
+    let ix = tauri::async_runtime::spawn_blocking(move || scan(&root, true)).await.map_err(|e| Error::msg(e.to_string()))?;
+    let n = ix.tracks.len();
+    *index().lock().map_err(|_| Error::msg("internal error"))? = Some(ix);
+    Ok(n)
 }
 
 fn base() -> &'static str {
@@ -154,7 +363,7 @@ fn base() -> &'static str {
 }
 
 fn track_item(t: &Track, has_cover: bool) -> MusicItem {
-    MusicItem::local(
+    let mut m = MusicItem::local(
         format!("L{}", t.key),
         "track",
         t.title.clone(),
@@ -166,7 +375,9 @@ fn track_item(t: &Track, has_cover: bool) -> MusicItem {
         t.disc,
         has_cover.then(|| format!("{}/lc/{}", base(), t.album_key)),
         None,
-    )
+    );
+    m.set_duration(t.duration);
+    m
 }
 
 fn root_of(state: &AppState) -> Result<PathBuf> {
@@ -179,15 +390,25 @@ fn root_of(state: &AppState) -> Result<PathBuf> {
 }
 
 /// Same views as Jellyfin music: albums, artists, tracks of an album/artist, search.
-pub fn list(state: &AppState, view: &str, parent: Option<&str>, query: &str, start: u64, limit: u64) -> Result<Vec<MusicItem>> {
+pub fn list(app: &AppHandle, state: &AppState, view: &str, parent: Option<&str>, query: &str, start: u64, limit: u64) -> Result<Vec<MusicItem>> {
     let root = root_of(state)?;
     let q = query.to_lowercase();
-    with_index(&root, |ix| {
+    with_index(&root, Some(app), |ix| {
         let hit = |t: &Track| q.is_empty() || t.title.to_lowercase().contains(&q) || t.album.to_lowercase().contains(&q) || t.artist.to_lowercase().contains(&q);
         let out: Vec<MusicItem> = match view {
             "albums" | "recent" | "artist_albums" | "favorites" => {
                 let mut seen: Vec<&Track> = Vec::new();
-                for t in ix.tracks.iter().filter(|t| hit(t)) {
+                let mut order: Vec<&Track> = ix.tracks.iter().filter(|t| hit(t)).collect();
+                if view == "recent" {
+                    // Newest albums first.
+                    let mut newest: HashMap<&str, u64> = HashMap::new();
+                    for t in &order {
+                        let e = newest.entry(t.album_key.as_str()).or_default();
+                        *e = (*e).max(t.added);
+                    }
+                    order.sort_by(|a, b| newest[b.album_key.as_str()].cmp(&newest[a.album_key.as_str()]));
+                }
+                for t in order {
                     if view == "artist_albums" && Some(format!("R{}", key_of(&t.artist)).as_str()) != parent {
                         continue;
                     }
@@ -247,7 +468,7 @@ pub fn serve(app: &AppHandle, path: &str) -> Option<(Vec<u8>, String)> {
     }
     let state = app.state::<AppState>();
     let root = root_of(&state).ok()?;
-    let file = with_index(&root, |ix| match kind {
+    let file = with_index(&root, Some(app), |ix| match kind {
         "lf" => ix.tracks.iter().find(|t| t.key == key).map(|t| t.path.clone()),
         "lc" => ix.covers.get(key).cloned(),
         _ => None,
@@ -327,6 +548,27 @@ mod tests {
     }
 
     #[test]
+    fn reads_tags_and_cover_when_available() {
+        let root = std::path::PathBuf::from("/tmp/mt");
+        if !root.join("Whatever/x.mp3").exists() {
+            return;
+        }
+        let _ = std::fs::remove_dir_all(root.join(LIB_DIR));
+        let ix = scan(&root, true);
+        assert_eq!(ix.tracks[0].title, "Real Title");
+        assert_eq!(ix.tracks[0].artist, "Real Artist");
+        assert_eq!(ix.tracks[0].album, "Real Album");
+        assert_eq!(ix.tracks[0].year, Some(1999));
+        assert_eq!(ix.tracks[0].index, Some(4));
+        assert_eq!(ix.covers.len(), 1, "embedded cover saved");
+        assert!(root.join(LIB_DIR).join("library.json").exists());
+        // From the library file alone, without reading tags again.
+        let quick = scan(&root, false);
+        assert_eq!(quick.tracks[0].title, "Real Title");
+        assert_eq!(quick.covers.len(), 1);
+    }
+
+    #[test]
     fn scans_a_folder() {
         let root = std::env::temp_dir().join(format!("mh-music-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -334,7 +576,7 @@ mod tests {
         std::fs::write(root.join("Air/Moon Safari (1998)/01 - La Femme d'Argent.mp3"), b"x").unwrap();
         std::fs::write(root.join("Air/Moon Safari (1998)/02 - Sexy Boy.mp3"), b"x").unwrap();
         std::fs::write(root.join("Air/Moon Safari (1998)/cover.jpg"), b"x").unwrap();
-        let ix = scan(&root);
+        let ix = scan(&root, true);
         assert_eq!(ix.tracks.len(), 2);
         assert_eq!(ix.tracks[0].artist, "Air");
         assert_eq!(ix.tracks[0].album, "Moon Safari");

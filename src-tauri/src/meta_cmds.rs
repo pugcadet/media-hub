@@ -457,6 +457,14 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
         }
         return Ok(());
     }
+    if ch.action == "subtitle_file" {
+        crate::sub_cmds::undo_saved_file(&ch.old_value)?;
+        state.store()?.journal_mark_undone(change_id)?;
+        if let (Ok(w), true) = (state.writer().await, valid_item_id(&ch.target)) {
+            let _ = w.refresh_light(&ch.target).await;
+        }
+        return Ok(());
+    }
     if ch.action == "file_trashed" {
         crate::library::undo_trash(&ch.old_value)?;
         state.store()?.journal_mark_undone(change_id)?;

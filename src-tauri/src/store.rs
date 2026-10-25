@@ -311,6 +311,13 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Ids of every title in the library list (to drop results for titles that are gone).
+    pub fn known_ids(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM items")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).map(|i| i.replace('-', "")).collect())
+    }
+
     pub fn clear(&mut self) -> Result<()> {
         self.conn.execute_batch("DELETE FROM items; DELETE FROM meta; DELETE FROM libraries;")?;
         Ok(())
@@ -466,7 +473,7 @@ impl Store {
     pub fn changes_for(&self, item_id: &str, limit: i64) -> Result<Vec<Change>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, CAST(at AS INTEGER), action, target, undone FROM undo_journal
-             WHERE action IN ('item_update','identify','image','image_removed','collection','subtitle','segment','file_trashed','subtitle_timing') AND (target = ?1 OR target LIKE ?1 || '|%')
+             WHERE action IN ('item_update','identify','image','image_removed','collection','subtitle','subtitle_file','segment','file_trashed','subtitle_timing') AND (target = ?1 OR target LIKE ?1 || '|%')
              ORDER BY id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![item_id, limit.clamp(1, 100)], |r| {

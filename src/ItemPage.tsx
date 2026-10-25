@@ -416,7 +416,7 @@ function TitleHealth({ d, kind, canEdit, subLangs, onTab }: { d: Details; kind: 
         </button>
         {auto.length > 0 && canEdit && (
           <button className="bb-more" onClick={() => void fix()} title={`Does it for you: ${auto.map((a) => (a === "art" ? "artwork" : a === "subs" ? "subtitles" : "100% sure names")).join(", ")}. Can be undone.`}>
-            <Icon name="wand" size={18} /> Fix {auto.length} thing{auto.length === 1 ? "" : "s"}
+            <Icon name="wrench" size={18} /> Fix {auto.length} thing{auto.length === 1 ? "" : "s"}
           </button>
         )}
         {todo > auto.length && <span className="muted small">{todo - auto.length} need{todo - auto.length === 1 ? "s" : ""} you: click the yellow chip</span>}

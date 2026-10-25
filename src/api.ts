@@ -151,6 +151,23 @@ export interface Tuning {
  * After renaming: tells Jellyfin to look at the folders around these (their parents, so
  * renamed folders are seen too). Falls back to a full scan for top-level folders.
  */
+/**
+ * Renames like `api.apply`, but when a show's own folder gets a new name its skip markers are
+ * read first and put back on the same episodes once Jellyfin has found the show again (its
+ * id changes with the folder name).
+ */
+export async function applyPlan(plan: PlanResult, removeEmpty: boolean, selected: string[], seriesId: string | null, showFolder: string | null) {
+  const top = seriesId && showFolder != null ? plan.ops.find((o) => o.kind === "folder" && o.status === "ok" && o.from === showFolder && selected.includes(o.from)) : undefined;
+  const snap = top && seriesId ? await api.segmentsSnapshot(seriesId).catch(() => [] as SegSnap[]) : [];
+  const rep = await api.apply(plan.planId, removeEmpty, selected);
+  if (top && seriesId && snap.length && rep.done) {
+    void api.segmentsCarry(snap, top.to.split("/").pop() ?? "", seriesId).catch(() => undefined);
+  }
+  return rep;
+}
+
+export interface SegSnap { season: number; episode: number; kind: string; start: number; end: number }
+
 export async function scanAround(folders: string[]): Promise<void> {
   const parents = [...new Set(folders.map((f) => f.split("/").slice(0, -1).join("/")))];
   const list = parents.some((p) => p === "") ? [] : parents;
@@ -439,6 +456,27 @@ export interface About {
   people: { id: string; name: string; role: string; hasImage: boolean }[];
 }
 
+export interface Downloaded {
+  /** Stream index once Jellyfin lists it. */
+  index: number | null;
+  /** The subtitle text when Media Hub saved the file itself. */
+  text: string | null;
+  format: string;
+  /** Where it was saved on this computer ("" when Jellyfin downloaded it). */
+  file: string;
+}
+
+/** SRT (or VTT) text as WebVTT the video element can read. */
+export function toVtt(text: string): string {
+  const t = text.replace(/\r\n?/g, "\n").trim();
+  if (t.startsWith("WEBVTT")) return t;
+  const body = t
+    .split(/\n{2,}/)
+    .map((block) => block.replace(/^\d+\n(?=\d\d:)/, "").replace(/(\d\d:\d\d:\d\d),(\d{3})/g, "$1.$2"))
+    .join("\n\n");
+  return `WEBVTT\n\n${body}\n`;
+}
+
 export interface SubTrack {
   index: number;
   language: string;
@@ -660,7 +698,7 @@ export const api = {
   sync: () => invoke<{ movies: number; series: number }>("sync_library"),
   list: (kind: Kind, query: string, sort: Sort, offset: number, limit: number, library: string | null = null, flag: string | null = null) =>
     invoke<Item[]>("list_items", { kind, library, flag, query, sort, offset, limit }),
-  picks: (date: string) => invoke<Pick[]>("todays_picks", { date }),
+  picks: (date: string, only?: string[] | null) => invoke<Pick[]>("todays_picks", { date, only: only ?? null }),
   libraries: () => invoke<Library[]>("libraries"),
   attention: () => invoke<Attention>("attention"),
   missingSubtitles: (start: number, limit: number) =>
@@ -670,11 +708,14 @@ export const api = {
   listUsers: () => invoke<{ id: string; name: string; admin: boolean }[]>("list_users"),
   setUser: (id: string) => invoke<void>("set_user", { id }),
   setSyncWatched: (value: boolean) => invoke<void>("set_sync_watched", { value }),
+  watchSyncTest: () => invoke<string>("watch_sync_test"),
   checkUpdate: () => invoke<{ current: string; latest: string | null; available: boolean; notes: string }>("check_update"),
   installUpdate: () => invoke<void>("install_update"),
   pickRoot: () => invoke<string | null>("pick_library_root"),
   folders: (folder: string) => invoke<{ name: string }[]>("list_folders", { folder }),
   plan: (args: PlanArgs) => invoke<PlanResult>("plan_rename", { args }),
+  segmentsSnapshot: (seriesId: string) => invoke<SegSnap[]>("segments_snapshot", { seriesId }),
+  segmentsCarry: (snapshot: SegSnap[], folderName: string, oldSeriesId: string) => invoke<void>("segments_carry", { snapshot, folderName, oldSeriesId }),
   apply: (planId: string, removeEmpty: boolean, selected: string[] | null = null) =>
     invoke<{ batch: string; done: number; failed: string[] }>("apply_plan", { planId, removeEmpty, selected }),
   history: () => invoke<Batch[]>("rename_history"),
@@ -694,9 +735,9 @@ export const api = {
   setSubLangs: (langs: string[]) => invoke<void>("set_sub_langs", { langs }),
   children: (id: string) => invoke<JfChild[]>("item_children", { id }),
   subtitleOptions: (id: string, lang: string) => invoke<SubOptions>("subtitle_options", { id, lang }),
-  /** Returns the new subtitle's stream index once Jellyfin lists it (null if it didn't show up in time). */
-  subtitleDownload: (id: string, subtitleId: string, lang: string, codes: string[]) =>
-    invoke<number | null>("subtitle_download", { id, subtitleId, lang, codes }),
+  /** Saves the subtitle next to the video (text comes back to show it at once), or has Jellyfin download it. */
+  subtitleDownload: (id: string, subtitleId: string, lang: string, codes: string[], format?: string | null) =>
+    invoke<Downloaded>("subtitle_download", { id, subtitleId, lang, codes, format: format ?? null }),
   subtitleAuto: (id: string, lang: string, codes: string[], minScore: number) =>
     invoke<AutoResult>("subtitle_auto", { id, lang, codes, minScore }),
   segmentsOverview: (seasonId: string) => invoke<SegOverview>("segments_overview", { seasonId }),
@@ -771,6 +812,7 @@ export const api = {
     invoke<void>("set_library_language", { id, language, country, refresh }),
   subtitleSync: (id: string, index: number, apply: boolean) =>
     invoke<{ fit: SyncFit; sure: boolean; applied: boolean; file: string }>("subtitle_sync", { id, index, apply }),
+  musicRescan: () => invoke<number>("music_rescan"),
   musicList: (view: string, parent: string | null, query: string | null, start: number, limit: number) =>
     invoke<MusicItem[]>("music_list", { view, parent, query, start, limit }),
   musicPlay: (id: string) => invoke<string>("music_play", { id }),

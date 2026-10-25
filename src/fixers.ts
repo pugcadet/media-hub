@@ -1,7 +1,7 @@
 // The safe, automatic fixes shared by Library health, the library wall and a title's page:
 // fill in missing artwork, get missing subtitles, rename 100%-sure names. Everything they do
 // is journaled by the backend, so it can be undone in History.
-import { api, CheckRow, HealthRow, ImageKind, scanAround } from "./api";
+import { api, applyPlan, CheckRow, HealthRow, ImageKind, scanAround } from "./api";
 import type { JobHandle } from "./activity";
 import { prefs, subPlan, subSkipped, withShowYear, yearOptional } from "./prefs";
 
@@ -102,12 +102,12 @@ export async function renameSure(r: CheckRow): Promise<number> {
     mode: series ? "tv" : "movie", folder: r.folder,
     template: series ? withShowYear("{show}< ({year})>/{seasondir}/{show}< ({year})> - {sxe}< - {title}>.{ext}") : "{title}< ({year})>/{title}< ({year})>.{ext}",
     show: null, year: null, yearOptional: yearOptional(), findReplace: [], recursive: series, source: series ? "jellyfin" : "none",
-    matchId: series ? `jellyfin:${r.id}` : null, renameFolder: null, seasonFolders: false,
+    matchId: series ? `jellyfin:${r.id}` : null, renameFolder: series ? true : null, seasonFolders: false,
     onlyFile: series ? null : r.file, itemId: series ? null : r.id,
   });
   const ok = plan.ops.filter((o) => o.status === "ok").map((o) => o.from);
   if (!ok.length) return 0;
-  return (await api.apply(plan.planId, true, ok)).done;
+  return (await applyPlan(plan, true, ok, series ? r.id : null, r.folder)).done;
 }
 
 export interface FixResult {

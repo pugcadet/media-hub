@@ -5,6 +5,7 @@ import { useEpoch } from "./activity";
 import type { View } from "./nav";
 import { Icon, Tabs } from "./ui";
 import { usePrefs } from "./prefs";
+import { foldersOf, tabFolder, useFolderMap } from "./folders";
 
 // Marker counts per show, kept while the app is open.
 const summaries = new Map<string, SegSummary>();
@@ -46,7 +47,7 @@ function ShowRow({ s, onPick }: { s: Item; onPick: () => void }) {
     <button ref={ref} className="intro-row" onClick={onPick}>
       <div className="thumb">{s.hasPoster ? <img src={imageUrl(s.id, "Primary", 120)} alt="" loading="lazy" /> : null}</div>
       <div className="names">
-        <div className="title">{cleanTitle(s.name, s.year)}{s.year ? <span className="muted"> ({s.year})</span> : null}</div>
+        <div className="title">{cleanTitle(s.name, s.year)}{s.year && !/\(\d{4}\)/.test(cleanTitle(s.name, s.year)) ? <span className="muted"> ({s.year})</span> : null}</div>
         <div className="muted small">{[s.seasons ? `${s.seasons} season${s.seasons === 1 ? "" : "s"}` : "", s.episodes ? `${s.episodes} episodes` : ""].filter(Boolean).join(" · ")}</div>
         <div className="intro-cov small">
           {!sum ? <span className="muted">Counting markers…</span> : (
@@ -76,6 +77,8 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
   const [season, setSeason] = useState<JfItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [onlyGaps, setOnlyGaps] = useState(false);
+  const [tab, setTab] = useState("all");
+  const folderMap = useFolderMap();
 
   useEffect(() => {
     api.libraries().then((l) => {
@@ -106,7 +109,9 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
     }).catch((e) => setError(errorText(e)));
   }, [show]);
 
+  const inFolder = tabFolder(tab);
   const visible = shows.filter((s) => {
+    if (inFolder && folderMap.get(s.id) !== inFolder) return false;
     if (!onlyGaps) return true;
     const x = summaries.get(s.id);
     return !x || x.intro < x.episodes || x.credits < x.episodes;
@@ -126,8 +131,9 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
       {!show && (
         <>
           {libs.length > 0 && (
-            <Tabs screen="intros" fixed={["all"]} active={lib ?? "all"} onChange={(id) => setLib(id === "all" ? null : id)}
-              tabs={[{ id: "all", label: "All shown" }, ...libs.map((l) => ({ id: l.id, label: l.name, count: l.count }))]} />
+            <Tabs screen="intros" fixed={["all"]} active={tab} onChange={(id) => { setTab(id); setLib(id === "all" || id.startsWith("folder:") ? null : id); }}
+              tabs={[{ id: "all", label: "All shown" }, ...libs.map((l) => ({ id: l.id, label: l.name, count: l.count }))]}
+              folders={foldersOf(folderMap).map((f) => ({ name: f, count: shows.filter((s) => folderMap.get(s.id) === f).length || undefined }))} />
           )}
           <div className="toolbar">
             <label className="check small"><input type="checkbox" checked={onlyGaps} onChange={(e) => setOnlyGaps(e.target.checked)} />Only shows with missing markers</label>

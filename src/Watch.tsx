@@ -8,7 +8,7 @@ import { HubSwitcher } from "./Sidebar";
 import Home, { Billboard, featured, itemToCard } from "./Home";
 import Collections from "./Collections";
 import { MediaInfo } from "./ItemPage";
-import { CardTile, Icon, itemMenu, openMenu, playTitle, Row, Tabs } from "./ui";
+import { CardTile, Icon, Img, itemMenu, openMenu, playTitle, Row, Tabs } from "./ui";
 import { prefs } from "./prefs";
 
 type Tab = "home" | "movies" | "shows" | "collections";
@@ -26,6 +26,8 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
     setSolid(false);
   }, [item?.id, tab]);
   const hasHero = !!item || (!query && tab !== "collections");
+  const [seen, setSeen] = useState<Tab[]>(["home"]);
+  useEffect(() => setSeen((s) => (s.includes(tab) ? s : [...s, tab])), [tab]);
 
   // Collections open inside the player instead of switching to the manager.
   useEffect(() => {
@@ -59,26 +61,24 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
           ))}
         </nav>
         <div className="spacer" />
-        <button className="w-random" onClick={() => void playRandom()} title="Play something you haven't seen (folders: Settings → Player)"><Icon name="shuffle" /> Play something</button>
+        <button className="w-random" onClick={() => void playRandom()} title="Play something you haven't seen (folders: Settings → Player)"><Icon name="shuffle" /><span className="w-random-label"> Play something</span></button>
         <label className="searchbox w-search">
           <Icon name="search" />
           <input placeholder="Search" value={query} onChange={(e) => { setQuery(e.target.value); if (item && e.target.value) onBack(); }} />
         </label>
       </header>
       <div className={`w-page ${hasHero ? "has-hero" : ""}`} ref={scroller} onScroll={(e) => setSolid((e.target as HTMLDivElement).scrollTop > 40)}>
-        {item ? (
-          <WatchItem key={item.id} id={item.id} onBack={onBack} />
-        ) : query ? (
-          <Browse kind={null} query={query} />
-        ) : tab === "home" ? (
-          <Home status={status} canEdit={false} variant="watch" />
-        ) : tab === "movies" ? (
-          <Browse kind="movie" query="" />
-        ) : tab === "shows" ? (
-          <Browse kind="series" query="" />
-        ) : (
-          <Collections status={{ ...status, readOnly: true }} selected={collection} variant="watch" />
-        )}
+        {item && <WatchItem key={item.id} id={item.id} onBack={onBack} />}
+        {!item && query && <Browse kind={null} query={query} />}
+        {/* The tabs stay loaded once opened, so switching back shows them at once. */}
+        {seen.map((t) => (
+          <div key={t} className="w-tab-body" hidden={!!item || !!query || tab !== t}>
+            {t === "home" ? <Home status={status} canEdit={false} variant="watch" />
+              : t === "movies" ? <Browse kind="movie" query="" />
+              : t === "shows" ? <Browse kind="series" query="" />
+              : <Collections status={{ ...status, readOnly: true }} selected={collection} variant="watch" />}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -105,17 +105,35 @@ const letterOf = (name: string) => {
   return c >= "A" && c <= "Z" ? c : "#";
 };
 
+const browseCache = new Map<string, { items: Card[]; hero: Pick | null }>();
+const detailsCache = new Map<string, Details>();
+const epsCache = new Map<string, JfChild[]>();
+
 function Browse({ kind, query }: { kind: "movie" | "series" | null; query: string }) {
   const epoch = useEpoch();
   const [sort, setSort] = useState<Sort>("added");
-  const [items, setItems] = useState<Card[]>([]);
+  const [items, setItems] = useState<Card[]>(() => (query ? [] : browseCache.get(kind ?? "all")?.items ?? []));
   const [more, setMore] = useState(true);
   const [genre, setGenre] = useState<string | null>(null);
   const [genres, setGenres] = useState<string[]>([]);
   const [onlyNew, setOnlyNew] = useState(false);
-  const [hero, setHero] = useState<Pick | null>(null);
+  const [hero, setHero] = useState<Pick | null>(() => (query ? null : browseCache.get(kind ?? "all")?.hero ?? null));
   const sentinel = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
   const busy = useRef(false);
+  // The A–Z rail shows once the big picture has scrolled away.
+  const [pastHero, setPastHero] = useState(false);
+  useEffect(() => {
+    const sc = root.current?.closest(".w-page");
+    if (!sc) return;
+    const on = () => {
+      const bb = root.current?.querySelector(".billboard");
+      setPastHero(!bb || sc.scrollTop > (bb as HTMLElement).offsetHeight * 0.75);
+    };
+    on();
+    sc.addEventListener("scroll", on, { passive: true });
+    return () => sc.removeEventListener("scroll", on);
+  }, [hero]);
   const all = useRef<{ card: Card; genres: string[] }[]>([]);
 
   const load = useCallback(async (offset: number) => {
@@ -124,7 +142,11 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
     try {
       const rows = await api.list(kind, query, sort, offset, 120);
       if (offset === 0) {
-        if (!query) api.list(kind, "", "rating", 0, 200).then((top) => setHero(featured(top, kind === "movie" ? "Movie of the day" : "Show of the day"))).catch(() => setHero(null));
+        if (!query) api.list(kind, "", "rating", 0, 200).then((top) => {
+          const h = featured(top, kind === "movie" ? "Movie of the day" : "Show of the day");
+          setHero(h);
+          browseCache.set(kind ?? "all", { items: browseCache.get(kind ?? "all")?.items ?? [], hero: h });
+        }).catch(() => setHero(null));
         const g = new Map<string, number>();
         rows.forEach((r) => r.genres.forEach((x) => g.set(x, (g.get(x) ?? 0) + 1)));
         setGenres([...g.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14).map(([x]) => x));
@@ -132,7 +154,9 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
       const cards = rows.map((r) => ({ card: itemToCard(r), genres: r.genres }));
       const next = offset === 0 ? cards : [...all.current, ...cards];
       all.current = next;
-      setItems(next.filter((c) => (!genre || c.genres.includes(genre)) && (!onlyNew || !c.card.played)).map((c) => c.card));
+      const shown = next.filter((c) => (!genre || c.genres.includes(genre)) && (!onlyNew || !c.card.played)).map((c) => c.card);
+      setItems(shown);
+      if (!query && offset === 0 && !genre && !onlyNew) browseCache.set(kind ?? "all", { items: shown, hero: browseCache.get(kind ?? "all")?.hero ?? null });
       setMore(rows.length === 120);
     } finally {
       busy.current = false;
@@ -169,7 +193,7 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
   }, [more, load]);
 
   return (
-    <div className="pg">
+    <div className={`pg w-browse ${hero && !query ? "layered" : ""}`} ref={root}>
       {hero && !query && <Billboard pick={hero} full onPlay={() => void playTitle(hero.id)} />}
       <div className="pg-head">
         <h1>{query ? `Results for “${query}”` : kind === "movie" ? "Movies" : "Shows"}</h1>
@@ -196,7 +220,7 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
         })}
       </div>
       {!query && items.length > 30 && (
-        <nav className="az-rail" aria-label="Jump to a letter">
+        <nav className={`az-rail ${pastHero ? "" : "away"}`} aria-label="Jump to a letter">
           {LETTERS.map((l) => <button key={l} onClick={() => void jump(l)}>{l}</button>)}
         </nav>
       )}
@@ -208,7 +232,8 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
 
 function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
   const epoch = useEpoch();
-  const [d, setD] = useState<Details | null>(null);
+  const [d, setDS] = useState<Details | null>(() => detailsCache.get(id) ?? null);
+  const setD = (x: Details) => { detailsCache.set(id, x); setDS(x); };
   const [season, setSeason] = useState<string | null>(null);
   const [eps, setEps] = useState<JfChild[] | null>(null);
   const [similar, setSimilar] = useState<Card[]>([]);
@@ -229,8 +254,8 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
     api.similar(id).then(setSimilar).catch(() => setSimilar([]));
   }, [id, epoch]);
   useEffect(() => {
-    setEps(null);
-    if (season) api.children(season).then((c) => setEps(c.filter((x) => x.Type === "Episode"))).catch(() => setEps([]));
+    setEps(season ? epsCache.get(season) ?? null : null);
+    if (season) api.children(season).then((c) => { const e = c.filter((x) => x.Type === "Episode"); epsCache.set(season, e); setEps(e); }).catch(() => setEps([]));
   }, [season, epoch]);
 
   if (error) return <div className="pg"><button onClick={onBack}>← Back</button><p className="error">{error}</p></div>;
@@ -249,10 +274,10 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
     <div className="w-item">
       <button className="w-backfix" onClick={onBack} aria-label="Back" title="Back"><span className="flip"><Icon name="chevron" size={22} /></span></button>
       <section className="w-hero" onContextMenu={(e) => openMenu(e, itemMenu({ id, kind: it.Type, title, seriesId: it.SeriesId, played: it.UserData?.Played }, false))}>
-        <img className="w-hero-art" src={isEpisode ? imageUrl(id, "Primary", 1920) : imageUrl(artId, "Backdrop", 1920)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+        <Img className="w-hero-art" src={isEpisode ? imageUrl(id, "Primary", 1920) : imageUrl(artId, "Backdrop", 1920)} />
         <div className="w-hero-shade" />
         <div className="w-hero-body">
-          {logo && !isEpisode ? <img className="w-logo" src={imageUrl(artId, "Logo", 800)} alt={title} onError={() => setLogo(false)} /> : <h1 className="w-title">{isEpisode && it.SeriesName ? cleanTitle(it.SeriesName) : title}</h1>}
+          {logo && !isEpisode ? <Img className="w-logo" src={imageUrl(artId, "Logo", 800)} alt={title} onFail={() => setLogo(false)} /> : <h1 className="w-title">{isEpisode && it.SeriesName ? cleanTitle(it.SeriesName) : title}</h1>}
           {isEpisode && <div className="w-epname">{epCode(it.ParentIndexNumber, it.IndexNumber).trim()}{epCode(it.ParentIndexNumber, it.IndexNumber) ? " — " : ""}{it.Name}</div>}
           <div className="hero-meta">
             {it.ProductionYear && <span>{it.ProductionYear}</span>}

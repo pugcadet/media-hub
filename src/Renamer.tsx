@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { api, scanAround, Batch, Candidate, CheckResult, CheckRow, errorText, FindReplace, imageUrl, PlanArgs, PlanOp, PlanResult, remoteImageUrl, Status } from "./api";
+import { api, applyPlan, scanAround, Batch, Candidate, CheckResult, CheckRow, errorText, FindReplace, imageUrl, PlanArgs, PlanOp, PlanResult, remoteImageUrl, Status } from "./api";
 import { askConfirm } from "./confirm";
 import type { View } from "./nav";
 import { nav } from "./nav";
@@ -41,7 +41,7 @@ export function ShowYearPicker() {
       </div>
       <div className="muted small">
         {SHOW_YEAR.find((o) => o.id === showYear)?.hint}. The year in the folder helps Jellyfin pick the right show when there are remakes; the episode files don't need it.
-        {showYear !== "everywhere" && " Existing names that only differ by the year are left alone, because renaming a show in Jellyfin loses its watched status and markers."}
+        {" Show folders all get the same pattern; episode files that only differ by the year are left alone. Watched status stays (Jellyfin keeps it by TMDB/TVDB id) and Media Hub moves the skip markers over to the renamed show."}
       </div>
     </div>
   );
@@ -296,7 +296,7 @@ function FolderFix({ status, onChanged, preset, embedded, onDone }: { status: St
     if (!(await askConfirm(`Rename ${what}? Nothing is deleted or overwritten, and you can undo it.`, { okLabel: "Rename" }))) return;
     setBusy("Renaming…");
     try {
-      const rep = await api.apply(plan.planId, removeEmpty, [...picked]);
+      const rep = await applyPlan(plan, removeEmpty, [...picked], matchId?.startsWith("jellyfin:") ? matchId.slice(9) : null, target);
       setDone({ batch: rep.batch, count: rep.done });
       if (rep.failed.length) setMessage({ text: `${rep.failed.length} skipped: ${rep.failed.slice(0, 3).join("; ")}`, error: true });
       // Follow the renamed folder, so "check again" looks at the right place.
@@ -648,7 +648,7 @@ async function renameRow(r: CheckRow): Promise<number> {
   });
   const ok = plan.ops.filter((o) => o.status === "ok").map((o) => o.from);
   if (!ok.length) return 0;
-  const rep = await api.apply(plan.planId, true, ok);
+  const rep = await applyPlan(plan, true, ok, r.kind === "series" ? r.id : null, r.folder);
   return rep.done;
 }
 
@@ -697,7 +697,7 @@ function CheckDetail({ r, onFix, onDone }: { r: CheckRow; onFix: () => void; onD
     api.plan({
       mode: p.kind, folder: p.folder, template: r.kind === "series" ? tvTemplate() : MOVIE_TEMPLATE, show: null, year: null, yearOptional: yearOptional(),
       findReplace: [], recursive: r.kind === "series", source: r.kind === "series" ? "jellyfin" : "none", matchId: p.matchId,
-      renameFolder: null, seasonFolders: false, onlyFile: p.onlyFile, itemId: p.itemId,
+      renameFolder: r.kind === "series" ? true : null, seasonFolders: false, onlyFile: p.onlyFile, itemId: p.itemId,
     }).then((pl) => {
       setPlan(pl);
       sel.reset(pl.ops.filter((o) => o.status === "ok").map((o) => o.from));
@@ -727,7 +727,7 @@ function CheckDetail({ r, onFix, onDone }: { r: CheckRow; onFix: () => void; onD
     setBusy(true);
     try {
       await track(`Renaming ${r.name}`, async () => {
-        const rep = await api.apply(plan.planId, true, [...picked]);
+        const rep = await applyPlan(plan, true, [...picked], r.kind === "series" ? r.id : null, r.folder);
         if (rep.failed.length) throw `${rep.done} renamed; ${rep.failed.length} skipped: ${rep.failed[0]}`;
         await scanAround([r.folder]);
       });

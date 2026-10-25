@@ -4,11 +4,12 @@ import { askConfirm } from "./confirm";
 import { ToolsSettings } from "./Intros";
 import { UpdateSettings } from "./Updates";
 import type { View } from "./nav";
-import { setPrefs, usePrefs } from "./prefs";
+import { ACCENTS, DEFAULT_PREFS, setPrefs, usePrefs } from "./prefs";
 import { SubStyleEditor } from "./Player";
+import { FolderPicker } from "./Picks";
 import { runDaily, syncPicks } from "./scheduler";
 import { clearProblems, followEvent, track, useEpoch, useProblems } from "./activity";
-import { CheckMenu, Icon, TriCheck, useUndoableSet, type IconName, type TriState } from "./ui";
+import { Icon, TriCheck, type IconName, type TriState } from "./ui";
 
 const TITLE_LANGS: [string, string][] = [["en-US", "English"], ["nl-NL", "Nederlands"], ["de-DE", "Deutsch"], ["fr-FR", "Français"], ["es-ES", "Español"], ["it-IT", "Italiano"]];
 const META_LANGS: [string, string, string][] = [["", "", "Server default"], ["en", "US", "English"], ["nl", "NL", "Nederlands"], ["de", "DE", "Deutsch"], ["fr", "FR", "Français"], ["es", "ES", "Español"], ["it", "IT", "Italiano"]];
@@ -16,6 +17,7 @@ const META_LANGS: [string, string, string][] = [["", "", "Server default"], ["en
 const SECTIONS: { id: string; label: string; icon: IconName }[] = [
   { id: "jellyfin", label: "Jellyfin", icon: "tv" },
   { id: "changes", label: "Changes", icon: "rename" },
+  { id: "look", label: "Look", icon: "image" },
   { id: "backend", label: "Jellyfin & Infuse", icon: "server" },
   { id: "folder", label: "Library folder", icon: "folder" },
   { id: "player", label: "Player", icon: "play" },
@@ -24,7 +26,7 @@ const SECTIONS: { id: string; label: string; icon: IconName }[] = [
   { id: "picks", label: "Picks of the day", icon: "heart" },
   { id: "schedule", label: "Daily tasks", icon: "clock" },
   { id: "plugins", label: "Jellyfin plugins", icon: "stack" },
-  { id: "tools", label: "Tools", icon: "wand" },
+  { id: "tools", label: "Tools", icon: "wrench" },
   { id: "updates", label: "Updates", icon: "download" },
   { id: "problems", label: "Problems log", icon: "warn" },
 ];
@@ -122,6 +124,7 @@ export default function Settings({ status, onChanged, section }: { status: Statu
               </select>
             </label>
             <Switch checked={status.syncWatched} onChange={(v) => void run(() => api.setSyncWatched(v))}>Send where I stopped and what I watched back to Jellyfin, so Infuse continues at the same spot</Switch>
+            {status.syncWatched && <WatchSyncTest />}
             <div className="row"><button className="danger-outline" onClick={() => void disconnect()}>Disconnect</button></div>
           </Section>
 
@@ -131,6 +134,8 @@ export default function Settings({ status, onChanged, section }: { status: Statu
               {status.readOnly ? <button className="primary" onClick={() => void toggleChanges(true)}>Allow changes</button> : <button onClick={() => void toggleChanges(false)}>Switch back to read-only</button>}
             </div>
           </Section>
+
+          <LookSettings />
 
           <BackendSettings status={status} />
 
@@ -174,6 +179,40 @@ export default function Settings({ status, onChanged, section }: { status: Statu
 
 /* ------------------------------------------------------------- player */
 
+function LookSettings() {
+  const p = usePrefs();
+  const valid = /^#[0-9a-f]{6}$/i.test(p.accent);
+  return (
+    <Section id="look" title="Look" icon="image" hint="Your highlight colour, used for buttons, selection and focus all through the app.">
+      <div className="accent-row">
+        {ACCENTS.map((a) => (
+          <button key={a.hex} className={`accent-swatch ${p.accent.toLowerCase() === a.hex ? "on" : ""}`} style={{ background: a.hex }} title={a.name} aria-label={a.name} onClick={() => setPrefs({ accent: a.hex })} />
+        ))}
+        <label className="accent-custom" title="Any colour">
+          <input type="color" value={valid ? p.accent : DEFAULT_PREFS.accent} onChange={(e) => setPrefs({ accent: e.target.value })} />
+          <span>Custom</span>
+        </label>
+        <input className="mono accent-hex" value={p.accent} maxLength={7} onChange={(e) => { const v = e.target.value.startsWith("#") ? e.target.value : `#${e.target.value}`; setPrefs({ accent: v }); }} aria-label="Colour code" />
+        {p.accent !== DEFAULT_PREFS.accent && <button className="link small" onClick={() => setPrefs({ accent: DEFAULT_PREFS.accent })}>Reset</button>}
+      </div>
+      <p className="muted small">Status colours don't change: green is fine, amber needs a look, red is a problem.</p>
+    </Section>
+  );
+}
+
+function WatchSyncTest() {
+  const [res, setRes] = useState<{ text: string; ok: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="row wrap">
+      <button disabled={busy} onClick={() => { setBusy(true); setRes(null); api.watchSyncTest().then((t) => setRes({ text: t, ok: true })).catch((e) => setRes({ text: errorText(e), ok: false })).finally(() => setBusy(false)); }}>
+        <Icon name="check" /> {busy ? "Testing…" : "Test watch sync"}
+      </button>
+      {res && <span className={`small ${res.ok ? "ok-text" : "error-text"}`}>{res.text}</span>}
+    </div>
+  );
+}
+
 function PlayerSettings({ status }: { status: Status }) {
   const p = usePrefs();
   return (
@@ -192,28 +231,7 @@ function PlayerSettings({ status }: { status: Status }) {
 
 /** Which folders "Play something" picks from. */
 function RandomFolders() {
-  const p = usePrefs();
-  const [folders, setFolders] = useState<string[]>([]);
-  const sel = useUndoableSet<string>();
-  useEffect(() => {
-    api.libraryHealth(false).then((h) => {
-      const f = [...new Set(h.rows.map((r) => r.libraryFolder || "Other"))].sort();
-      setFolders(f);
-      sel.reset(p.randomFolders.length ? p.randomFolders.filter((x) => f.includes(x)) : f);
-    }).catch(() => setFolders([]));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!folders.length) return;
-    const on = folders.filter((f) => sel.has(f));
-    setPrefs({ randomFolders: on.length === folders.length ? [] : on });
-  }, [sel.set]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (folders.length < 2) return null;
-  return (
-    <div className="row">
-      <span className="small strong">“Play something” picks from</span>
-      <CheckMenu label="Folders" options={folders.map((f) => ({ id: f, label: f }))} sel={sel} allLabel="Every folder" />
-    </div>
-  );
+  return <FolderPicker label="“Play something” picks from" pref="randomFolders" />;
 }
 
 /* ---------------------------------------------------------- subtitles */
@@ -379,6 +397,7 @@ function PicksSettings({ status }: { status: Status }) {
       <Switch checked={p.picksAsFavorites} disabled={status.readOnly} onChange={(v) => { setPrefs({ picksAsFavorites: v }); void syncPicks(); }}>
         Also mark today's picks as favourites (yesterday's are unmarked again; your own favourites are never touched)
       </Switch>
+      <FolderPicker label="Picks come from" pref="picksFolders" />
       <div className="row"><button disabled={status.readOnly} onClick={() => void syncPicks()}><Icon name="reload" /> Update in Jellyfin now</button></div>
     </Section>
   );

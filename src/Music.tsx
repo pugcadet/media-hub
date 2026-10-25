@@ -4,8 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorText, imageUrl, MusicItem, Status } from "./api";
 import { HubSwitcher } from "./Sidebar";
 import { fmt } from "./Intros";
-import { Icon } from "./ui";
-import { logProblem } from "./activity";
+import { Icon, openMenu, type MenuItem } from "./ui";
+import { logProblem, track } from "./activity";
+import { listen } from "@tauri-apps/api/event";
 
 type Tab = "recent" | "albums" | "artists" | "favorites";
 
@@ -139,7 +140,134 @@ function useMusicPlayer() {
     jump(i: number) {
       setSt((s) => ({ ...s, index: i }));
     },
+    /** Adds songs at the end of the queue (starts playing if nothing is). */
+    addToQueue(list: MusicItem[]) {
+      const add = list.filter((t) => t.kind === "track");
+      setSt((s) => ({ ...s, queue: [...s.queue, ...add], index: s.index < 0 && add.length ? s.queue.length : s.index }));
+    },
+    /** Puts songs right after the one playing. */
+    playNext(list: MusicItem[]) {
+      const add = list.filter((t) => t.kind === "track");
+      setSt((s) => {
+        if (s.index < 0) return { ...s, queue: add, index: add.length ? 0 : -1 };
+        const q = [...s.queue];
+        q.splice(s.index + 1, 0, ...add);
+        return { ...s, queue: q };
+      });
+    },
+    removeAt(i: number) {
+      setSt((s) => {
+        if (i === s.index) return s;
+        const q = s.queue.filter((_, n) => n !== i);
+        return { ...s, queue: q, index: i < s.index ? s.index - 1 : s.index };
+      });
+    },
+    move(from: number, to: number) {
+      setSt((s) => {
+        if (from === to || from < 0 || to < 0 || from >= s.queue.length || to >= s.queue.length) return s;
+        const q = [...s.queue];
+        const [x] = q.splice(from, 1);
+        q.splice(to, 0, x);
+        let index = s.index;
+        if (from === s.index) index = to;
+        else if (from < s.index && to >= s.index) index--;
+        else if (from > s.index && to <= s.index) index++;
+        return { ...s, queue: q, index };
+      });
+    },
+    /** Empties "up next" (the song playing stays). */
+    clearUpNext() {
+      setSt((s) => ({ ...s, queue: s.index >= 0 ? [s.queue[s.index]] : [], index: s.index >= 0 ? 0 : -1 }));
+    },
+    /** Sorts the songs after the one playing. */
+    sortUpNext(by: "artist" | "album" | "title" | "shuffle") {
+      setSt((s) => {
+        const head = s.queue.slice(0, s.index + 1);
+        let rest = s.queue.slice(s.index + 1);
+        const k = (t: MusicItem) => by === "artist" ? `${t.artist}\u0000${t.album}\u0000${String(t.disc ?? 0).padStart(2, "0")}${String(t.index ?? 0).padStart(3, "0")}` : by === "album" ? `${t.album}\u0000${String(t.disc ?? 0).padStart(2, "0")}${String(t.index ?? 0).padStart(3, "0")}` : t.name;
+        rest = by === "shuffle" ? [...rest].sort(() => Math.random() - 0.5) : [...rest].sort((a, b) => k(a).localeCompare(k(b), undefined, { numeric: true, sensitivity: "base" }));
+        return { ...s, queue: [...head, ...rest] };
+      });
+    },
   };
+}
+
+type Player = ReturnType<typeof useMusicPlayer>;
+
+/** Right-click menu for a song, album or artist: play, play next, add to the queue. */
+async function songsOf(m: MusicItem): Promise<MusicItem[]> {
+  return m.kind === "track" ? [m] : api.musicList("tracks", m.id, null, 0, 2000);
+}
+function queueMenu(e: React.MouseEvent, m: MusicItem, player: Player) {
+  const items: MenuItem[] = [
+    { label: "Play", run: () => void songsOf(m).then((l) => player.playList(l, 0)) },
+    { label: "Play next", run: () => void songsOf(m).then((l) => player.playNext(l)) },
+    { label: "Add to queue", run: () => void songsOf(m).then((l) => player.addToQueue(l)) },
+  ];
+  openMenu(e, items);
+}
+
+/** The queue: what's playing, what comes next. Drag to reorder, sort, remove, clear. */
+function QueuePanel({ player, onClose }: { player: Player; onClose: () => void }) {
+  const { st } = player;
+  const [drag, setDrag] = useState<number | null>(null);
+  const [over, setOver] = useState<number | null>(null);
+  const upNext = st.queue.map((t, i) => ({ t, i })).filter(({ i }) => i > st.index);
+  const played = st.queue.map((t, i) => ({ t, i })).filter(({ i }) => i < st.index);
+  const row = ({ t, i }: { t: MusicItem; i: number }, canMove: boolean) => (
+    <div
+      key={`${t.id}-${i}`}
+      className={`m-q-row ${i === st.index ? "on" : ""} ${over === i && drag !== null ? "over" : ""}`}
+      draggable={canMove}
+      onDragStart={(e) => { setDrag(i); e.dataTransfer.effectAllowed = "move"; }}
+      onDragOver={(e) => { if (drag !== null) { e.preventDefault(); setOver(i); } }}
+      onDragEnd={() => { setDrag(null); setOver(null); }}
+      onDrop={(e) => { e.preventDefault(); if (drag !== null && i > st.index) player.move(drag, i); setDrag(null); setOver(null); }}
+    >
+      {canMove ? <span className="m-q-grip" title="Drag to move"><Icon name="grip" size={14} /></span> : <span className="m-q-grip" />}
+      <button className="m-q-name link-plain" onClick={() => player.jump(i)} title="Play this">
+        <span className="ellipsis strong small">{t.name}</span>
+        <span className="ellipsis muted small">{t.artist}{t.album ? ` · ${t.album}` : ""}</span>
+      </button>
+      <span className="muted small mono">{t.duration ? fmt(t.duration) : ""}</span>
+      {canMove && (
+        <span className="m-q-actions">
+          <button className="icon-btn sm" disabled={i <= st.index + 1} onClick={() => player.move(i, i - 1)} title="Move up" aria-label="Move up"><span className="rot-up"><Icon name="chevron" size={12} /></span></button>
+          <button className="icon-btn sm" disabled={i >= st.queue.length - 1} onClick={() => player.move(i, i + 1)} title="Move down" aria-label="Move down"><span className="rot-down"><Icon name="chevron" size={12} /></span></button>
+          <button className="icon-btn sm" onClick={() => player.removeAt(i)} title="Remove from queue" aria-label="Remove from queue"><Icon name="x" size={12} /></button>
+        </span>
+      )}
+    </div>
+  );
+  return (
+    <aside className="m-queue" aria-label="Queue">
+      <div className="m-q-head">
+        <h2>Queue</h2>
+        <span className="muted small">{st.queue.length} song{st.queue.length === 1 ? "" : "s"}</span>
+        <span className="spacer" />
+        <button className="icon-btn" onClick={onClose} title="Close" aria-label="Close queue"><Icon name="x" /></button>
+      </div>
+      <div className="m-q-tools">
+        <label className="sort small">Sort up next
+          <select value="" onChange={(e) => { if (e.target.value) player.sortUpNext(e.target.value as "artist"); }}>
+            <option value="">Choose…</option>
+            <option value="artist">By artist</option>
+            <option value="album">By album</option>
+            <option value="title">By title</option>
+            <option value="shuffle">Shuffle</option>
+          </select>
+        </label>
+        <span className="spacer" />
+        <button className="link small" disabled={!upNext.length} onClick={player.clearUpNext}>Clear up next</button>
+      </div>
+      <div className="m-q-list">
+        {st.index >= 0 && st.queue[st.index] && <><div className="m-q-label">Now playing</div>{row({ t: st.queue[st.index], i: st.index }, false)}</>}
+        <div className="m-q-label">Up next</div>
+        {upNext.length ? upNext.map((x) => row(x, true)) : <p className="muted small pad">Nothing queued. Right-click a song or album → Add to queue.</p>}
+        {played.length > 0 && <><div className="m-q-label">Played</div>{played.map((x) => row(x, false))}</>}
+      </div>
+    </aside>
+  );
 }
 
 /* ------------------------------------------------------------------- views */
@@ -153,11 +281,11 @@ function Art({ item, size, round }: { item: MusicItem; size: number; round?: boo
   );
 }
 
-function Grid({ items, onOpen, round }: { items: MusicItem[]; onOpen: (m: MusicItem) => void; round?: boolean }) {
+function Grid({ items, onOpen, round, player }: { items: MusicItem[]; onOpen: (m: MusicItem) => void; round?: boolean; player: Player }) {
   return (
     <div className="m-grid">
       {items.map((m) => (
-        <button key={m.id} className="m-tile" onClick={() => onOpen(m)}>
+        <button key={m.id} className="m-tile" onClick={() => onOpen(m)} onContextMenu={(e) => queueMenu(e, m, player)}>
           <Art item={m} size={360} round={round} />
           <div className="title">{m.name}</div>
           <div className="sub">{m.kind === "artist" ? (m.count ? `${m.count} albums` : "Artist") : [m.artist, m.year].filter(Boolean).join(" · ")}</div>
@@ -167,15 +295,18 @@ function Grid({ items, onOpen, round }: { items: MusicItem[]; onOpen: (m: MusicI
   );
 }
 
-function TrackList({ tracks, current, onPlay, showAlbum }: { tracks: MusicItem[]; current?: MusicItem; onPlay: (i: number) => void; showAlbum?: boolean }) {
+function TrackList({ tracks, current, onPlay, showAlbum, player }: { tracks: MusicItem[]; current?: MusicItem; onPlay: (i: number) => void; showAlbum?: boolean; player: Player }) {
   return (
     <div className="m-tracks">
       {tracks.map((t, i) => (
-        <button key={t.id} className={`m-track ${current?.id === t.id ? "on" : ""}`} onClick={() => onPlay(i)}>
-          <span className="m-num muted">{current?.id === t.id ? <Icon name="volume" size={14} /> : t.index ?? i + 1}</span>
-          <span className="m-name"><span className="ellipsis">{t.name}</span><span className="muted small ellipsis">{showAlbum ? `${t.artist} · ${t.album}` : t.artist}</span></span>
-          <span className="muted small mono">{t.duration ? fmt(t.duration) : ""}</span>
-        </button>
+        <div key={t.id} className={`m-track ${current?.id === t.id ? "on" : ""}`} onContextMenu={(e) => queueMenu(e, t, player)}>
+          <button className="m-track-main link-plain" onClick={() => onPlay(i)}>
+            <span className="m-num muted">{current?.id === t.id ? <Icon name="volume" size={14} /> : t.index ?? i + 1}</span>
+            <span className="m-name"><span className="ellipsis">{t.name}</span><span className="muted small ellipsis">{showAlbum ? `${t.artist} · ${t.album}` : t.artist}</span></span>
+          </button>
+          <button className="icon-btn sm m-track-add" onClick={() => player.addToQueue([t])} title="Add to queue" aria-label={`Add ${t.name} to queue`}><Icon name="queue" size={14} /></button>
+          <span className="muted small mono m-dur">{t.duration ? fmt(t.duration) : ""}</span>
+        </div>
       ))}
     </div>
   );
@@ -210,6 +341,28 @@ export default function Music({ status }: { status: Status }) {
     }
   }
   const useJellyfin = () => void api.setMusicSource(false).then(() => { setOpen(null); setSrcN((n) => n + 1); });
+  const [showQueue, setShowQueue] = useState(false);
+  const [quiet, setQuiet] = useState(0);
+  // The music folder's tags are read in the background; show the result when it's done.
+  useEffect(() => {
+    const un = listen("music-updated", () => setQuiet((n) => n + 1));
+    return () => void un.then((f) => f());
+  }, []);
+  function refresh() {
+    if (source?.source === "folder") {
+      void track("Reading the music folder", async (job) => {
+        const n = await api.musicRescan();
+        job.update(`${n.toLocaleString()} songs`, 1);
+        setSrcN((x) => x + 1);
+      }, { reload: false }).catch((e) => setError(errorText(e)));
+    } else setSrcN((x) => x + 1);
+  }
+
+  useEffect(() => {
+    if (!quiet) return;
+    const view = query ? "search" : tab;
+    api.musicList(view, null, query || null, 0, 600).then(setItems).catch(() => undefined);
+  }, [quiet]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setItems(null);
@@ -265,7 +418,8 @@ export default function Music({ status }: { status: Status }) {
           <button className={source?.source !== "folder" ? "on" : ""} onClick={useJellyfin}>Jellyfin</button>
           <button className={source?.source === "folder" ? "on" : ""} onClick={() => void useFolder(false)}>Music folder</button>
         </div>
-        {source?.source === "folder" && <button className="icon-btn" title={`Music folder: ${source.folder}. Click to choose another.`} onClick={() => void useFolder(true)}><Icon name="folder" /></button>}
+        {source?.source === "folder" && <button className="icon-btn" title={`Music folder: ${source.folder}. Click to choose another.`} aria-label="Choose music folder" onClick={() => void useFolder(true)}><Icon name="folder" /></button>}
+        <button className="icon-btn" title={source?.source === "folder" ? "Read the music folder again (new songs, tags, covers)" : "Reload"} aria-label="Refresh music" onClick={refresh}><Icon name="reload" /></button>
         <label className="searchbox w-search"><Icon name="search" /><input placeholder="Search music" value={query} onChange={(e) => { setQuery(e.target.value); setOpen(null); }} /></label>
       </header>
 
@@ -283,19 +437,21 @@ export default function Music({ status }: { status: Status }) {
                 <div className="row">
                   <button className="primary bb-btn" disabled={!tracks.length} onClick={() => player.playList(tracks, 0)}><Icon name="play" /> Play</button>
                   <button className="bb-btn ghost" disabled={!tracks.length} onClick={() => player.playList(tracks, 0, true)}><Icon name="shuffle" /> Shuffle</button>
+                  <button className="bb-btn ghost" disabled={!tracks.length} onClick={() => player.playNext(tracks)}>Play next</button>
+                  <button className="bb-btn ghost" disabled={!tracks.length} onClick={() => player.addToQueue(tracks)}><Icon name="queue" /> Add to queue</button>
                 </div>
               </div>
             </section>
             {open.kind === "artist" && albums.length > 0 && (
               <section className="stack-s">
                 <h2>Albums</h2>
-                <Grid items={albums} onOpen={openItem} />
+                <Grid items={albums} onOpen={openItem} player={player} />
               </section>
             )}
             <section className="stack-s">
               {open.kind === "artist" && <h2>Songs</h2>}
               {!tracks.length && <p className="muted">Loading songs…</p>}
-              <TrackList tracks={tracks} current={cur} onPlay={(i) => player.playList(tracks, i)} showAlbum={open.kind === "artist"} />
+              <TrackList tracks={tracks} current={cur} onPlay={(i) => player.playList(tracks, i)} showAlbum={open.kind === "artist"} player={player} />
             </section>
           </div>
         ) : (
@@ -312,12 +468,13 @@ export default function Music({ status }: { status: Status }) {
                 <button className="primary" onClick={() => void useFolder(true)}><Icon name="folder" /> Choose a music folder</button>
               </div>
             )}
-            <Grid items={tiles} onOpen={openItem} round={tab === "artists" && !query} />
-            {loose.length > 0 && <TrackList tracks={loose} current={cur} onPlay={(i) => player.playList(loose, i)} showAlbum />}
+            <Grid items={tiles} onOpen={openItem} round={tab === "artists" && !query} player={player} />
+            {loose.length > 0 && <TrackList tracks={loose} current={cur} onPlay={(i) => player.playList(loose, i)} showAlbum player={player} />}
           </div>
         )}
       </div>
 
+      {showQueue && <QueuePanel player={player} onClose={() => setShowQueue(false)} />}
       <footer className={`m-bar ${cur ? "" : "empty"}`}>
         {cur ? (
           <>
@@ -344,6 +501,7 @@ export default function Music({ status }: { status: Status }) {
               {st.error && <div className="error small">{st.error}</div>}
             </div>
             <div className="m-right">
+              <button className={`icon-btn ${showQueue ? "on" : ""}`} onClick={() => setShowQueue(!showQueue)} title="Queue" aria-label="Queue"><Icon name="queue" /></button>
               <span className="muted small">{st.index + 1} of {st.queue.length}</span>
               <Icon name="volume" />
               <input type="range" min={0} max={1} step={0.05} value={st.volume} onChange={(e) => player.setVolume(Number(e.target.value))} aria-label="Volume" className="p-vol" />

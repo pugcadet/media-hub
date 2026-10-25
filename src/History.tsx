@@ -7,7 +7,7 @@ import { Icon, SettingsLink } from "./ui";
 
 export const KIND: Record<string, string> = {
   item_update: "Details", identify: "Identified", image: "Picture", image_removed: "Picture removed", collection: "Collection",
-  subtitle: "Subtitle", segment: "Intro/credits", storage: "Storage", file_trashed: "Moved to trash", rename: "Renamed files",
+  subtitle: "Subtitle", subtitle_file: "Subtitle", subtitle_timing: "Subtitle timing", segment: "Intro/credits", storage: "Storage", file_trashed: "Moved to trash", rename: "Renamed files",
 };
 
 interface Entry {

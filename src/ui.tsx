@@ -274,6 +274,48 @@ export function Hosts() {
   );
 }
 
+/* -------------------------------------------------------------- images */
+
+/** Pictures this window already showed: they appear at once next time, without a fade. */
+const loadedUrls = new Set<string>();
+
+/** Loads pictures in the background so they're there when a page needs them. */
+export function preloadImages(urls: string[]): void {
+  for (const u of urls) {
+    if (!u || loadedUrls.has(u)) continue;
+    const im = new Image();
+    im.decoding = "async";
+    im.onload = () => loadedUrls.add(u);
+    im.src = u;
+  }
+}
+
+export function imageLoaded(url: string): boolean {
+  return loadedUrls.has(url);
+}
+
+/** An <img> that fades in once loaded (or shows straight away if it was loaded before). */
+export function Img({ src, className = "", alt = "", lazy, onFail, onReady }: {
+  src: string; className?: string; alt?: string; lazy?: boolean; onFail?: () => void; onReady?: () => void;
+}) {
+  const [ok, setOk] = useState(() => loadedUrls.has(src));
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setOk(loadedUrls.has(src)); setFailed(false); }, [src]);
+  useEffect(() => { if (ok) onReady?.(); }, [ok]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (failed) return null;
+  return (
+    <img
+      className={`${className} fade-img ${ok ? "in" : ""}`}
+      src={src}
+      alt={alt}
+      loading={lazy ? "lazy" : undefined}
+      decoding="async"
+      onLoad={() => { loadedUrls.add(src); setOk(true); }}
+      onError={() => { setFailed(true); onFail?.(); onReady?.(); }}
+    />
+  );
+}
+
 /* -------------------------------------------------------------- icons */
 
 export type IconName =
@@ -281,7 +323,7 @@ export type IconName =
   | "home" | "tv" | "film" | "stack" | "heart" | "inbox" | "rename" | "image" | "subtitles" | "skip"
   | "missing" | "copy" | "tag" | "disk" | "history" | "settings" | "music" | "info" | "warn" | "pause"
   | "next" | "prev" | "shuffle" | "volume" | "clock" | "wand" | "download" | "list" | "grid" | "trash" | "external"
-  | "undo" | "lock" | "server" | "stop" | "chevron" | "infuse";
+  | "undo" | "lock" | "server" | "stop" | "chevron" | "infuse" | "wrench" | "queue" | "sort" | "grip";
 
 const ICONS: Record<IconName, ReactNode> = {
   reload: <><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></>,
@@ -320,6 +362,10 @@ const ICONS: Record<IconName, ReactNode> = {
   volume: <><path d="M4 9v6h4l5 4V5L8 9z" /><path d="M16 9a4 4 0 0 1 0 6" /></>,
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   wand: <><path d="M4 20L16 8" /><path d="M15 4v3M18 6h3M19 9v2M13 7h-2" /></>,
+  wrench: <path d="M14.7 6.3a4 4 0 0 0 5 5L21 13a6 6 0 0 1-7.6 1.6l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9A6 6 0 0 1 12 4l1.3 1.3a4 4 0 0 0 1.4 1z" />,
+  queue: <><path d="M3 6h12M3 12h12M3 18h7" /><path d="M18 14v6M15 17h6" /></>,
+  sort: <><path d="M7 4v16M4 17l3 3 3-3" /><path d="M14 6h7M14 12h5M14 18h3" /></>,
+  grip: <><circle cx="9" cy="6" r="1.3" fill="currentColor" /><circle cx="15" cy="6" r="1.3" fill="currentColor" /><circle cx="9" cy="12" r="1.3" fill="currentColor" /><circle cx="15" cy="12" r="1.3" fill="currentColor" /><circle cx="9" cy="18" r="1.3" fill="currentColor" /><circle cx="15" cy="18" r="1.3" fill="currentColor" /></>,
   download: <><path d="M12 4v11" /><path d="M7 10l5 5 5-5" /><path d="M5 20h14" /></>,
   list: <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />,
   grid: <><rect x="4" y="4" width="7" height="7" rx="1" /><rect x="13" y="4" width="7" height="7" rx="1" /><rect x="4" y="13" width="7" height="7" rx="1" /><rect x="13" y="13" width="7" height="7" rx="1" /></>,
@@ -633,18 +679,38 @@ export interface TabDef {
 }
 
 /**
- * A row of tabs. With `screen` set, tabs can be closed (×) and brought back (+); what you
- * closed is remembered per screen.
+ * Tabs. With `screen` set, every tab but the `fixed` ones has an X to hide it, and the + at
+ * the end (always there) shows hidden tabs again and, with `folders`, adds a tab per library
+ * folder ("folder:<name>" ids; see `tabFolder`).
  */
-export function Tabs({ tabs, active, onChange, screen, fixed = [] }: { tabs: TabDef[]; active: string; onChange: (id: string) => void; screen?: string; fixed?: string[] }) {
-  const { hiddenTabs } = usePrefsLite();
+export function Tabs({ tabs, active, onChange, screen, fixed = [], folders }: {
+  tabs: TabDef[]; active: string; onChange: (id: string) => void; screen?: string; fixed?: string[];
+  /** Folder names that can be added as tabs, with an optional count each. */
+  folders?: { name: string; count?: number }[];
+}) {
+  const { hiddenTabs, folderTabs } = usePrefsLite();
   const hidden = screen ? hiddenTabs[screen] ?? [] : [];
-  const shown = tabs.filter((t) => !hidden.includes(t.id) || fixed.includes(t.id));
+  const added = screen && folders ? (folderTabs[screen] ?? []).filter((f) => folders.some((x) => x.name === f)) : [];
+  const all: TabDef[] = [...tabs, ...added.map((f) => ({ id: `folder:${f}`, label: f, count: folders?.find((x) => x.name === f)?.count }))];
+  const shown = all.filter((t) => !hidden.includes(t.id) || fixed.includes(t.id));
   const closed = tabs.filter((t) => hidden.includes(t.id) && !fixed.includes(t.id));
+  const addable = (folders ?? []).filter((f) => !added.includes(f.name));
   const [adding, setAdding] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!adding) return;
+    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setAdding(false); };
+    window.addEventListener("mousedown", close);
+    return () => window.removeEventListener("mousedown", close);
+  }, [adding]);
   const hide = (id: string) => {
     if (!screen) return;
-    setPrefsLite((p) => ({ hiddenTabs: { ...p.hiddenTabs, [screen]: [...new Set([...(p.hiddenTabs[screen] ?? []), id])] } }));
+    if (id.startsWith("folder:")) {
+      const f = id.slice(7);
+      setPrefsLite((p) => ({ folderTabs: { ...p.folderTabs, [screen]: (p.folderTabs[screen] ?? []).filter((x) => x !== f) } }));
+    } else {
+      setPrefsLite((p) => ({ hiddenTabs: { ...p.hiddenTabs, [screen]: [...new Set([...(p.hiddenTabs[screen] ?? []), id])] } }));
+    }
     if (active === id) onChange(shown.find((t) => t.id !== id)?.id ?? fixed[0] ?? "");
   };
   const show = (id: string) => {
@@ -653,20 +719,29 @@ export function Tabs({ tabs, active, onChange, screen, fixed = [] }: { tabs: Tab
     setAdding(false);
     onChange(id);
   };
+  const addFolder = (f: string) => {
+    if (!screen) return;
+    setPrefsLite((p) => ({ folderTabs: { ...p.folderTabs, [screen]: [...new Set([...(p.folderTabs[screen] ?? []), f])] } }));
+    setAdding(false);
+    onChange(`folder:${f}`);
+  };
   return (
     <div className="tabs ui-tabs">
       {shown.map((t) => (
-        <span key={t.id} className={`ui-tab ${active === t.id ? "on" : ""}`}>
-          <button onClick={() => onChange(t.id)}>{t.label}{t.count != null && t.count !== "" && <span className="tab-count">{t.count}</span>}</button>
-          {screen && !fixed.includes(t.id) && <button className="tab-x" onClick={() => hide(t.id)} aria-label="Hide this tab" title="Hide this tab"><Icon name="x" size={11} /></button>}
+        <span key={t.id} className={`ui-tab ${active === t.id ? "on" : ""} ${screen && !fixed.includes(t.id) ? "closable" : ""}`}>
+          <button onClick={() => onChange(t.id)}>{t.id.startsWith("folder:") && <Icon name="folder" size={13} />}{t.label}{t.count != null && t.count !== "" && <span className="tab-count">{t.count}</span>}</button>
+          {screen && !fixed.includes(t.id) && <button className="tab-x" onClick={() => hide(t.id)} aria-label={`Close ${String(t.label)}`} title="Close this tab"><Icon name="x" size={11} /></button>}
         </span>
       ))}
-      {screen && closed.length > 0 && (
-        <span className="tab-add">
-          <button className="tab-plus" onClick={() => setAdding(!adding)} title="Show a hidden tab" aria-label="Show a hidden tab"><Icon name="plus" size={14} /></button>
+      {screen && (
+        <span className="tab-add" ref={ref}>
+          <button className="tab-plus" onClick={() => setAdding(!adding)} title={folders ? "Add a folder tab" : "Show a closed tab"} aria-label="Add a tab" disabled={!closed.length && !addable.length}><Icon name="plus" size={14} /></button>
           {adding && (
             <span className="tab-menu">
+              {closed.length > 0 && <span className="tab-menu-head">Closed tabs</span>}
               {closed.map((t) => <button key={t.id} onClick={() => show(t.id)}>{t.label}</button>)}
+              {addable.length > 0 && <span className="tab-menu-head">Folders</span>}
+              {addable.map((f) => <button key={f.name} onClick={() => addFolder(f.name)}><Icon name="folder" size={13} /> {f.name}{f.count != null && <span className="muted small"> {f.count}</span>}</button>)}
             </span>
           )}
         </span>

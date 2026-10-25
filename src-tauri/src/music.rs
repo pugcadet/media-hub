@@ -36,6 +36,10 @@ pub struct MusicItem {
 
 impl MusicItem {
     #[allow(clippy::too_many_arguments)]
+    pub fn set_duration(&mut self, d: f64) {
+        self.duration = d;
+    }
+
     pub fn local(id: String, kind: &'static str, name: String, artist: String, album: String, album_id: Option<String>, year: Option<i64>, index: Option<i64>, disc: Option<i64>, art_url: Option<String>, count: Option<i64>) -> Self {
         MusicItem { id, kind, name, artist, album, album_id, year, index, disc, duration: 0.0, art_id: String::new(), has_art: art_url.is_some(), count, favorite: false, art_url }
     }
@@ -94,11 +98,16 @@ pub fn to_item(v: &Value) -> Option<MusicItem> {
 /// Lists music. `view`: "albums" | "artists" | "tracks" (of `parent`: an album or artist) |
 /// "recent" | "favorites" | "search".
 #[tauri::command]
-pub async fn music_list(state: State<'_, AppState>, view: String, parent: Option<String>, query: Option<String>, start: u64, limit: u64) -> Result<Vec<MusicItem>> {
+pub async fn music_list(app: tauri::AppHandle, state: State<'_, AppState>, view: String, parent: Option<String>, query: Option<String>, start: u64, limit: u64) -> Result<Vec<MusicItem>> {
     let query = query.unwrap_or_default().chars().take(100).collect::<String>();
     let settings = state.settings()?;
     if settings.music_from_folder && settings.music_dir.is_some() {
-        return crate::localmusic::list(&state, &view, parent.as_deref(), &query, start, limit);
+        let app2 = app.clone();
+        let (view, parent, query) = (view.clone(), parent.clone(), query.clone());
+        // Reading a big folder takes a moment: off the main thread.
+        return tauri::async_runtime::spawn_blocking(move || crate::localmusic::list(&app2, &tauri::Manager::state::<AppState>(&app2), &view, parent.as_deref(), &query, start, limit))
+            .await
+            .map_err(|e| crate::error::Error::msg(e.to_string()))?;
     }
     let c = state.reader().await?;
     if view == "artists" {

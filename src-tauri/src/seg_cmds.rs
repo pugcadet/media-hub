@@ -373,3 +373,113 @@ mod tests {
         assert!(!valid_span(&Span { start: -1.0, end: 10.0 }, None));
     }
 }
+
+/* ------------------------------------------------- markers survive a folder rename */
+
+/// One episode's skip markers by season/episode number (ids change when a show folder is
+/// renamed, numbers don't).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SegSnap {
+    season: i64,
+    episode: i64,
+    kind: String,
+    start: f64,
+    end: f64,
+}
+
+async fn episode_ids(c: &crate::jellyfin::Client, series_id: &str) -> Result<Vec<(i64, i64, String)>> {
+    let eps = c
+        .items_query(
+            vec![
+                ("ParentId", series_id.to_string()),
+                ("Recursive", "true".into()),
+                ("IncludeItemTypes", "Episode".into()),
+                ("EnableUserData", "false".into()),
+                ("EnableImages", "false".into()),
+            ],
+            20_000,
+        )
+        .await?;
+    Ok(eps
+        .iter()
+        .filter_map(|e| {
+            let s = e.get("ParentIndexNumber").and_then(Value::as_i64)?;
+            let n = e.get("IndexNumber").and_then(Value::as_i64)?;
+            let id = e.get("Id").and_then(Value::as_str)?.replace('-', "");
+            Some((s, n, id))
+        })
+        .collect())
+}
+
+/// Before renaming a show's folder: every skip marker of the show, by episode number.
+#[tauri::command]
+pub async fn segments_snapshot(state: State<'_, AppState>, series_id: String) -> Result<Vec<SegSnap>> {
+    if !valid_item_id(&series_id) {
+        return Err(Error::msg("bad id"));
+    }
+    let c = state.reader().await?;
+    let mut out = Vec::new();
+    for (season, episode, id) in episode_ids(&c, &series_id).await? {
+        for s in read_segs(&c.segments(&id).await.unwrap_or_default()) {
+            out.push(SegSnap { season, episode, kind: s.kind, start: s.start, end: s.end });
+        }
+    }
+    Ok(out)
+}
+
+/// After the rename: waits (up to ~4 minutes) until Jellyfin lists the show under its new
+/// folder, then puts the markers back on the same episodes. Runs in the background.
+#[tauri::command]
+pub async fn segments_carry(app: AppHandle, state: State<'_, AppState>, snapshot: Vec<SegSnap>, folder_name: String, old_series_id: String) -> Result<()> {
+    if snapshot.is_empty() || folder_name.is_empty() || folder_name.contains('/') || folder_name.contains('\\') {
+        return Ok(());
+    }
+    let w = state.writer().await?;
+    tauri::async_runtime::spawn(async move {
+        let found = carry(&w, &snapshot, &folder_name, &old_series_id).await;
+        let _ = app.emit("segments-carried", serde_json::json!({ "folder": folder_name, "ok": found.as_ref().map(|n| *n).unwrap_or(0), "error": found.err().map(|e| e.to_string()) }));
+    });
+    Ok(())
+}
+
+async fn carry(w: &Writer, snap: &[SegSnap], folder_name: &str, old_id: &str) -> Result<usize> {
+    let api = w.reader().segment_api().await?.ok_or_else(|| Error::msg("The MediaSegments API plugin is not available."))?;
+    let suffix = format!("/{}", folder_name.to_lowercase());
+    for _ in 0..48 {
+        tokio_sleep(5).await;
+        let shows = w
+            .reader()
+            .items_query(vec![("IncludeItemTypes", "Series".into()), ("Recursive", "true".into()), ("Fields", "Path".into()), ("EnableImages", "false".into())], 50_000)
+            .await
+            .unwrap_or_default();
+        let new_id = shows.iter().find_map(|s| {
+            let p = s.get("Path").and_then(Value::as_str)?.replace('\\', "/").trim_end_matches('/').to_lowercase();
+            let id = s.get("Id").and_then(Value::as_str)?.replace('-', "");
+            (p.ends_with(&suffix) && id != old_id).then_some(id)
+        });
+        let Some(new_id) = new_id else { continue };
+        let eps = episode_ids(w.reader(), &new_id).await?;
+        if eps.is_empty() {
+            continue; // episodes not scanned yet
+        }
+        let mut n = 0;
+        for (season, episode, id) in eps {
+            let have = read_segs(&w.reader().segments(&id).await.unwrap_or_default());
+            for s in snap.iter().filter(|s| s.season == season && s.episode == episode) {
+                if have.iter().any(|h| h.kind == s.kind) {
+                    continue;
+                }
+                if w.segment_create(&api, &id, &s.kind, s.start, s.end, PROVIDER).await.is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        return Ok(n);
+    }
+    Err(Error::msg("Jellyfin didn't list the renamed show in time; its skip markers could not be carried over."))
+}
+
+async fn tokio_sleep(secs: u64) {
+    tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_secs(secs))).await.ok();
+}

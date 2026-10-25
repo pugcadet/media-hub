@@ -163,7 +163,10 @@ async fn check_one(state: &AppState, root: &Path, id: &str, kind: &str, server: 
             return Err(Error::msg("The show is the library folder itself."));
         }
         row.folder = folder.clone();
-        let (res, _, ops) = make_plan(state, args("tv", tv_tpl, &folder, Some(format!("jellyfin:{id}")), None, None)).await?;
+        let mut a = args("tv", tv_tpl, &folder, Some(format!("jellyfin:{id}")), None, None);
+        // Jellyfin says this is the show's folder: its name follows the style too.
+        a.req.rename_folder = Some(true);
+        let (res, _, ops) = make_plan(state, a).await?;
         summarize(&mut row, &ops, matched && res.chosen.as_ref().map(|c| c.score >= 100).unwrap_or(false), true);
     } else {
         let file = local::rel_to_root(root, &local).ok_or_else(|| Error::msg("Outside the library folder."))?;
@@ -185,7 +188,14 @@ fn saved_path(state: &AppState) -> std::path::PathBuf {
 #[tauri::command]
 pub fn naming_check_last(state: State<'_, AppState>) -> Result<Option<CheckResult>> {
     let p = saved_path(&state);
-    Ok(std::fs::read(&p).ok().and_then(|b| serde_json::from_slice(&b).ok()))
+    let mut r: Option<CheckResult> = std::fs::read(&p).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    // Titles that left Jellyfin (removed, or found again under a new id) drop off the list.
+    if let (Some(r), Ok(known)) = (r.as_mut(), state.store().and_then(|s| s.known_ids())) {
+        if !known.is_empty() {
+            r.rows.retain(|x| known.contains(&x.id.replace('-', "")));
+        }
+    }
+    Ok(r)
 }
 
 #[tauri::command]

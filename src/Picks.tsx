@@ -1,14 +1,22 @@
 // Picks of the day you can edit: take titles out, put your own in. Your changes are kept per
 // day and go to Jellyfin (and so Infuse) like the automatic picks.
+import { folderMap } from "./folders";
 import { useEffect, useState } from "react";
 import { api, cleanTitle, imageUrl, Item, localDate, Pick } from "./api";
-import { prefs, setPrefs, usePrefs } from "./prefs";
+import { prefs, setPrefs, usePrefs, type Prefs } from "./prefs";
 import { syncPicks } from "./scheduler";
-import { Icon } from "./ui";
+import { CheckMenu, Icon, useUndoableSet } from "./ui";
 
 /** Today's picks with your edits applied. */
 export async function getPicks(date: string = localDate()): Promise<Pick[]> {
-  const auto = await api.picks(date);
+  const folders = prefs().picksFolders;
+  let only: string[] | null = null;
+  if (folders.length) {
+    const map = await folderMap();
+    only = [...map.entries()].filter(([, f]) => folders.includes(f)).map(([id]) => id);
+    if (!only.length) only = null;
+  }
+  const auto = await api.picks(date, only);
   const e = prefs().pickEdits[date];
   if (!e) return auto;
   const out = auto.filter((p) => !e.remove.includes(p.id));
@@ -23,11 +31,11 @@ function asPick(i: Item): Pick {
 
 export function PicksEditor({ onClose }: { onClose: () => void }) {
   const today = localDate();
-  const { pickEdits } = usePrefs();
+  const { pickEdits, picksFolders } = usePrefs();
   const [list, setList] = useState<Pick[] | null>(null);
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<Item[]>([]);
-  useEffect(() => void getPicks(today).then(setList).catch(() => setList([])), [today, pickEdits]);
+  useEffect(() => void getPicks(today).then(setList).catch(() => setList([])), [today, pickEdits, picksFolders.join("|")]);
   useEffect(() => {
     if (!query.trim()) return setFound([]);
     const t = setTimeout(() => api.list(null, query.trim(), "name", 0, 12).then(setFound).catch(() => setFound([])), 200);
@@ -43,6 +51,7 @@ export function PicksEditor({ onClose }: { onClose: () => void }) {
     <div className="overlay confirm-layer" onClick={done}>
       <div className="card picks-editor" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <div className="row between"><h2>Today's picks</h2><button className="link-plain" onClick={done} aria-label="Close"><Icon name="x" /></button></div>
+        <FolderPicker label="Picks come from" pref="picksFolders" />
         <label className="searchbox"><Icon name="search" /><input autoFocus placeholder="Add a show or movie" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
         {found.length > 0 && (
           <div className="pick-found">
@@ -73,3 +82,30 @@ export function PicksEditor({ onClose }: { onClose: () => void }) {
     </div>
   );
 }
+
+/** Library folders to draw from (empty = every folder), saved in a prefs list. */
+export function FolderPicker({ label, pref }: { label: string; pref: "randomFolders" | "picksFolders" }) {
+  const p = usePrefs();
+  const [folders, setFolders] = useState<string[]>([]);
+  const sel = useUndoableSet<string>();
+  useEffect(() => {
+    api.libraryHealth(false).then((h) => {
+      const f = [...new Set(h.rows.map((r) => r.libraryFolder || "Other"))].sort();
+      setFolders(f);
+      sel.reset(p[pref].length ? p[pref].filter((x) => f.includes(x)) : f);
+    }).catch(() => setFolders([]));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!folders.length) return;
+    const on = folders.filter((f) => sel.has(f));
+    setPrefs({ [pref]: on.length === folders.length ? [] : on } as Partial<Prefs>);
+  }, [sel.set]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (folders.length < 2) return null;
+  return (
+    <div className="row">
+      <span className="small strong">{label}</span>
+      <CheckMenu label="Folders" options={folders.map((f) => ({ id: f, label: f }))} sel={sel} allLabel="Every folder" />
+    </div>
+  );
+}
+

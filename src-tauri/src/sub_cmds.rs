@@ -152,7 +152,118 @@ struct DownloadRecord {
     subtitle_id: String,
 }
 
-async fn download(state: &AppState, w: &Writer, id: &str, item: &Value, sub_id: &str, codes: Vec<String>) -> Result<()> {
+/// What a download produced. With the NAS reachable Media Hub saves the file itself
+/// (`text` is set, so the player can show it at once); otherwise Jellyfin downloads it.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Downloaded {
+    /// Stream index once Jellyfin lists it.
+    index: Option<i64>,
+    /// The subtitle text (for showing it before Jellyfin has noticed the file).
+    text: Option<String>,
+    /// "srt" | "vtt" | "ass" | …
+    format: String,
+    /// Where it was saved on this computer (empty when Jellyfin downloaded it).
+    file: String,
+}
+
+/// Bytes from a subtitle provider as text: UTF-8 when it is, otherwise Windows-1252 (what
+/// most older subtitles use), without a byte-order mark.
+fn decode_text(bytes: &[u8]) -> String {
+    let b = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    if let Some(rest) = b.strip_prefix(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = rest.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        return String::from_utf16_lossy(&units);
+    }
+    match std::str::from_utf8(b) {
+        Ok(t) => t.to_string(),
+        Err(_) => b.iter().map(|&c| cp1252(c)).collect(),
+    }
+}
+
+fn cp1252(c: u8) -> char {
+    const HI: [char; 32] = [
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}', '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ',
+    ];
+    if (0x80..0xA0).contains(&c) {
+        HI[(c - 0x80) as usize]
+    } else {
+        c as char
+    }
+}
+
+/// The subtitle format from its content (providers don't always say).
+fn sniff_format(text: &str, hint: &str) -> &'static str {
+    let t = text.trim_start();
+    if t.starts_with("WEBVTT") {
+        "vtt"
+    } else if t.starts_with("[Script Info]") || t.contains("\n[Events]") {
+        "ass"
+    } else if t.starts_with('{') && hint.eq_ignore_ascii_case("sub") {
+        "sub"
+    } else {
+        "srt"
+    }
+}
+
+/// `<video name>.<lang>.<ext>` next to the video, with a number added if that name is taken.
+fn subtitle_path(video: &std::path::Path, lang: &str, ext: &str) -> Option<std::path::PathBuf> {
+    let dir = video.parent()?;
+    let stem = video.file_stem()?.to_string_lossy().into_owned();
+    for n in 0..50 {
+        let name = if n == 0 { format!("{stem}.{lang}.{ext}") } else { format!("{stem}.{lang}.{}.{ext}", n + 1) };
+        let p = dir.join(name);
+        if !p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Saves the subtitle next to the video ourselves. Fails when the NAS isn't reachable.
+async fn save_local(state: &AppState, w: &Writer, id: &str, item: &Value, sub_id: &str, lang: &str, hint: &str) -> Result<Downloaded> {
+    let server = item.get("Path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or_else(|| Error::msg("no file location"))?;
+    let video = crate::local::to_local(state, server)?;
+    if !video.is_file() {
+        return Err(Error::msg("The video is not reachable on this computer."));
+    }
+    let bytes = w.subtitle_file(sub_id).await?;
+    let text = decode_text(&bytes);
+    if text.trim().is_empty() {
+        return Err(Error::msg("The subtitle provider sent an empty file."));
+    }
+    let format = sniff_format(&text, hint);
+    let path = subtitle_path(&video, lang, format).ok_or_else(|| Error::msg("No free file name for the subtitle."))?;
+    std::fs::write(&path, text.as_bytes()).map_err(|e| Error::msg(format!("Could not save the subtitle: {e}")))?;
+    let file = path.to_string_lossy().into_owned();
+    state.store()?.journal_add("subtitle_file", id, &file, sub_id)?;
+    Ok(Downloaded { index: None, text: Some(text), format: format.to_string(), file })
+}
+
+/// Undo for "subtitle_file": removes the file Media Hub saved (only a subtitle file).
+pub fn undo_saved_file(path: &str) -> Result<()> {
+    let p = std::path::Path::new(path);
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    if !["srt", "vtt", "ass", "ssa", "sub"].contains(&ext.as_str()) {
+        return Err(Error::msg("bad journal entry"));
+    }
+    match std::fs::remove_file(p) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::msg(format!("Could not remove the subtitle: {e}"))),
+    }
+}
+
+async fn download(state: &AppState, w: &Writer, id: &str, item: &Value, sub_id: &str, codes: Vec<String>, hint: &str) -> Result<Downloaded> {
+    let lang = codes.last().cloned().unwrap_or_default();
+    match save_local(state, w, id, item, sub_id, &lang, hint).await {
+        Ok(d) => {
+            // Hand it to Jellyfin: it picks the file up on a quick look at the folder.
+            let _ = w.refresh_light(id).await;
+            return Ok(d);
+        }
+        Err(e) => eprintln!("saving the subtitle ourselves failed ({e}); asking Jellyfin to download it"),
+    }
     let record = DownloadRecord {
         lang: codes,
         before: streams(item).into_iter().filter(|s| s.external).map(|s| s.path).collect(),
@@ -164,19 +275,26 @@ async fn download(state: &AppState, w: &Writer, id: &str, item: &Value, sub_id: 
         state.store()?.journal_delete(entry)?;
         return Err(e);
     }
-    Ok(())
+    Ok(Downloaded { format: hint.to_lowercase(), ..Default::default() })
 }
 
-/// Downloads one subtitle and waits (up to ~20 s) until Jellyfin lists it, so the window
-/// can show it straight away. Returns the new subtitle's stream index, if it showed up.
+/// Downloads one subtitle. Saved by Media Hub itself when the NAS is reachable (the text
+/// comes back so the player can show it at once); otherwise Jellyfin downloads it and this
+/// waits (up to ~20 s) until it is listed.
 #[tauri::command]
-pub async fn subtitle_download(state: State<'_, AppState>, id: String, subtitle_id: String, lang: String, codes: Vec<String>) -> Result<Option<i64>> {
-    let codes = check_codes(&lang, &codes)?;
+pub async fn subtitle_download(state: State<'_, AppState>, id: String, subtitle_id: String, lang: String, codes: Vec<String>, format: Option<String>) -> Result<Downloaded> {
+    let mut codes = check_codes(&lang, &codes)?;
+    // The language asked for names the file.
+    codes.retain(|c| c != &lang);
+    codes.push(lang.clone());
     let w = state.writer().await?;
     let item = w.reader().item_json(&id).await?;
     let before: Vec<String> = streams(&item).into_iter().filter(|s| s.external).map(|s| s.path).collect();
-    download(&state, &w, &id, &item, &subtitle_id, codes.clone()).await?;
-    Ok(wait_for_new(&w, &id, &before, &codes, 14).await)
+    let mut d = download(&state, &w, &id, &item, &subtitle_id, codes.clone(), format.as_deref().unwrap_or("srt")).await?;
+    if d.text.is_none() {
+        d.index = wait_for_new(&w, &id, &before, &codes, 14).await;
+    }
+    Ok(d)
 }
 
 async fn wait_for_new(w: &Writer, id: &str, before: &[String], codes: &[String], tries: u32) -> Option<i64> {
@@ -232,7 +350,11 @@ pub async fn subtitle_auto(state: State<'_, AppState>, id: String, lang: String,
         return Ok(AutoResult { outcome: "low", score: Some(best.score), name: best.sub.name.clone() });
     }
     let sub_id = best.sub.id.clone().unwrap_or_default();
-    download(&state, &w, &id, &item, &sub_id, codes).await?;
+    let hint = best.sub.format.clone().unwrap_or_default();
+    let mut codes = codes;
+    codes.retain(|c| c != &lang);
+    codes.push(lang.clone());
+    download(&state, &w, &id, &item, &sub_id, codes, &hint).await?;
     Ok(AutoResult { outcome: "downloaded", score: Some(best.score), name: best.sub.name.clone() })
 }
 
@@ -296,6 +418,16 @@ mod tests {
         let s = streams(&item());
         assert!(!has_lang(&s, &["eng".to_string()]));
         assert!(has_lang(&s, &["nld".to_string(), "dut".to_string()]));
+    }
+
+    #[test]
+    fn subtitle_text_and_format() {
+        assert_eq!(decode_text(b"\xEF\xBB\xBF1\n"), "1\n");
+        assert_eq!(decode_text(b"caf\xE9 \x93hi\x94"), "café “hi”");
+        assert_eq!(sniff_format("WEBVTT\n\n", "srt"), "vtt");
+        assert_eq!(sniff_format("[Script Info]\nTitle: x", "srt"), "ass");
+        assert_eq!(sniff_format("1\n00:00:01,000 --> 00:00:02,000\nHi", ""), "srt");
+        assert!(undo_saved_file("/etc/passwd").is_err());
     }
 
     #[test]

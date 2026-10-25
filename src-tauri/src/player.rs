@@ -482,15 +482,48 @@ pub async fn play_progress(state: State<'_, AppState>, token: String, position: 
     if finished {
         return c.mark_played(&item).await;
     }
-    c.save_position(&item, position.max(0.0)).await?;
-    // Read it back: if Jellyfin didn't keep it, say so (shown in the Problems log).
-    if position > 30.0 {
-        let saved = c.item_json(&item).await.ok().and_then(|v| v.pointer("/UserData/PlaybackPositionTicks").and_then(Value::as_f64)).unwrap_or(0.0) / TICKS_PER_SECOND;
-        if (saved - position).abs() > 60.0 {
-            return Err(Error::msg(format!("Jellyfin didn't keep the position (it has {saved:.0} s, sent {position:.0} s). Check that the chosen user in Settings → Jellyfin is the one Infuse uses.")));
-        }
+    save_checked(&c, &item, position.max(0.0)).await
+}
+
+/// Saves a position and reads it back; tries the older route when the newer one didn't stick.
+async fn save_checked(c: &crate::jellyfin::Client, item: &str, position: f64) -> Result<()> {
+    c.save_position(item, position).await?;
+    if position <= 30.0 {
+        return Ok(());
     }
-    Ok(())
+    let near = |s: f64| (s - position).abs() <= 60.0;
+    let saved = c.saved_position(item).await.unwrap_or(0.0);
+    if near(saved) {
+        return Ok(());
+    }
+    let _ = c.save_position_legacy(item, position).await;
+    let saved = c.saved_position(item).await.unwrap_or(0.0);
+    if near(saved) {
+        return Ok(());
+    }
+    Err(Error::msg(format!(
+        "Jellyfin didn't keep the position (it has {saved:.0} s, sent {position:.0} s). Check that the chosen user in Settings → Jellyfin is the one Infuse uses, and that the API key belongs to an administrator."
+    )))
+}
+
+/// Settings → "Test watch sync": moves the resume point of something you're watching by a few
+/// seconds, reads it back, and puts it back.
+#[tauri::command]
+pub async fn watch_sync_test(state: State<'_, AppState>) -> Result<String> {
+    if !state.settings()?.sync_watched {
+        return Err(Error::msg("Syncing watch progress is switched off (Settings → Player)."));
+    }
+    let c = state.reader().await?;
+    let list = c.resume().await?;
+    let Some(item) = list.iter().find_map(|v| v.get("Id").and_then(Value::as_str).map(String::from)) else {
+        return Err(Error::msg("Nothing is in Continue watching for this user yet. Watch a minute of something in Media Hub, close it, and test again."));
+    };
+    let name = list[0].get("Name").and_then(Value::as_str).unwrap_or("an item").to_string();
+    let before = c.saved_position(&item).await?;
+    let test = before.max(60.0) + 7.0;
+    let res = save_checked(&c, &item, test).await;
+    let _ = c.save_position(&item, before).await;
+    res.map(|_| format!("Works: Jellyfin kept the position for {name}. Infuse shows it after its next sync."))
 }
 
 /// Ends the stream so Jellyfin stops converting.

@@ -4,6 +4,7 @@ import type { Route, View } from "./nav";
 import { UpdateBadge } from "./Updates";
 import { setPrefs, usePrefs } from "./prefs";
 import { Icon, type IconName } from "./ui";
+import { noSubsOf } from "./fixers";
 
 interface Props {
   status: Status;
@@ -19,7 +20,7 @@ const TOOLS: { view: View; label: string; icon: IconName; also?: View[] }[] = [
   { view: "subtitles", label: "Subtitles", icon: "subtitles" },
   { view: "intros", label: "Intros and credits", icon: "skip" },
   { view: "renamer", label: "Renamer", icon: "rename" },
-  { view: "cleanup", label: "Clean-up", icon: "wand", also: ["missing", "duplicates", "tags", "storage"] },
+  { view: "cleanup", label: "Clean-up", icon: "wrench", also: ["missing", "duplicates", "tags", "storage"] },
   // Downloads is parked for now (code kept, hidden from the menu).
 ];
 
@@ -39,7 +40,7 @@ export function HubSwitcher() {
     return () => window.removeEventListener("mousedown", close);
   }, [open]);
   const items: { id: "manage" | "watch" | "music" | null; label: string; hint: string; icon: IconName }[] = [
-    { id: "manage", label: "Media manager", hint: "Fix names, art, subtitles, intros", icon: "wand" },
+    { id: "manage", label: "Media manager", hint: "Fix names, art, subtitles, intros", icon: "wrench" },
     { id: "watch", label: "Player", hint: "Browse and watch", icon: "play" },
     { id: "music", label: "Music", hint: "Albums, artists, songs", icon: "music" },
     { id: null, label: "Downloads", hint: "Later", icon: "download" },
@@ -47,7 +48,7 @@ export function HubSwitcher() {
   return (
     <div className="hub" ref={ref}>
       <button className="hub-btn" onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
-        <span className="logo big" />
+        <span className="logo big"><Icon name={mode === "watch" ? "play" : mode === "music" ? "music" : "wrench"} size={16} /></span>
         <span className="hub-text">
           <span className="hub-name">Media Hub</span>
           <span className="hub-mode">{mode === "watch" ? "Player" : mode === "music" ? "Music" : "Media manager"} ▾</span>
@@ -75,6 +76,12 @@ export function HubSwitcher() {
 
 export default function Sidebar({ status, libraries, attention, route, onRoute }: Props) {
   const [inbox, setInbox] = useState(0);
+  const { subSkipFolders } = usePrefs();
+  const [subsTodo, setSubsTodo] = useState<number | null>(null);
+  useEffect(() => {
+    // Leaves out the folders you don't want subtitles for (what the Subtitles page lists).
+    api.libraryHealth(false).then((h) => setSubsTodo(h.rows.reduce((n, r) => n + noSubsOf(r), 0))).catch(() => setSubsTodo(null));
+  }, [route.view, subSkipFolders.join("|")]);
   useEffect(() => {
     const load = () => api.inboxList().then(([, l]) => setInbox(l.length)).catch(() => setInbox(0));
     void load();
@@ -86,7 +93,7 @@ export default function Sidebar({ status, libraries, attention, route, onRoute }
     : [{ id: null, label: "Everything", count: status.movies + status.series, kind: "mixed" }];
   const badge = (v: View): string => {
     if (!attention) return "";
-    if (v === "subtitles" && attention.noSubtitles) return String(attention.noSubtitles);
+    if (v === "subtitles") return subsTodo ? String(subsTodo) : subsTodo === 0 ? "" : attention.noSubtitles ? String(attention.noSubtitles) : "";
     if (v === "metadata" && attention.unmatched + attention.noPoster) return String(attention.unmatched + attention.noPoster);
     if (v === "add" && inbox) return String(inbox);
     return "";

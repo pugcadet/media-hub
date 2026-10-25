@@ -4,7 +4,8 @@ import type { Route } from "./App";
 import { followEvent, track, useEpoch } from "./activity";
 import { askConfirm } from "./confirm";
 import { prefs, setPrefs, subSkipped, usePrefs } from "./prefs";
-import { BulkSelect, itemMenu, openMenu, SettingsLink, TriCheck, useUndoableSet } from "./ui";
+import { BulkSelect, Icon, itemMenu, openMenu, SettingsLink, Tabs, TriCheck, useUndoableSet } from "./ui";
+import { foldersOf, tabFolder, useFolderMap } from "./folders";
 
 /** Metadata and art: titles that need a match or a poster. */
 export function MetadataTool({ onOpen, onRoute }: { onOpen: (id: string) => void; onRoute: (r: Route) => void }) {
@@ -72,8 +73,13 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
 
   const { subSkipFolders } = usePrefs();
   const [skipped, setSkipped] = useState(0);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<"folder" | "name">("folder");
+  const [tab, setTab] = useState("all");
+  const folderMap = useFolderMap();
+  const folderOf = (e: JfChild) => folderMap.get(e.SeriesId ?? e.Id) ?? "Other";
   const load = () =>
-    api.missingSubtitles(0, 300).then((r) => {
+    api.missingSubtitles(0, 3000).then((r) => {
       const all = r.Items ?? [];
       const keep = all.filter((e) => !subSkipped(e.Path));
       setItems(keep);
@@ -85,8 +91,21 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
     cultures().then(setList).catch(() => setList([]));
   }, [subSkipFolders.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
   const codes = useMemo(() => codesFor(lang, list), [lang, list]);
+  const inFolder = tabFolder(tab);
+  const shownItems = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const l = items.filter((e) => (!inFolder || folderOf(e) === inFolder) && (!q || `${e.SeriesName ?? ""} ${e.Name}`.toLowerCase().includes(q)));
+    const key = (e: JfChild) => `${e.SeriesName ?? e.Name} ${String(e.ParentIndexNumber ?? 0).padStart(3, "0")} ${String(e.IndexNumber ?? 0).padStart(4, "0")}`;
+    return l.sort((a, b) => (sort === "folder" ? folderOf(a).localeCompare(folderOf(b)) : 0) || key(a).localeCompare(key(b)));
+  }, [items, query, sort, inFolder, folderMap]); // eslint-disable-line react-hooks/exhaustive-deps
+  const groups = useMemo(() => {
+    const g = new Map<string, JfChild[]>();
+    for (const e of shownItems) { const k = sort === "folder" ? folderOf(e) : ""; g.set(k, [...(g.get(k) ?? []), e]); }
+    return [...g.entries()];
+  }, [shownItems, sort]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fill() {
+    const items = shownItems;
     setRunning(true);
     stop.current = false;
     await track(`Subtitles for ${items.length} videos`, async (job) => {
@@ -128,24 +147,43 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
             <input type="number" className="num" min={1} max={100} value={minScore} onChange={(e) => setMinScore(Math.max(1, Math.min(100, Number(e.target.value) || 100)))} />
           </label>
           {running ? <button onClick={() => (stop.current = true)}>Stop</button> : (
-            <button className="primary" disabled={!items.length || status.readOnly} onClick={() => void fill()}>Get the best match for all</button>
+            <button className="primary" disabled={!shownItems.length || status.readOnly} onClick={() => void fill()}>Get the best match for {shownItems.length === items.length ? "all" : `these ${shownItems.length}`}</button>
           )}
         </div>
       </div>
       <p className="muted">{total} videos have no subtitles at all{total > items.length ? ` (showing the first ${items.length})` : ""}. Only matches scoring at least {minScore} are downloaded; 100 means made for exactly that file. Subtitle sites limit downloads per day.{skipped > 0 ? ` ${skipped} in folders you switched off are left out.` : ""} <SettingsLink section="subtitles">Subtitle settings (languages, folders, score)</SettingsLink></p>
       {status.readOnly && <p className="note">Downloading needs changes to Jellyfin switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
       {error && <p className="error">{error}</p>}
+      <Tabs screen="subtitles" fixed={["all"]} active={tab} onChange={setTab} tabs={[{ id: "all", label: "Everything", count: items.length }]}
+        folders={foldersOf(folderMap).map((f) => ({ name: f, count: items.filter((e) => folderOf(e) === f).length || undefined }))} />
+      <div className="toolbar">
+        <label className="searchbox wide"><Icon name="search" /><input placeholder="Search shows, movies and episodes" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
+        <span className="spacer" />
+        <label className="sort">Sort
+          <select value={sort} onChange={(e) => setSort(e.target.value as "folder" | "name")}>
+            <option value="folder">By folder</option>
+            <option value="name">By name</option>
+          </select>
+        </label>
+        <span className="muted small">{shownItems.length} videos</span>
+      </div>
       <div className="card list-card">
-        {items.map((e) => (
-          <button className="tool-row" key={e.Id} onClick={() => onOpen(e.Id)}>
-            <div className="names">
-              <div className="title">{label(e)}</div>
-              <div className="muted small">{results[e.Id] ?? "No subtitles"}</div>
-            </div>
-            <span className="muted">›</span>
-          </button>
+        {groups.map(([g, list]) => (
+          <div key={g || "all"}>
+            {g && <div className="change-group"><Icon name="folder" size={14} /><span className="strong small">{g}</span><span className="muted small">{list.length} videos</span></div>}
+            {list.slice(0, 600).map((e) => (
+              <button className="tool-row" key={e.Id} onClick={() => onOpen(e.Id)} onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: e.Type === "Episode" ? "Episode" : "Movie", title: label(e), played: false }))}>
+                <div className="names">
+                  <div className="title">{label(e)}</div>
+                  <div className="muted small">{results[e.Id] ?? "No subtitles"}</div>
+                </div>
+                <span className="muted">›</span>
+              </button>
+            ))}
+            {list.length > 600 && <p className="muted small pad">…and {list.length - 600} more. Search or pick a folder tab to narrow it down.</p>}
+          </div>
         ))}
-        {items.length === 0 && !error && <p className="muted small">Every video has subtitles.</p>}
+        {shownItems.length === 0 && !error && <p className="muted small pad">{items.length ? "Nothing matches." : "Every video has subtitles."}</p>}
       </div>
     </div>
   );

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, Card, errorText, imageUrl, Status } from "./api";
 import { track, useEpoch } from "./activity";
 import { nav } from "./nav";
-import { askChoice, CardTile, SettingsLink } from "./ui";
+import { askChoice, CardTile, Img, SettingsLink } from "./ui";
 
 /** Jellyfin collections (box sets): browse, make new ones, add and remove titles. */
 export default function Collections({ status, selected, variant = "manage" }: { status: Status; selected: string | null ; variant?: "manage" | "watch" }) {
@@ -49,7 +49,7 @@ export default function Collections({ status, selected, variant = "manage" }: { 
         {variant === "manage" ? (
           <div className="pg-head"><div><h1>{current?.title ?? "Collection"}</h1><div className="muted small">{items ? `${items.length} title${items.length === 1 ? "" : "s"}` : "Loading…"}</div></div></div>
         ) : <div className="coll-hero">
-          <img src={imageUrl(selected, "Backdrop", 1400)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+          <Img src={imageUrl(selected, "Backdrop", 1400)} />
           <div className="bb-shade" />
           <div className="coll-hero-text">
             <h1>{current?.title ?? "Collection"}</h1>
@@ -76,7 +76,7 @@ export default function Collections({ status, selected, variant = "manage" }: { 
     <div className="pg">
       {spot && variant === "watch" && (
         <section className="billboard" onClick={() => nav.route({ view: "collections", collection: spot.id })}>
-          <img className="bb-art" src={imageUrl(spot.artId, "Backdrop", 1600)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+          <Img className="bb-art" src={imageUrl(spot.artId, "Backdrop", 1600)} />
           <div className="bb-shade" />
           <div className="bb-text">
             <div className="bb-why">Collection of the day</div>

@@ -52,6 +52,8 @@ pub fn run() {
             std::thread::spawn(move || images::prune(&prune_dir));
             let state = state::AppState::new(dir)?;
             app.manage(state);
+            #[cfg(target_os = "macos")]
+            uncap_frame_rate(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -141,6 +143,7 @@ pub fn run() {
             localmusic::music_source,
             localmusic::set_music_source,
             localmusic::pick_music_folder,
+            localmusic::music_rescan,
             cleanup::remove_subtitle_files,
             naming_check::naming_check,
             naming_check::naming_check_last,
@@ -154,11 +157,14 @@ pub fn run() {
             seg_cmds::segments_overview,
             seg_cmds::detect_season,
             seg_cmds::save_segments,
+            seg_cmds::segments_snapshot,
+            seg_cmds::segments_carry,
             seg_cmds::ffmpeg_info,
             seg_cmds::pick_ffmpeg,
             player::play_start,
             player::play_stop,
             player::play_progress,
+            player::watch_sync_test,
             player::play_subtitles,
             downloads::ytdlp_info,
             downloads::ytdlp_install,
@@ -185,4 +191,33 @@ pub fn run() {
                 downloads::kill_all();
             }
         });
+}
+
+/// Safari's web view draws at most 60 frames a second unless told otherwise; this asks it to
+/// follow the screen (120 Hz on ProMotion Macs). Skipped quietly on macOS versions without it.
+#[cfg(target_os = "macos")]
+fn uncap_frame_rate(app: &tauri::App) {
+    use tauri::Manager;
+    let Some(w) = app.get_webview_window("main") else { return };
+    let _ = w.with_webview(|wv| unsafe {
+        use objc2::runtime::AnyObject;
+        use objc2::{msg_send, sel};
+        let view = wv.inner() as *mut AnyObject;
+        if view.is_null() {
+            return;
+        }
+        let config: *mut AnyObject = msg_send![view, configuration];
+        if config.is_null() {
+            return;
+        }
+        let prefs: *mut AnyObject = msg_send![config, preferences];
+        if prefs.is_null() {
+            return;
+        }
+        let s = sel!(_setPreferPageRenderingUpdatesNear60FPSEnabled:);
+        let can: bool = msg_send![prefs, respondsToSelector: s];
+        if can {
+            let _: () = msg_send![prefs, _setPreferPageRenderingUpdatesNear60FPSEnabled: false];
+        }
+    });
 }
