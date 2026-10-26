@@ -95,6 +95,140 @@ fn probe(ffprobe: &Path, file: &Path) -> Result<MediaInfo> {
     Ok(parse_probe(&v))
 }
 
+fn probe_json(ffprobe: &Path, file: &Path) -> Result<Value> {
+    let mut cmd = Command::new(ffprobe);
+    cmd.args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams"])
+        .arg(file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    hide_window(&mut cmd);
+    let out = cmd.output().map_err(|e| Error::msg(format!("Could not start ffprobe: {e}")))?;
+    if !out.status.success() {
+        return Err(Error::msg("ffprobe could not read this file."));
+    }
+    serde_json::from_slice(&out.stdout).map_err(|_| Error::msg("ffprobe gave an unexpected answer."))
+}
+
+/// An audio or subtitle track inside a video file.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Track {
+    pub index: i64,
+    /// "audio" | "subtitle"
+    pub kind: String,
+    pub language: String,
+    pub codec: String,
+    pub title: String,
+    pub channels: u64,
+    pub default: bool,
+    /// In a language you don't keep (and not the original audio): can be taken out.
+    pub extra: bool,
+}
+
+/// Tracks from ffprobe's JSON (stream index = position in the file).
+pub fn probe_tracks(v: &Value) -> Vec<Track> {
+    v.get("streams")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|st| {
+                    let kind = match st.get("codec_type").and_then(Value::as_str)? {
+                        "audio" => "audio",
+                        "subtitle" => "subtitle",
+                        _ => return None,
+                    };
+                    let tag = |k: &str| st.get("tags").and_then(|t| t.get(k)).and_then(Value::as_str).unwrap_or("").to_string();
+                    Some(Track {
+                        index: st.get("index").and_then(Value::as_i64)?,
+                        kind: kind.into(),
+                        language: tag("language"),
+                        codec: st.get("codec_name").and_then(Value::as_str).unwrap_or("").into(),
+                        title: tag("title"),
+                        channels: st.get("channels").and_then(Value::as_u64).unwrap_or(0),
+                        default: st.get("disposition").and_then(|d| d.get("default")).and_then(Value::as_i64) == Some(1),
+                        extra: false,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Marks the tracks that can go: audio and subtitles in languages you don't keep. The
+/// original audio (the default track, else the first) and untagged tracks always stay, so a
+/// file never ends up without sound.
+pub fn mark_extra(tracks: &mut [Track], keep: &[String]) {
+    let keep: std::collections::HashSet<String> = keep.iter().map(|k| crate::cleanup::lang_family(k)).collect();
+    let original = tracks
+        .iter()
+        .find(|t| t.kind == "audio" && t.default)
+        .or_else(|| tracks.iter().find(|t| t.kind == "audio"))
+        .map(|t| t.index);
+    let original_lang = tracks.iter().find(|t| Some(t.index) == original).map(|t| crate::cleanup::lang_family(&t.language));
+    for t in tracks.iter_mut() {
+        let fam = crate::cleanup::lang_family(&t.language);
+        let same_as_original = t.kind == "audio" && original_lang.as_deref() == Some(fam.as_str());
+        t.extra = !keep.is_empty() && Some(t.index) != original && !same_as_original && crate::cleanup::is_extra(&t.language, &keep);
+    }
+}
+
+/// ffmpeg arguments for a copy without the given track indexes (nothing re-encoded).
+pub fn strip_args(input: &Path, output: &Path, drop: &[i64]) -> Vec<String> {
+    let ext = out_ext(&input.to_string_lossy());
+    let mut a: Vec<String> = ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-progress", "pipe:1", "-nostats", "-i"]
+        .map(String::from)
+        .to_vec();
+    a.push(input.to_string_lossy().into_owned());
+    a.extend(["-map", "0:v", "-map", "0:a?", "-map", "0:s?"].map(String::from));
+    if ext == "mkv" {
+        a.extend(["-map".into(), "0:t?".into()]);
+    }
+    for i in drop {
+        a.extend(["-map".into(), format!("-0:{i}")]);
+    }
+    a.extend(["-c".into(), "copy".into()]);
+    if ext == "mp4" {
+        a.extend(["-movflags".into(), "+faststart".into()]);
+    }
+    a.push(output.to_string_lossy().into_owned());
+    a
+}
+
+/// Size per hour of video against what's usual for that picture size: rows that are much
+/// bigger than the median of their resolution (and over 2 GB) are "unusually big".
+/// Input per row: (height, GB per hour, bytes).
+pub fn big_flags(rows: &[(u64, f64, u64)]) -> Vec<bool> {
+    fn bucket(h: u64) -> usize {
+        match h {
+            h if h >= 1600 => 3,
+            h if h >= 900 => 2,
+            h if h >= 600 => 1,
+            _ => 0,
+        }
+    }
+    // Typical GB per hour when there are too few files to compare with.
+    const USUAL: [f64; 4] = [1.2, 2.5, 5.0, 16.0];
+    let mut per: [Vec<f64>; 4] = Default::default();
+    for (h, g, _) in rows {
+        if *g > 0.0 {
+            per[bucket(*h)].push(*g);
+        }
+    }
+    let median: Vec<f64> = per
+        .iter_mut()
+        .enumerate()
+        .map(|(i, v)| {
+            if v.len() < 5 {
+                return USUAL[i];
+            }
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            v[v.len() / 2]
+        })
+        .collect();
+    rows.iter().map(|(h, g, size)| *size > 2_000_000_000 && *g > median[bucket(*h)] * 1.8).collect()
+}
+
 fn tools(state: &AppState) -> Result<(PathBuf, PathBuf)> {
     let ff = media_tools::locate_ffmpeg(state.settings()?.ffmpeg_path.as_deref())
         .ok_or_else(|| Error::msg("ffmpeg was not found. See Settings → Tools."))?;
@@ -133,6 +267,128 @@ pub async fn storage_scan(state: State<'_, AppState>, folder: String) -> Result<
     .map_err(|e| Error::msg(e.to_string()))?
 }
 
+/// One video as Jellyfin knows it, for the storage overview (no file is opened).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverviewRow {
+    id: String,
+    name: String,
+    /// Path inside the library folder ("" when it can't be mapped).
+    rel: String,
+    folder: String,
+    size: u64,
+    duration: f64,
+    bitrate: u64,
+    codec: String,
+    width: u64,
+    height: u64,
+    hdr: bool,
+    gb_per_hour: f64,
+    big: bool,
+    can_shrink: bool,
+    tracks: Vec<Track>,
+}
+
+fn jf_tracks(streams: &[Value]) -> Vec<Track> {
+    streams
+        .iter()
+        .filter_map(|st| {
+            let kind = match st.get("Type").and_then(Value::as_str)? {
+                "Audio" => "audio",
+                // Subtitle files next to the video are not inside it.
+                "Subtitle" if !st.get("IsExternal").and_then(Value::as_bool).unwrap_or(false) => "subtitle",
+                _ => return None,
+            };
+            let txt = |k: &str| st.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+            Some(Track {
+                index: st.get("Index").and_then(Value::as_i64)?,
+                kind: kind.into(),
+                language: txt("Language"),
+                codec: txt("Codec"),
+                title: txt("DisplayTitle"),
+                channels: st.get("Channels").and_then(Value::as_u64).unwrap_or(0),
+                default: st.get("IsDefault").and_then(Value::as_bool).unwrap_or(false),
+                extra: false,
+            })
+        })
+        .collect()
+}
+
+/// Every video with size, codec and tracks, straight from Jellyfin (fast: no file is read).
+/// `keep` = languages you keep, to mark audio and subtitle tracks that could go.
+#[tauri::command]
+pub async fn storage_overview(state: State<'_, AppState>, keep: Vec<String>) -> Result<Vec<OverviewRow>> {
+    let items = state
+        .reader()
+        .await?
+        .items_query(
+            vec![
+                ("IncludeItemTypes", "Movie,Episode".into()),
+                ("Recursive", "true".into()),
+                ("Fields", "MediaSources,Path".into()),
+                ("EnableImages", "false".into()),
+                ("EnableUserData", "false".into()),
+            ],
+            100_000,
+        )
+        .await?;
+    let settings = state.settings()?;
+    let root = settings.library_root.clone();
+    let map = settings.path_map.clone();
+    let mut rows: Vec<OverviewRow> = Vec::new();
+    for v in &items {
+        let id = v.get("Id").and_then(Value::as_str).unwrap_or("").replace('-', "");
+        let Some(src) = v.get("MediaSources").and_then(Value::as_array).and_then(|a| a.first()) else { continue };
+        let streams: Vec<Value> = src.get("MediaStreams").and_then(Value::as_array).cloned().unwrap_or_default();
+        let video = streams.iter().find(|x| x.get("Type").and_then(Value::as_str) == Some("Video"));
+        let path = src.get("Path").and_then(Value::as_str).or_else(|| v.get("Path").and_then(Value::as_str)).unwrap_or("");
+        let rel = root
+            .as_deref()
+            .filter(|_| map.is_some())
+            .and_then(|r| media_tools::map_path(path, map.as_ref(), Some(Path::new(r))).map(|(p, _)| (r, p)))
+            .and_then(|(r, p)| crate::local::rel_to_root(Path::new(r), &p))
+            .unwrap_or_default();
+        let size = src.get("Size").and_then(Value::as_u64).unwrap_or(0);
+        let ticks = src.get("RunTimeTicks").or_else(|| v.get("RunTimeTicks")).and_then(Value::as_f64).unwrap_or(0.0);
+        let duration = ticks / 10_000_000.0;
+        let name = if v.get("Type").and_then(Value::as_str) == Some("Episode") {
+            let se = v.get("ParentIndexNumber").and_then(Value::as_i64).unwrap_or(0);
+            let ep = v.get("IndexNumber").and_then(Value::as_i64).unwrap_or(0);
+            format!("{} · S{se:02}E{ep:02} · {}", v.get("SeriesName").and_then(Value::as_str).unwrap_or(""), v.get("Name").and_then(Value::as_str).unwrap_or(""))
+        } else {
+            v.get("Name").and_then(Value::as_str).unwrap_or("").to_string()
+        };
+        let codec = video.and_then(|x| x.get("Codec")).and_then(Value::as_str).unwrap_or("").to_lowercase();
+        let range = video.and_then(|x| x.get("VideoRange")).and_then(Value::as_str).unwrap_or("SDR");
+        let hdr = range != "SDR" && !range.is_empty();
+        let mut tracks = jf_tracks(&streams);
+        mark_extra(&mut tracks, &keep);
+        rows.push(OverviewRow {
+            folder: rel.split('/').next().unwrap_or("").to_string(),
+            id,
+            name,
+            rel,
+            size,
+            duration,
+            bitrate: src.get("Bitrate").and_then(Value::as_u64).unwrap_or(0),
+            width: video.and_then(|x| x.get("Width")).and_then(Value::as_u64).unwrap_or(0),
+            height: video.and_then(|x| x.get("Height")).and_then(Value::as_u64).unwrap_or(0),
+            gb_per_hour: if duration > 60.0 { size as f64 / 1e9 / (duration / 3600.0) } else { 0.0 },
+            big: false,
+            can_shrink: !hdr && codec != "hevc" && codec != "av1" && !codec.is_empty(),
+            codec,
+            hdr,
+            tracks,
+        });
+    }
+    let flags = big_flags(&rows.iter().map(|r| (r.height, r.gb_per_hour, r.size)).collect::<Vec<_>>());
+    for (r, b) in rows.iter_mut().zip(flags) {
+        r.big = b;
+    }
+    rows.sort_by(|a, b| b.size.cmp(&a.size));
+    Ok(rows)
+}
+
 /// Which H.265 encoders this ffmpeg has, best first.
 #[tauri::command]
 pub async fn hevc_encoders(state: State<'_, AppState>) -> Result<Vec<String>> {
@@ -164,6 +420,15 @@ pub struct JobRequest {
     pub quality: Option<u8>,
     /// for loudness, LUFS (e.g. -20)
     pub target_lufs: Option<f64>,
+    /// for strip: languages to keep (the original audio and untagged tracks always stay)
+    #[serde(default)]
+    pub keep_langs: Vec<String>,
+    /// for strip: take out audio tracks in other languages
+    #[serde(default)]
+    pub strip_audio: bool,
+    /// for strip: take out built-in subtitles in other languages
+    #[serde(default)]
+    pub strip_subs: bool,
 }
 
 /// Output container: keep mp4/mkv as they are, everything else becomes mkv.
@@ -384,6 +649,20 @@ fn job_body(app: &AppHandle, id: u64, req: &JobRequest, slot: &Arc<Mutex<Option<
             emit("status", None, Some(format!("Measured {lufs:.1} LUFS, peak {peak:.1} dB; applying {gain:+.1} dB")));
             loudness_args(&input, &temp, gain, &info)
         }
+        "strip" => {
+            let mut tracks = probe_tracks(&probe_json(&fp, &input)?);
+            mark_extra(&mut tracks, &req.keep_langs);
+            let drop: Vec<i64> = tracks
+                .iter()
+                .filter(|t| t.extra && ((t.kind == "audio" && req.strip_audio) || (t.kind == "subtitle" && req.strip_subs)))
+                .map(|t| t.index)
+                .collect();
+            if drop.is_empty() {
+                return Ok("Nothing to take out; skipped.".into());
+            }
+            emit("status", None, Some(format!("Taking out {} track{}", drop.len(), if drop.len() == 1 { "" } else { "s" })));
+            strip_args(&input, &temp, &drop)
+        }
         _ => return Err(Error::msg("Unknown job.")),
     };
 
@@ -407,6 +686,10 @@ fn job_body(app: &AppHandle, id: u64, req: &JobRequest, slot: &Arc<Mutex<Option<
         Some("The new file has no video".to_string())
     } else if req.mode == "hevc" && new_size >= info.size {
         Some("The H.265 version was not smaller".to_string())
+    } else if req.mode == "strip" && new_size >= info.size {
+        Some("The new file was not smaller".to_string())
+    } else if req.mode == "strip" && info.audio_streams > 0 && new.audio_streams == 0 {
+        Some("The new file has no sound".to_string())
     } else {
         None
     };
@@ -444,7 +727,7 @@ fn job_body(app: &AppHandle, id: u64, req: &JobRequest, slot: &Arc<Mutex<Option<
     }
     std::fs::rename(&temp, &final_abs)?;
     let saved = info.size.saturating_sub(new_size);
-    Ok(if req.mode == "hevc" {
+    Ok(if req.mode == "hevc" || req.mode == "strip" {
         format!("Done: {:.1} GB saved. The original is in {TRASH} until you empty it.", saved as f64 / 1e9)
     } else {
         "Done. The original is in the trash folder until you empty it.".to_string()
@@ -547,6 +830,55 @@ pub async fn trash_info(state: State<'_, AppState>) -> Result<TrashInfo> {
     .map_err(|e| Error::msg(e.to_string()))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashFile {
+    /// Where it came from in the library.
+    rel: String,
+    bytes: u64,
+    /// When it went into the trash (seconds).
+    at: u64,
+}
+
+/// What's in the trash folder (biggest first, at most 2000), so you see what Empty removes.
+#[tauri::command]
+pub async fn trash_list(state: State<'_, AppState>) -> Result<Vec<TrashFile>> {
+    let root = state.library_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = root.join(TRASH);
+        let mut out = Vec::new();
+        let mut stack = vec![dir.clone()];
+        while let Some(d) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&d) else { continue };
+            for e in rd.flatten() {
+                let Ok(ft) = e.file_type() else { continue };
+                if ft.is_dir() {
+                    stack.push(e.path());
+                } else if ft.is_file() {
+                    let meta = e.metadata().ok();
+                    let inside = e.path().strip_prefix(&dir).map(rel_string).unwrap_or_default();
+                    // "<stamp>/Movies/a.mkv" → "Movies/a.mkv"
+                    let rel = inside.split_once('/').map(|(_, r)| r.to_string()).unwrap_or(inside);
+                    out.push(TrashFile {
+                        rel,
+                        bytes: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                        at: meta
+                            .and_then(|m| m.modified().ok())
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                    });
+                }
+            }
+        }
+        out.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+        out.truncate(2000);
+        out
+    })
+    .await
+    .map_err(|e| Error::msg(e.to_string()))
+}
+
 /// Permanently deletes the originals kept in the trash folder. Only that folder, only
 /// when the user confirms it in the window.
 #[tauri::command]
@@ -625,6 +957,56 @@ mod tests {
         let a = loudness_args(Path::new("/m/a.mkv"), Path::new("/m/b.mkv"), 3.0, &i);
         assert!(a.windows(2).any(|w| w[0] == "-c:a" && w[1] == "ac3"));
         assert!(a.contains(&"volume=3.00dB".to_string()));
+    }
+
+    #[test]
+    fn unusually_big_is_relative_to_resolution() {
+        // Ten 1080p files around 3 GB/h, one at 12 GB/h; one 4K at 20 GB/h is normal for 4K.
+        let mut rows: Vec<(u64, f64, u64)> = (0..10).map(|i| (1080, 2.8 + i as f64 * 0.05, 6_000_000_000)).collect();
+        rows.push((1080, 12.0, 24_000_000_000));
+        rows.push((2160, 20.0, 40_000_000_000));
+        rows.push((1080, 12.0, 1_500_000_000)); // short: under 2 GB never counts
+        let f = big_flags(&rows);
+        assert!(!f[0] && !f[9]);
+        assert!(f[10], "four times the 1080p median");
+        assert!(!f[11], "4K uses its own typical size");
+        assert!(!f[12]);
+    }
+
+    #[test]
+    fn extra_tracks_keep_original_and_your_languages() {
+        let v = serde_json::json!({ "streams": [
+            {"index": 0, "codec_type": "video", "codec_name": "h264"},
+            {"index": 1, "codec_type": "audio", "codec_name": "eac3", "channels": 6, "tags": {"language": "jpn"}, "disposition": {"default": 1}},
+            {"index": 2, "codec_type": "audio", "codec_name": "ac3", "tags": {"language": "eng"}, "disposition": {"default": 0}},
+            {"index": 3, "codec_type": "audio", "codec_name": "ac3", "tags": {"language": "ita"}},
+            {"index": 4, "codec_type": "audio", "codec_name": "ac3"},
+            {"index": 5, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"language": "en"}},
+            {"index": 6, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"language": "fre"}},
+            {"index": 7, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"language": "und"}}
+        ]});
+        let mut t = probe_tracks(&v);
+        assert_eq!(t.len(), 7);
+        mark_extra(&mut t, &["eng".into(), "nl".into()]);
+        let extra: Vec<i64> = t.iter().filter(|x| x.extra).map(|x| x.index).collect();
+        assert_eq!(extra, vec![3, 6], "original Japanese, English, untagged stay");
+        // Nothing to keep given: nothing is marked.
+        let mut t2 = probe_tracks(&v);
+        mark_extra(&mut t2, &[]);
+        assert!(t2.iter().all(|x| !x.extra));
+    }
+
+    #[test]
+    fn strip_arguments_copy_and_drop_by_index() {
+        let a = strip_args(Path::new("/m/Film.mkv"), Path::new("/m/.mediahub-tmp-Film.mkv"), &[3, 6]);
+        assert!(a.windows(2).any(|w| w[0] == "-c" && w[1] == "copy"));
+        assert!(a.windows(2).any(|w| w[0] == "-map" && w[1] == "-0:3"));
+        assert!(a.windows(2).any(|w| w[0] == "-map" && w[1] == "-0:6"));
+        assert!(a.contains(&"0:t?".to_string()));
+        assert!(!a.iter().any(|x| x.starts_with("-c:v")), "nothing is re-encoded");
+        let m = strip_args(Path::new("/m/a.mp4"), Path::new("/m/b.mp4"), &[2]);
+        assert!(!m.contains(&"0:t?".to_string()));
+        assert_eq!(m.last().unwrap(), "/m/b.mp4");
     }
 
     #[test]

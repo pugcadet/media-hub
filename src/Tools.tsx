@@ -121,7 +121,7 @@ function GetBtn({ running, disabled, p, k, onClick, small }: { running: boolean;
   return <button className="mini-btn" disabled={running || disabled} onClick={onClick} title="Download subtitles">{small ? <Icon name="download" size={13} /> : <><Icon name="download" size={13} /> Get subtitles</>}</button>;
 }
 
-const OUTCOME: Record<AutoResult["outcome"], string> = { has: "already has it", downloaded: "downloaded", low: "best match too weak", none: "nothing found" };
+const OUTCOME: Record<AutoResult["outcome"], string> = { has: "already has it", found: "found in the folder, now used", downloaded: "downloaded", low: "best match too weak", none: "nothing found" };
 
 /** Subtitles: every movie and episode without subtitles, with a bulk "get the best match". */
 export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id: string) => void }) {
@@ -190,7 +190,7 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
       setResults((r) => ({ ...r, [e.Id]: "working…" }));
       try {
         const res = await api.subtitleAuto(e.Id, lang, codes, minScore);
-        if (res.outcome === "downloaded") downloaded++;
+        if (res.outcome === "downloaded" || res.outcome === "found") downloaded++;
         setResults((r) => ({ ...r, [e.Id]: OUTCOME[res.outcome] + (res.score != null ? ` (${res.score})` : "") }));
       } catch (err) {
         const t = errorText(err);

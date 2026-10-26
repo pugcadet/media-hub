@@ -32,10 +32,14 @@ export function Dots({ dots }: { dots: Dot[] }) {
   );
 }
 
-export function Studio({ items, selected, onSelect, head, empty, children, limit = 800 }: {
+export function Studio({ items, selected, onSelect, onMenu, onOpen, head, empty, children, limit = 800 }: {
   items: StudioItem[];
   selected: string | null;
   onSelect: (id: string) => void;
+  /** Right-click on a row. */
+  onMenu?: (id: string, e: React.MouseEvent) => void;
+  /** Double-click on a row (open it full size). */
+  onOpen?: (id: string) => void;
   /** Filters, search and bulk actions above the list. */
   head?: ReactNode;
   /** Shown in the list when it's empty. */
@@ -80,7 +84,7 @@ export function Studio({ items, selected, onSelect, head, empty, children, limit
             return (
               <div key={it.id}>
                 {header && <div className="studio-group">{header}</div>}
-                <div className={`studio-item ${selected === it.id ? "on" : ""}`} onClick={() => onSelect(it.id)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onSelect(it.id)}>
+                <div className={`studio-item ${selected === it.id ? "on" : ""}`} onClick={() => onSelect(it.id)} onDoubleClick={onOpen && (() => onOpen(it.id))} onContextMenu={onMenu && ((e) => onMenu(it.id, e))} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onSelect(it.id)}>
                   {it.lead && <span className="studio-lead" onClick={(e) => e.stopPropagation()}>{it.lead}</span>}
                   {it.thumb !== undefined && (
                     <span className={`studio-thumb ${it.warn ? "warn" : ""}`}>{it.thumb ? <img src={it.thumb} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /> : null}</span>

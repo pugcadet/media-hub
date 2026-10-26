@@ -47,6 +47,31 @@ export function reloadAll(): void {
   notify();
 }
 
+/* Per-title reloads: a change to one title reloads only the screens showing that title. */
+const itemEpochs = new Map<string, number>();
+const itemSubs = new Set<(ids: string[]) => void>();
+const norm = (id: string) => id.replace(/-/g, "").toLowerCase();
+
+/** Reload only these titles (their pages, and their rows in lists). */
+export function reloadItems(ids: (string | null | undefined)[]): void {
+  const list = [...new Set(ids.filter((x): x is string => !!x).map(norm))];
+  if (!list.length) return;
+  list.forEach((i) => itemEpochs.set(i, (itemEpochs.get(i) ?? 0) + 1));
+  notify();
+  itemSubs.forEach((f) => f(list));
+}
+
+/** Changes when this title changed (after a job about it). */
+export function useItemEpoch(id: string): number {
+  return useSyncExternalStore(subscribe, () => itemEpochs.get(norm(id)) ?? 0);
+}
+
+/** Called with the ids of titles that changed (lists update those rows only). */
+export function onItemsChanged(f: (ids: string[]) => void): () => void {
+  itemSubs.add(f);
+  return () => itemSubs.delete(f);
+}
+
 /** Things kept in memory to show pages instantly; "Reload data" empties them. */
 const caches = new Set<() => void>();
 export function onDataReload(clear: () => void): void {
@@ -62,14 +87,15 @@ export interface JobHandle {
 }
 
 /**
- * Runs `work` as a visible job. When it ends, screens reload (unless `reload` is false).
+ * Runs `work` as a visible job. When it ends, screens reload (unless `reload` is false);
+ * with `items`, only the screens and rows of those titles reload.
  * Errors are shown in the bar and re-thrown.
  *
  * Stop: `stop` names the backend job to stop ("health", "sync", "bulk", "detect",
  * "import"); `cancellable` lets `work` check `job.cancelled` between its own steps.
  * Either way the screen stops waiting right away and the job rejects with STOPPED.
  */
-export async function track<T>(label: string, work: (job: JobHandle) => Promise<T>, opts: { reload?: boolean; cancellable?: boolean; stop?: string } = {}): Promise<T> {
+export async function track<T>(label: string, work: (job: JobHandle) => Promise<T>, opts: { reload?: boolean; cancellable?: boolean; stop?: string; items?: (string | null | undefined)[] } = {}): Promise<T> {
   const id = nextId++;
   let cancelled = false;
   let abort: (e: unknown) => void = () => undefined;
@@ -120,7 +146,8 @@ export async function track<T>(label: string, work: (job: JobHandle) => Promise<
     logProblem(label, msg);
     throw e;
   } finally {
-    if (opts.reload !== false) reloadAll();
+    if (opts.items) reloadItems(opts.items);
+    else if (opts.reload !== false) reloadAll();
     // Finished jobs stay visible for a moment so you can see they're done.
     window.setTimeout(() => {
       jobs = jobs.filter((j) => j.id !== id);

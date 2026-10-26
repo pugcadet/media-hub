@@ -1,4 +1,5 @@
 mod backend;
+mod bulk;
 mod cancel;
 mod cleanup;
 mod collections;
@@ -65,6 +66,7 @@ pub fn run() {
             library::find_moved,
             structure::structure_scan,
             structure::structure_plan,
+            bulk::bulk_plan,
             meta_cmds::make_thumb,
             backend::plugins_installed,
             backend::run_intro_skipper,
@@ -102,6 +104,8 @@ pub fn run() {
             library::sync_picks_playlist,
             library::journal_all,
             library::segment_summary,
+            library::segment_coverage,
+            library::health_row,
             library::set_favorite,
             library::library_languages,
             library::set_library_language,
@@ -119,11 +123,15 @@ pub fn run() {
             rename_cmds::undo_rename,
             meta_cmds::item_details,
             meta_cmds::save_metadata,
+            meta_cmds::youtube_number,
             meta_cmds::identify_search,
             meta_cmds::identify_apply,
             meta_cmds::remote_images,
             meta_cmds::set_image,
             meta_cmds::upload_image_file,
+            meta_cmds::upload_image_bytes,
+            meta_cmds::set_image_from_link,
+            meta_cmds::save_picture,
             meta_cmds::undo_change,
             meta_cmds::refresh_item,
             meta_cmds::set_read_only,
@@ -133,6 +141,7 @@ pub fn run() {
             collections::home_feed,
             collections::collections_list,
             collections::collection_items,
+            collections::collections_of,
             collections::similar_items,
             collections::person_items,
             collections::collection_create,
@@ -158,6 +167,7 @@ pub fn run() {
             localmusic::music_rescan,
             localmusic::music_fetch_art,
             cleanup::remove_subtitle_files,
+            cleanup::episodes_without_picture,
             naming_check::naming_check,
             naming_check::naming_check_last,
             naming_check::naming_check_cancel,
@@ -167,6 +177,8 @@ pub fn run() {
             sub_cmds::subtitle_options,
             sub_cmds::subtitle_download,
             sub_cmds::subtitle_auto,
+            sub_cmds::local_subtitles,
+            sub_cmds::adopt_subtitles,
             seg_cmds::segments_overview,
             seg_cmds::detect_season,
             seg_cmds::save_segments,
@@ -189,11 +201,13 @@ pub fn run() {
             downloads::dl_reveal,
             downloads::dl_set_cookies,
             storage::storage_scan,
+            storage::storage_overview,
             storage::hevc_encoders,
             storage::storage_start,
             storage::storage_cancel,
             storage::storage_history,
             storage::trash_info,
+            storage::trash_list,
             storage::trash_empty,
         ])
         .build(tauri::generate_context!())

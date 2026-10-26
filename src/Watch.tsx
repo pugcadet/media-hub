@@ -2,17 +2,36 @@
 // the hub switcher (top left) goes back to the media manager.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePageState } from "./saved";
-import { api, Card, cleanTitle, Details, imageUrl, JfChild, Library, Pick, Sort, Status } from "./api";
+import { api, Card, cleanTitle, codesFor, cultures, Details, imageUrl, Item, JfChild, Library, Pick, Sort, Status } from "./api";
 import { onDataReload, useEpoch } from "./activity";
 import { nav } from "./nav";
 import { HubSwitcher } from "./Sidebar";
 import Home, { Billboard, featured, itemToCard } from "./Home";
 import Collections from "./Collections";
 import { MediaInfo } from "./ItemPage";
-import { CardTile, Icon, Img, itemMenu, openMenu, playTitle, Row, Tabs } from "./ui";
+import { CardTile, Icon, Img, itemMenu, openMenu, playTitle, preloadImages, Row, Tabs } from "./ui";
 import { prefs } from "./prefs";
+import { foldersOf, folderMap, tabFolder, useFolderMap } from "./folders";
+import { track } from "./activity";
 
-type Tab = "home" | "movies" | "shows" | "collections";
+/** "home", "collections", "movies"/"shows" (no folders known) or "folder:<name>" (one per NAS folder). */
+type Tab = string;
+
+const cleanId = (id: string) => id.replace(/-/g, "");
+
+/** Every show and movie, newest first (shared by the folder tabs and the background preload). */
+let allItems: Promise<Item[]> | null = null;
+onDataReload(() => { allItems = null; });
+function everything(): Promise<Item[]> {
+  allItems ??= api.list(null, "", "added", 0, 10000).catch(() => { allItems = null; return []; });
+  return allItems;
+}
+
+/** The titles in one library folder, in the given order. */
+async function inFolder(folder: string, sort: Sort): Promise<Item[]> {
+  const [all, map] = await Promise.all([sort === "added" ? everything() : api.list(null, "", sort, 0, 10000), folderMap()]);
+  return all.filter((i) => (map.get(cleanId(i.id)) ?? "Other") === folder);
+}
 
 export default function Watch({ status, item, onBack }: { status: Status; libraries: Library[]; item: { id: string; tab?: string; n: number } | null; onBack: () => void }) {
   const [tab, setTab] = useState<Tab>("home");
@@ -50,6 +69,27 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
     };
   }, [item, onBack]);
 
+  const fmap = useFolderMap();
+  const folders = foldersOf(fmap);
+  const tabList: Tab[] = folders.length ? ["home", ...folders.map((f) => `folder:${f}`), "collections"] : ["home", "movies", "shows", "collections"];
+  const label = (t: Tab) => tabFolder(t) ?? t[0].toUpperCase() + t.slice(1);
+
+  // Once the first screen is up, the other tabs' first pictures load quietly in the background.
+  useEffect(() => {
+    if (!folders.length) return;
+    let cancelled = false;
+    const idle = (f: () => void) => ((window as unknown as { requestIdleCallback?: (f: () => void) => number }).requestIdleCallback ?? ((g: () => void) => window.setTimeout(g, 200)))(f);
+    const t = window.setTimeout(() => idle(() => void (async () => {
+      for (const f of folders) {
+        if (cancelled) return;
+        const list = await inFolder(f, "added").catch(() => []);
+        preloadImages(list.slice(0, 30).map((i) => imageUrl(itemToCard(i).artId, "Primary", 300)));
+        await new Promise((r) => window.setTimeout(r, 400));
+      }
+    })()), 1500);
+    return () => { cancelled = true; window.clearTimeout(t); };
+  }, [folders.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const go = (t: Tab) => {
     setTab(t);
     setCollection(null);
@@ -62,8 +102,8 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
       <header className={`w-top ${solid || !hasHero ? "solid" : ""}`}>
         <HubSwitcher />
         <nav className="w-tabs">
-          {(["home", "movies", "shows", "collections"] as Tab[]).map((t) => (
-            <button key={t} className={tab === t && !item && !query ? "on" : ""} onClick={() => go(t)}>{t[0].toUpperCase() + t.slice(1)}</button>
+          {tabList.map((t) => (
+            <button key={t} className={tab === t && !item && !query ? "on" : ""} onClick={() => go(t)}>{label(t)}</button>
           ))}
         </nav>
         <div className="spacer" />
@@ -82,6 +122,7 @@ export default function Watch({ status, item, onBack }: { status: Status; librar
             {t === "home" ? <Home status={status} canEdit={false} variant="watch" />
               : t === "movies" ? <Browse kind="movie" query="" />
               : t === "shows" ? <Browse kind="series" query="" />
+              : tabFolder(t) ? <Browse kind={null} query="" folder={tabFolder(t)!} />
               : <Collections status={{ ...status, readOnly: true }} selected={collection} variant="watch" />}
           </div>
         ))}
@@ -116,15 +157,17 @@ const detailsCache = new Map<string, Details>();
 const epsCache = new Map<string, JfChild[]>();
 onDataReload(() => { browseCache.clear(); detailsCache.clear(); epsCache.clear(); });
 
-function Browse({ kind, query }: { kind: "movie" | "series" | null; query: string }) {
+function Browse({ kind, query, folder }: { kind: "movie" | "series" | null; query: string; folder?: string }) {
   const epoch = useEpoch();
-  const [sort, setSort] = usePageState<Sort>(`watch.${kind ?? "search"}.sort`, "added");
-  const [items, setItems] = useState<Card[]>(() => (query ? [] : browseCache.get(kind ?? "all")?.items ?? []));
+  const key = folder ? `folder:${folder}` : kind ?? "search";
+  const cacheKey = folder ? `folder:${folder}` : kind ?? "all";
+  const [sort, setSort] = usePageState<Sort>(`watch.${key}.sort`, "added");
+  const [items, setItems] = useState<Card[]>(() => (query ? [] : browseCache.get(cacheKey)?.items ?? []));
   const [more, setMore] = useState(true);
-  const [genre, setGenre] = usePageState<string | null>(`watch.${kind ?? "search"}.genre`, null);
+  const [genre, setGenre] = usePageState<string | null>(`watch.${key}.genre`, null);
   const [genres, setGenres] = useState<string[]>([]);
-  const [onlyNew, setOnlyNew] = usePageState(`watch.${kind ?? "search"}.onlyNew`, false);
-  const [hero, setHero] = useState<Pick | null>(() => (query ? null : browseCache.get(kind ?? "all")?.hero ?? null));
+  const [onlyNew, setOnlyNew] = usePageState(`watch.${key}.onlyNew`, false);
+  const [hero, setHero] = useState<Pick | null>(() => (query ? null : browseCache.get(cacheKey)?.hero ?? null));
   const sentinel = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const busy = useRef(false);
@@ -147,12 +190,13 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
     if (busy.current) return;
     busy.current = true;
     try {
-      const rows = await api.list(kind, query, sort, offset, 120);
+      // A folder tab shows everything in it at once (no paging).
+      const rows = folder ? (offset === 0 ? await inFolder(folder, sort) : []) : await api.list(kind, query, sort, offset, 120);
       if (offset === 0) {
-        if (!query) api.list(kind, "", "rating", 0, 200).then((top) => {
-          const h = featured(top, kind === "movie" ? "Movie of the day" : "Show of the day");
+        if (!query) (folder ? inFolder(folder, "rating").then((r) => r.slice(0, 200)) : api.list(kind, "", "rating", 0, 200)).then((top) => {
+          const h = featured(top, folder ? `Pick from ${folder}` : kind === "movie" ? "Movie of the day" : "Show of the day");
           setHero(h);
-          browseCache.set(kind ?? "all", { items: browseCache.get(kind ?? "all")?.items ?? [], hero: h });
+          browseCache.set(cacheKey, { items: browseCache.get(cacheKey)?.items ?? [], hero: h });
         }).catch(() => setHero(null));
         const g = new Map<string, number>();
         rows.forEach((r) => r.genres.forEach((x) => g.set(x, (g.get(x) ?? 0) + 1)));
@@ -163,12 +207,12 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
       all.current = next;
       const shown = next.filter((c) => (!genre || c.genres.includes(genre)) && (!onlyNew || !c.card.played)).map((c) => c.card);
       setItems(shown);
-      if (!query && offset === 0 && !genre && !onlyNew) browseCache.set(kind ?? "all", { items: shown, hero: browseCache.get(kind ?? "all")?.hero ?? null });
-      setMore(rows.length === 120);
+      if (!query && offset === 0 && !genre && !onlyNew) browseCache.set(cacheKey, { items: shown, hero: browseCache.get(cacheKey)?.hero ?? null });
+      setMore(!folder && rows.length === 120);
     } finally {
       busy.current = false;
     }
-  }, [kind, query, sort, genre, onlyNew]);
+  }, [kind, query, sort, genre, onlyNew, folder]);
 
   useEffect(() => {
     void load(0);
@@ -177,7 +221,7 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
   /** A–Z: everything sorted by name, then scroll to the first title with that letter. */
   async function jump(l: string) {
     if (sort !== "name" || more) {
-      const rows = await api.list(kind, "", "name", 0, 10000);
+      const rows = folder ? await inFolder(folder, "name") : await api.list(kind, "", "name", 0, 10000);
       all.current = rows.map((r) => ({ card: itemToCard(r), genres: r.genres }));
       setItems(all.current.filter((c) => (!genre || c.genres.includes(genre)) && (!onlyNew || !c.card.played)).map((c) => c.card));
       setMore(false);
@@ -203,7 +247,7 @@ function Browse({ kind, query }: { kind: "movie" | "series" | null; query: strin
     <div className={`pg w-browse ${hero && !query ? "layered" : ""}`} ref={root}>
       {hero && !query && <Billboard pick={hero} full onPlay={() => void playTitle(hero.id)} />}
       <div className="pg-head">
-        <h1>{query ? `Results for “${query}”` : kind === "movie" ? "Movies" : "Shows"}</h1>
+        <h1>{query ? `Results for “${query}”` : folder ?? (kind === "movie" ? "Movies" : "Shows")}</h1>
         <div className="pg-actions">
           <label className="check small"><input type="checkbox" checked={onlyNew} onChange={(e) => setOnlyNew(e.target.checked)} />Not watched yet</label>
           <label className="sort">Sort
@@ -300,8 +344,8 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
                 <Icon name="play" size={20} /> {resumeAt > 0 ? "Resume" : "Play"}{it.Type === "Series" && next ? epCode(next.ParentIndexNumber ?? d.seasons.find((x) => x.Id === season)?.IndexNumber, next.IndexNumber) : ""}
               </button>
             )}
-            <button className="bb-round" title={it.UserData?.Played ? "Watched (click to undo)" : "Mark as watched"} aria-label="Watched" onClick={() => void api.setPlayed(id, !it.UserData?.Played).then(() => api.details(id).then(setD)).catch(() => undefined)}>
-              <Icon name={it.UserData?.Played ? "check" : "plus"} size={20} />
+            <button className={`bb-round eye ${it.UserData?.Played ? "on" : ""}`} title={it.UserData?.Played ? "Watched (click to undo)" : "Mark as watched"} aria-label={it.UserData?.Played ? "Watched" : "Mark as watched"} aria-pressed={!!it.UserData?.Played} onClick={() => void api.setPlayed(id, !it.UserData?.Played).then(() => api.details(id).then(setD)).catch(() => undefined)}>
+              <Icon name="eye" size={20} />
             </button>
             {isEpisode && it.SeriesId && <button className="bb-more" onClick={() => nav.open(it.SeriesId!)}>Go to show</button>}
           </div>
@@ -339,6 +383,7 @@ function WatchItem({ id, onBack }: { id: string; onBack: () => void }) {
             </div>
           </section>
         )}
+        {(it.Type === "Movie" || isEpisode) && <NoSubs item={it} onDone={() => void api.details(id).then(setD)} />}
         {(it.Type === "Movie" || isEpisode) && <MediaInfo item={it} />}
         {people.length > 0 && (
           <section className="hrow">
@@ -366,4 +411,37 @@ function epCode(season: number | null | undefined, ep: number | null | undefined
   if (season == null) return ` E${ep}`;
   if (ep == null) return ` S${season}`;
   return ` S${season} E${ep}`;
+}
+
+/** No subtitles on this movie or episode: offer to fetch the best match in your languages. */
+function NoSubs({ item, onDone }: { item: Details["item"]; onDone: () => void }) {
+  const [state, setState] = useState<"idle" | "busy" | string>("idle");
+  const streams = item.MediaSources?.[0]?.MediaStreams ?? item.MediaStreams ?? [];
+  if (streams.some((m) => m.Type === "Subtitle") && state === "idle") return null;
+  async function get() {
+    setState("busy");
+    try {
+      const langs = (await api.status()).subLangs;
+      const list = await cultures().catch(() => []);
+      let got = 0;
+      await track(`Subtitles for ${item.Name}`, async (job) => {
+        for (const l of langs) {
+          const r = await api.subtitleAuto(item.Id, l, codesFor(l, list), 60);
+          if (r.outcome === "downloaded" || r.outcome === "has" || r.outcome === "found") got++;
+          job.update(r.outcome === "downloaded" ? `Downloaded (${l})` : r.outcome === "none" ? `Nothing found (${l})` : r.outcome === "low" ? `No good match (${l})` : `Already there (${l})`, null);
+        }
+      }, { reload: false });
+      setState(got ? "Downloaded. It shows up once Jellyfin has looked at the folder." : "Nothing good enough found online.");
+      if (got) window.setTimeout(onDone, 2500);
+    } catch (e) {
+      setState(String(e));
+    }
+  }
+  return (
+    <div className="w-nosubs">
+      <Icon name="subtitles" />
+      <span className="grow">{state === "idle" || state === "busy" ? "No subtitles yet." : state}</span>
+      {(state === "idle" || state === "busy") && <button disabled={state === "busy"} onClick={() => void get()}><Icon name="download" /> {state === "busy" ? "Looking…" : "Download subtitles"}</button>}
+    </div>
+  );
 }

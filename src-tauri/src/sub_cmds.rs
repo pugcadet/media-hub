@@ -348,7 +348,7 @@ async fn sleep_ms(ms: u64) {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoResult {
-    /// "has" | "downloaded" | "low" | "none"
+    /// "has" | "found" (a file in the folder, now linked) | "downloaded" | "low" | "none"
     outcome: &'static str,
     score: Option<u32>,
     name: Option<String>,
@@ -363,6 +363,13 @@ pub async fn subtitle_auto(state: State<'_, AppState>, id: String, lang: String,
     let item = w.reader().item_json(&id).await?;
     if has_lang(&streams(&item), &codes) {
         return Ok(AutoResult { outcome: "has", score: None, name: None });
+    }
+    // A subtitle already sits in the folder under another name ("English.srt"): use that.
+    if let Ok(adopted) = adopt(&state, &item, &id) {
+        if let Some(a) = adopted.iter().find(|a| codes.iter().any(|c| lang_matches(&a.lang, c))) {
+            let _ = w.refresh_light(&id).await;
+            return Ok(AutoResult { outcome: "found", score: None, name: Some(a.name.clone()) });
+        }
     }
     let found = w.reader().subtitle_search(&id, &lang).await?;
     let ranked = subs::rank(&file_stem(&item), found);
@@ -405,9 +412,211 @@ pub async fn undo_download(w: &Writer, id: &str, record_json: &str) -> Result<()
     Ok(())
 }
 
+/* ------------------------------------------------ subtitles already in the folder */
+
+const SUB_EXT: &[&str] = &["srt", "ass", "ssa", "vtt", "sub"];
+const VIDEO_EXT: &[&str] = &["mkv", "mp4", "m4v", "avi", "mov", "wmv", "ts", "m2ts", "webm", "mpg", "mpeg"];
+
+/// Language code from a loose subtitle's name: "English.srt", "2_Eng.srt", "movie.nl.srt".
+pub fn guess_lang(file_name: &str) -> Option<&'static str> {
+    const WORDS: &[(&str, &str)] = &[
+        ("english", "en"), ("eng", "en"), ("en", "en"),
+        ("dutch", "nl"), ("nederlands", "nl"), ("nld", "nl"), ("dut", "nl"), ("nl", "nl"),
+        ("german", "de"), ("deutsch", "de"), ("ger", "de"), ("deu", "de"), ("de", "de"),
+        ("french", "fr"), ("francais", "fr"), ("fre", "fr"), ("fra", "fr"), ("fr", "fr"),
+        ("spanish", "es"), ("espanol", "es"), ("spa", "es"), ("es", "es"),
+        ("italian", "it"), ("ita", "it"), ("it", "it"),
+        ("portuguese", "pt"), ("por", "pt"), ("pt", "pt"),
+        ("swedish", "sv"), ("swe", "sv"), ("danish", "da"), ("dan", "da"), ("norwegian", "no"), ("nor", "no"),
+        ("finnish", "fi"), ("fin", "fi"), ("polish", "pl"), ("pol", "pl"), ("russian", "ru"), ("rus", "ru"),
+        ("japanese", "ja"), ("jpn", "ja"), ("korean", "ko"), ("kor", "ko"), ("chinese", "zh"), ("chi", "zh"), ("zho", "zh"),
+        ("turkish", "tr"), ("tur", "tr"), ("greek", "el"), ("gre", "el"), ("arabic", "ar"), ("ara", "ar"),
+    ];
+    let stem = file_name.rsplit_once('.').map(|(a, _)| a).unwrap_or(file_name).to_lowercase();
+    // Words of the name, last first ("movie.en.srt" → "en", "2_English" → "english").
+    let words: Vec<&str> = stem.split(|c: char| !c.is_ascii_alphabetic()).filter(|w| !w.is_empty()).collect();
+    for w in words.iter().rev() {
+        if let Some((_, code)) = WORDS.iter().find(|(k, _)| k == w) {
+            // Two-letter words only count as the whole name or the last part ("x.en.srt").
+            if w.len() > 2 || words.len() == 1 || Some(w) == words.last() {
+                return Some(code);
+            }
+        }
+    }
+    None
+}
+
+fn lang_matches(code: &str, wanted: &str) -> bool {
+    let w = wanted.to_lowercase();
+    code == w || (w.len() == 3 && guess_lang(&format!("{w}.srt")) == Some(code)) || w.starts_with(code)
+}
+
+fn ext_of(p: &std::path::Path) -> String {
+    p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase()
+}
+
+/// Subtitle files near a video that Jellyfin won't link to it: in its folder (only when the
+/// folder holds just this video) or in a "Subs"/"Subtitles" folder next to it.
+fn loose_files(video: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Some(dir) = video.parent() else { return vec![] };
+    let stem = video.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let list = |d: &std::path::Path| -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(d).map(|r| r.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect()).unwrap_or_default()
+    };
+    let here = list(dir);
+    let videos = here.iter().filter(|p| VIDEO_EXT.contains(&ext_of(p).as_str())).count();
+    let linked = |p: &std::path::Path| p.file_name().and_then(|n| n.to_str()).map(|n| n.to_lowercase().starts_with(&format!("{stem}."))).unwrap_or(false);
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    if videos == 1 {
+        out.extend(here.iter().filter(|p| SUB_EXT.contains(&ext_of(p).as_str()) && !linked(p)).cloned());
+    }
+    for sub in ["Subs", "subs", "Subtitles", "subtitles", "SUBS"] {
+        let d = dir.join(sub);
+        if !d.is_dir() {
+            continue;
+        }
+        // Movies: Subs/English.srt. Shows: Subs/<episode file name>/2_English.srt.
+        let per_ep = d.join(video.file_stem().unwrap_or_default());
+        if per_ep.is_dir() {
+            out.extend(list(&per_ep).into_iter().filter(|p| SUB_EXT.contains(&ext_of(p).as_str())));
+        } else if videos == 1 {
+            out.extend(list(&d).into_iter().filter(|p| SUB_EXT.contains(&ext_of(p).as_str())));
+        }
+        break;
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Adopted {
+    name: String,
+    lang: String,
+}
+
+/// Gives loose subtitle files the video's name ("Movie (2020).en.srt") so Jellyfin and Infuse
+/// use them. One History entry, can be undone.
+fn adopt(state: &AppState, item: &Value, id: &str) -> Result<Vec<Adopted>> {
+    let server = item.get("Path").and_then(Value::as_str).unwrap_or("");
+    if server.is_empty() || !valid_item_id(id) {
+        return Ok(vec![]);
+    }
+    let video = crate::local::to_local(state, server)?;
+    let root = state.library_root()?;
+    let Some(dir) = video.parent() else { return Ok(vec![]) };
+    let stem = video.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    let mut moves: Vec<(String, String)> = Vec::new();
+    let mut done: Vec<Adopted> = Vec::new();
+    let mut used: Vec<String> = Vec::new();
+    for f in loose_files(&video) {
+        let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        let Some(lang) = guess_lang(&name) else { continue };
+        let forced = name.to_lowercase().contains("forced");
+        let sdh = { let l = name.to_lowercase(); l.contains("sdh") || l.contains("hearing") || l.contains("_hi") };
+        let tag = format!("{lang}{}", if forced { ".forced" } else if sdh { ".sdh" } else { "" });
+        if used.contains(&tag) {
+            continue; // one per language and kind
+        }
+        let to = dir.join(format!("{stem}.{tag}.{}", ext_of(&f)));
+        if to.exists() {
+            continue;
+        }
+        let (Some(from_rel), Some(to_rel)) = (crate::local::rel_to_root(&root, &f), crate::local::rel_to_root(&root, &to)) else { continue };
+        std::fs::rename(&f, &to)?;
+        used.push(tag);
+        moves.push((from_rel, to_rel));
+        done.push(Adopted { name, lang: lang.to_string() });
+    }
+    if !moves.is_empty() {
+        // Same record as a trashed file: undo moves each file back to where it was.
+        let rec = serde_json::json!({ "root": root.to_string_lossy(), "moves": moves });
+        state.store()?.journal_add("file_trashed", id, &rec.to_string(), "subtitles linked")?;
+    }
+    Ok(done)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSub {
+    name: String,
+    /// Where it is, as Jellyfin would see it (for removing it).
+    path: String,
+    lang: Option<String>,
+    /// Named after the video, so Jellyfin and Infuse use it.
+    linked: bool,
+}
+
+/// Subtitle files on disk next to a video, linked or not (also ones Jellyfin hasn't listed yet).
+#[tauri::command]
+pub async fn local_subtitles(state: State<'_, AppState>, id: String) -> Result<Vec<LocalSub>> {
+    if !valid_item_id(&id) {
+        return Err(Error::msg("bad id"));
+    }
+    let c = reader(&state).await?;
+    let item = c.item_json(&id).await?;
+    let server = item.get("Path").and_then(Value::as_str).unwrap_or("").to_string();
+    if server.is_empty() {
+        return Ok(vec![]);
+    }
+    let Ok(video) = crate::local::to_local(&state, &server) else { return Ok(vec![]) };
+    let Some(dir) = video.parent() else { return Ok(vec![]) };
+    let sep = if server.contains('\\') && !server.contains('/') { '\\' } else { '/' };
+    let server_dir = server.rsplit_once(sep).map(|(d, _)| d.to_string()).unwrap_or_default();
+    let stem = video.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let mut out = Vec::new();
+    let to_server = |p: &std::path::Path| -> String {
+        p.strip_prefix(dir).ok().map(|r| {
+            let rel: Vec<String> = r.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+            format!("{server_dir}{sep}{}", rel.join(&sep.to_string()))
+        }).unwrap_or_default()
+    };
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for p in rd.flatten().map(|e| e.path()) {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            if p.is_file() && SUB_EXT.contains(&ext_of(&p).as_str()) && name.to_lowercase().starts_with(&format!("{stem}.")) {
+                let rest = &name[stem.len()..];
+                out.push(LocalSub { lang: guess_lang(rest.trim_start_matches('.')).map(String::from), path: to_server(&p), name, linked: true });
+            }
+        }
+    }
+    for p in loose_files(&video) {
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        out.push(LocalSub { lang: guess_lang(&name).map(String::from), path: to_server(&p), name, linked: false });
+    }
+    Ok(out)
+}
+
+/// Links loose subtitle files in the folder to the video (see `adopt`).
+#[tauri::command]
+pub async fn adopt_subtitles(state: State<'_, AppState>, id: String) -> Result<Vec<Adopted>> {
+    let w = state.writer().await?;
+    let item = w.reader().item_json(&id).await?;
+    let done = adopt(&state, &item, &id)?;
+    if !done.is_empty() {
+        let _ = w.refresh_light(&id).await;
+    }
+    Ok(done)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guesses_loose_subtitle_languages() {
+        assert_eq!(guess_lang("English.srt"), Some("en"));
+        assert_eq!(guess_lang("2_English.srt"), Some("en"));
+        assert_eq!(guess_lang("english.srt"), Some("en"));
+        assert_eq!(guess_lang("Movie.2020.nl.srt"), Some("nl"));
+        assert_eq!(guess_lang("Dutch.srt"), Some("nl"));
+        assert_eq!(guess_lang("subs.srt"), None);
+        assert_eq!(guess_lang("The.Italian.Job.srt"), Some("it"), "a language word anywhere counts when it's spelled out");
+        assert!(lang_matches("en", "eng"));
+        assert!(lang_matches("nl", "nl"));
+        assert!(!lang_matches("en", "nl"));
+    }
 
     #[test]
     fn built_in_subtitles_without_a_tag_count_by_name() {

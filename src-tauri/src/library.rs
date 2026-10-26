@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {
@@ -160,42 +160,7 @@ async fn health_rows(app: &AppHandle, state: &AppState) -> Result<Vec<HealthRow>
     progress(app, 2, 3, "Putting it together");
     let root = state.settings()?.library_root;
     let map = state.settings()?.path_map;
-    let rows: Vec<HealthRow> = titles
-        .iter()
-        .filter_map(|v| {
-            let id = clean_id(s(v, "Id"));
-            if !valid_item_id(&id) {
-                return None;
-            }
-            let series = s(v, "Type") == "Series";
-            let path = s(v, "Path");
-            // The folder right under the library root ("TV", "Movies", "Kids" …).
-            let lib = root
-                .as_deref()
-                // Only with a known path mapping: guessing one would touch the NAS for every title.
-                .filter(|_| map.is_some())
-                .and_then(|r| media_tools::map_path(path, map.as_ref(), Some(Path::new(r))).map(|(p, _)| (r, p)))
-                .and_then(|(r, p)| local::rel_to_root(Path::new(r), &p))
-                .and_then(|rel| rel.split('/').next().map(String::from))
-                .unwrap_or_default();
-            Some(HealthRow {
-                kind: if series { "series".into() } else { "movie".into() },
-                name: s(v, "Name").to_string(),
-                year: v.get("ProductionYear").and_then(Value::as_i64),
-                identified: identified(v),
-                poster: has_img(v, "Primary"),
-                backdrop: has_img(v, "Backdrop"),
-                logo: has_img(v, "Logo"),
-                thumb: has_img(v, "Thumb"),
-                banner: has_img(v, "Banner"),
-                videos: if series { v.get("RecursiveItemCount").and_then(Value::as_i64).unwrap_or(0) } else { 1 },
-                no_subs: count.get(&id).copied().unwrap_or(0),
-                library_folder: lib,
-                path: path.to_string(),
-                id,
-            })
-        })
-        .collect();
+    let rows: Vec<HealthRow> = titles.iter().filter_map(|v| make_row(v, &count, root.as_deref(), map.as_ref())).collect();
     progress(app, 3, 3, "");
     Ok(rows)
 }
@@ -899,9 +864,92 @@ pub fn journal_all(state: State<'_, AppState>, limit: i64) -> Result<Vec<Journal
         .collect())
 }
 
+fn make_row(v: &Value, count: &HashMap<String, i64>, root: Option<&str>, map: Option<&crate::media_tools::PathMap>) -> Option<HealthRow> {
+    let id = clean_id(s(v, "Id"));
+    if !valid_item_id(&id) {
+        return None;
+    }
+    let series = s(v, "Type") == "Series";
+    let path = s(v, "Path");
+    // The folder right under the library root ("TV", "Movies", "Kids" …).
+    let lib = root
+        // Only with a known path mapping: guessing one would touch the NAS for every title.
+        .filter(|_| map.is_some())
+        .and_then(|r| media_tools::map_path(path, map, Some(Path::new(r))).map(|(p, _)| (r, p)))
+        .and_then(|(r, p)| local::rel_to_root(Path::new(r), &p))
+        .and_then(|rel| rel.split('/').next().map(String::from))
+        .unwrap_or_default();
+    Some(HealthRow {
+        kind: if series { "series".into() } else { "movie".into() },
+        name: s(v, "Name").to_string(),
+        year: v.get("ProductionYear").and_then(Value::as_i64),
+        identified: identified(v),
+        poster: has_img(v, "Primary"),
+        backdrop: has_img(v, "Backdrop"),
+        logo: has_img(v, "Logo"),
+        thumb: has_img(v, "Thumb"),
+        banner: has_img(v, "Banner"),
+        videos: if series { v.get("RecursiveItemCount").and_then(Value::as_i64).unwrap_or(0) } else { 1 },
+        no_subs: count.get(&id).copied().unwrap_or(0),
+        library_folder: lib,
+        path: path.to_string(),
+        id,
+    })
+}
+
+/// One title's row read again (after a change to it), also updated in the saved check.
+#[tauri::command]
+pub async fn health_row(state: State<'_, AppState>, id: String) -> Result<Option<HealthRow>> {
+    check_id(&id)?;
+    let c = state.reader().await?;
+    let found = c
+        .items_query(
+            vec![
+                ("Ids", id.clone()),
+                ("Fields", "ProviderIds,Path,RecursiveItemCount,ProductionYear".into()),
+                ("EnableUserData", "false".into()),
+                ("ImageTypeLimit", "1".into()),
+            ],
+            1,
+        )
+        .await?;
+    let Some(v) = found.first() else { return Ok(None) };
+    let series = s(v, "Type") == "Series";
+    let no_subs = c
+        .items_query(
+            vec![
+                if series { ("ParentId", id.clone()) } else { ("Ids", id.clone()) },
+                ("IncludeItemTypes", "Episode,Movie".into()),
+                ("Recursive", "true".into()),
+                ("HasSubtitles", "false".into()),
+                ("EnableImages", "false".into()),
+                ("EnableUserData", "false".into()),
+            ],
+            10_000,
+        )
+        .await
+        .map(|l| l.len() as i64)
+        .unwrap_or(0);
+    let count: HashMap<String, i64> = [(clean_id(&id), no_subs)].into_iter().collect();
+    let settings = state.settings()?;
+    let row = make_row(v, &count, settings.library_root.as_deref(), settings.path_map.as_ref());
+    if let Some(r) = &row {
+        if let Some(mut all) = std::fs::read(health_path(&state)).ok().and_then(|b| serde_json::from_slice::<HealthResult>(&b).ok()) {
+            match all.rows.iter_mut().find(|x| x.id == r.id) {
+                Some(x) => *x = r.clone(),
+                None => all.rows.push(r.clone()),
+            }
+            if let Ok(b) = serde_json::to_vec(&all) {
+                let _ = std::fs::write(health_path(&state), b);
+            }
+        }
+    }
+    Ok(row)
+}
+
 /* ---------------------------------------------------- intro marker summary */
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, serde::Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SegSummary {
     episodes: usize,
@@ -910,27 +958,42 @@ pub struct SegSummary {
     recap: usize,
 }
 
-fn seg_cache() -> &'static Mutex<HashMap<String, (Instant, SegSummary)>> {
-    static C: std::sync::OnceLock<Mutex<HashMap<String, (Instant, SegSummary)>>> = std::sync::OnceLock::new();
-    C.get_or_init(|| Mutex::new(HashMap::new()))
+/// Intro/credits coverage per show, kept on disk so the Library can filter on it at once.
+/// An entry is dropped when markers of that show change (`seg_invalidate`).
+fn seg_cache() -> &'static Mutex<Option<HashMap<String, SegSummary>>> {
+    static C: std::sync::OnceLock<Mutex<Option<HashMap<String, SegSummary>>>> = std::sync::OnceLock::new();
+    C.get_or_init(|| Mutex::new(None))
 }
 
-/// How many episodes of a show have intro, credits and recap markers (cached 10 minutes).
-#[tauri::command]
-pub async fn segment_summary(state: State<'_, AppState>, series_id: String, fresh: Option<bool>) -> Result<SegSummary> {
-    check_id(&series_id)?;
-    if !fresh.unwrap_or(false) {
-        if let Some((t, v)) = seg_cache().lock().map_err(|_| Error::msg("internal error"))?.get(&series_id) {
-            if t.elapsed() < Duration::from_secs(600) {
-                return Ok(v.clone());
-            }
-        }
+fn seg_path(dir: &Path) -> PathBuf {
+    dir.join("segcov.json")
+}
+
+fn seg_with<T>(dir: &Path, f: impl FnOnce(&mut HashMap<String, SegSummary>) -> T) -> T {
+    let mut g = seg_cache().lock().unwrap_or_else(|e| e.into_inner());
+    let map = g.get_or_insert_with(|| std::fs::read(seg_path(dir)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default());
+    f(map)
+}
+
+fn seg_save(dir: &Path) {
+    let b = seg_with(dir, |m| serde_json::to_vec(m).ok());
+    if let Some(b) = b {
+        let _ = std::fs::write(seg_path(dir), b);
     }
-    let c = state.reader().await?;
+}
+
+/// Forget what's known about a show's markers (called after saving or removing markers).
+pub fn seg_invalidate(dir: &Path, series_id: &str) {
+    let id = clean_id(series_id);
+    seg_with(dir, |m| m.remove(&id));
+    seg_save(dir);
+}
+
+async fn seg_compute(c: &Client, series_id: &str) -> Result<SegSummary> {
     let eps = c
-        .items_query(vec![("ParentId", series_id.clone()), ("IncludeItemTypes", "Episode".into()), ("Recursive", "true".into())], 3000)
+        .items_query(vec![("ParentId", series_id.to_string()), ("IncludeItemTypes", "Episode".into()), ("Recursive", "true".into())], 3000)
         .await?;
-    let mut sum = SegSummary { episodes: 0, intro: 0, credits: 0, recap: 0 };
+    let mut sum = SegSummary::default();
     for e in &eps {
         let id = clean_id(s(e, "Id"));
         if !valid_item_id(&id) || s(e, "LocationType") == "Virtual" {
@@ -943,8 +1006,57 @@ pub async fn segment_summary(state: State<'_, AppState>, series_id: String, fres
         sum.credits += has("Outro") as usize;
         sum.recap += has("Recap") as usize;
     }
-    seg_cache().lock().map_err(|_| Error::msg("internal error"))?.insert(series_id, (Instant::now(), sum.clone()));
     Ok(sum)
+}
+
+/// How many episodes of a show have intro, credits and recap markers.
+#[tauri::command]
+pub async fn segment_summary(state: State<'_, AppState>, series_id: String, fresh: Option<bool>) -> Result<SegSummary> {
+    check_id(&series_id)?;
+    let id = clean_id(&series_id);
+    if !fresh.unwrap_or(false) {
+        if let Some(v) = seg_with(&state.dir, |m| m.get(&id).cloned()) {
+            return Ok(v);
+        }
+    }
+    let c = state.reader().await?;
+    let sum = seg_compute(&c, &series_id).await?;
+    seg_with(&state.dir, |m| m.insert(id, sum.clone()));
+    seg_save(&state.dir);
+    Ok(sum)
+}
+
+/// Marker coverage of every show. Known shows come from the saved list; with `fill`, shows
+/// not known yet are read from Jellyfin (sends "health-progress", stop with "health").
+#[tauri::command]
+pub async fn segment_coverage(app: AppHandle, state: State<'_, AppState>, ids: Vec<String>, fill: bool) -> Result<HashMap<String, SegSummary>> {
+    let ids: Vec<String> = ids.iter().filter(|i| valid_item_id(i)).map(|i| clean_id(i)).collect();
+    let mut out: HashMap<String, SegSummary> = seg_with(&state.dir, |m| ids.iter().filter_map(|i| m.get(i).map(|v| (i.clone(), v.clone()))).collect());
+    if !fill {
+        return Ok(out);
+    }
+    let todo: Vec<String> = ids.iter().filter(|i| !out.contains_key(*i)).cloned().collect();
+    if todo.is_empty() {
+        return Ok(out);
+    }
+    crate::cancel::begin("health");
+    let c = state.reader().await?;
+    for (n, id) in todo.iter().enumerate() {
+        if crate::cancel::stopped("health") {
+            break;
+        }
+        progress(&app, n as u32, todo.len() as u32, "Reading intro and credits markers");
+        if let Ok(sum) = seg_compute(&c, id).await {
+            seg_with(&state.dir, |m| m.insert(id.clone(), sum.clone()));
+            out.insert(id.clone(), sum);
+        }
+        if n % 20 == 19 {
+            seg_save(&state.dir);
+        }
+    }
+    seg_save(&state.dir);
+    progress(&app, 1, 1, "");
+    Ok(out)
 }
 
 #[cfg(test)]

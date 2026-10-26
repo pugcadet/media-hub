@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, Attention, errorText, Library as Lib, Status } from "./api";
 import Setup from "./Setup";
-import Library from "./Library";
+import LibraryView from "./LibraryView";
 import Renamer from "./Renamer";
 import Settings from "./Settings";
 import Downloads from "./Downloads";
@@ -10,18 +10,16 @@ import Sidebar from "./Sidebar";
 import { SubtitlesTool } from "./Tools";
 import IntrosTool from "./IntrosTool";
 import Dashboard from "./Dashboard";
-import Collections from "./Collections";
 import AddMedia from "./AddMedia";
 import Watch from "./Watch";
 import Player from "./Player";
-import { ActivityBar, reloadData } from "./ui";
+import { ActivityBar, Icon, reloadData } from "./ui";
 import { UpdateToast } from "./Updates";
 import Music from "./Music";
 import { setNav, type OpenOpts, type Route, type View } from "./nav";
 import { reloadAll, useEpoch } from "./activity";
 import { prefs, setPrefs, usePrefs } from "./prefs";
 import { startScheduler } from "./scheduler";
-import Health from "./Health";
 import Cleanup from "./Cleanup";
 import History from "./History";
 
@@ -42,7 +40,17 @@ export default function App() {
   const [attention, setAttention] = useState<Attention | null>(null);
   const [playId, setPlayId] = useState<string | null>(null);
   const epoch = useEpoch();
-  const { mode } = usePrefs();
+  const { mode, uiScale } = usePrefs();
+  // Always open on the media manager's Home.
+  useEffect(() => { if (prefs().mode !== "manage") setPrefs({ mode: "manage" }); }, []);
+  // Size of the whole interface (Settings → Look, or ⌘+ / ⌘− / ⌘0).
+  useEffect(() => { (document.getElementById("root") as HTMLElement | null)?.style.setProperty("zoom", String(uiScale || 1)); }, [uiScale]);
+
+  // Back and forward through the screens and titles you visited.
+  const hist = useRef<{ r: Route; s: Open[] }[]>([]);
+  const pos = useRef(-1);
+  const travelling = useRef(false);
+  const [, setHistTick] = useState(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -102,6 +110,50 @@ export default function App() {
   useEffect(() => {
     if (status?.connected) return startScheduler(status);
   }, [status?.connected, status?.readOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (travelling.current) { travelling.current = false; return; }
+    const snap = { r: route, s: itemStack };
+    const cur = hist.current[pos.current];
+    if (cur && cur.r === route && cur.s === itemStack) return;
+    hist.current = [...hist.current.slice(0, pos.current + 1), snap].slice(-60);
+    pos.current = hist.current.length - 1;
+    setHistTick((x) => x + 1);
+  }, [route, itemStack]);
+  const travel = useCallback((d: number) => {
+    const to = pos.current + d;
+    const h = hist.current[to];
+    if (!h) return;
+    pos.current = to;
+    travelling.current = true;
+    if (prefs().mode !== "manage") setPrefs({ mode: "manage" });
+    setRoute(h.r);
+    setItemStack(h.s);
+    setHistTick((x) => x + 1);
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement)?.tagName ?? "");
+      if ((e.metaKey || e.ctrlKey) && e.key === "[") { e.preventDefault(); travel(-1); }
+      else if ((e.metaKey || e.ctrlKey) && e.key === "]") { e.preventDefault(); travel(1); }
+      else if ((e.metaKey || e.ctrlKey) && (e.key === "=" || e.key === "+")) { e.preventDefault(); setPrefs((p) => ({ uiScale: Math.min(1.4, Math.round((p.uiScale + 0.05) * 100) / 100) })); }
+      else if ((e.metaKey || e.ctrlKey) && e.key === "-") { e.preventDefault(); setPrefs((p) => ({ uiScale: Math.max(0.75, Math.round((p.uiScale - 0.05) * 100) / 100) })); }
+      else if ((e.metaKey || e.ctrlKey) && e.key === "0") { e.preventDefault(); setPrefs({ uiScale: 1 }); }
+      else if (!typing && e.altKey && e.key === "ArrowLeft") { e.preventDefault(); travel(-1); }
+      else if (!typing && e.altKey && e.key === "ArrowRight") { e.preventDefault(); travel(1); }
+    };
+    // The mouse's own back/forward buttons.
+    const onMouse = (e: MouseEvent) => { if (e.button === 3) travel(-1); else if (e.button === 4) travel(1); };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mouseup", onMouse);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("mouseup", onMouse); };
+  }, [travel]);
+  const arrows = (
+    <div className="nav-arrows">
+      <button className="icon-btn" disabled={pos.current <= 0} onClick={() => travel(-1)} title="Back (⌘[)" aria-label="Back"><span className="flip"><Icon name="chevron" size={16} /></span></button>
+      <button className="icon-btn" disabled={pos.current >= hist.current.length - 1} onClick={() => travel(1)} title="Forward (⌘])" aria-label="Forward"><Icon name="chevron" size={16} /></button>
+    </div>
+  );
 
   const top = itemStack[itemStack.length - 1];
   // Where the list was scrolled when a title was opened (put back when you come back).
@@ -164,9 +216,6 @@ export default function App() {
       case "home":
         page = <Dashboard status={status} />;
         break;
-      case "health":
-        page = <Health status={status} focus="all" />;
-        break;
       case "cleanup":
       case "missing":
       case "duplicates":
@@ -176,17 +225,11 @@ export default function App() {
       case "history":
         page = <History status={status} />;
         break;
-      case "collections":
-        page = <Collections status={status} selected={route.collection ?? null} />;
-        break;
       case "add":
         page = <AddMedia status={status} onChanged={refresh} />;
         break;
       case "renamer":
-        page = <Renamer key={`${route.folder ?? ""}-${route.item ?? ""}`} status={status} onChanged={refresh} onNav={navTo} start={route.folder !== undefined ? { folder: route.folder, item: route.item } : undefined} />;
-        break;
-      case "metadata":
-        page = <Health status={status} focus="art" />;
+        page = <Renamer key={`${route.folder ?? ""}-${route.item ?? ""}`} status={status} onChanged={refresh} onNav={navTo} start={route.folder !== undefined || route.item ? { folder: route.folder, item: route.item } : undefined} />;
         break;
       case "subtitles":
         page = <SubtitlesTool status={status} onOpen={(id) => open(id)} />;
@@ -204,18 +247,8 @@ export default function App() {
         page = <Settings status={status} onChanged={refresh} onNav={navTo} section={route.section} />;
         break;
       default:
-        page = (
-          <Library
-            key={`${route.library ?? "all"}-${route.flag ?? ""}`}
-            status={status}
-            libraries={libraries}
-            attention={attention}
-            route={route}
-            onRoute={go}
-            onChanged={refresh}
-            onOpen={(id) => open(id)}
-          />
-        );
+        // Library, Metadata and art, Library health and Collections are one screen now.
+        page = <LibraryView status={status} route={route} />;
     }
   }
 
@@ -223,7 +256,7 @@ export default function App() {
     <div className="shell">
       <Sidebar status={status} libraries={libraries} attention={attention} route={route} onRoute={go} />
       <div className="main-col">
-        <ActivityBar />
+        <ActivityBar left={arrows} />
         <div className="page" key={`${route.view}-${route.n ?? 0}`} ref={listRef} hidden={!!top} onScroll={(e) => { if (!top) listScroll.current = (e.target as HTMLDivElement).scrollTop; }}>{page}</div>
         {top && <div className="page" key={`item-${top.id}-${top.n ?? 0}`}>{itemPage}</div>}
       </div>

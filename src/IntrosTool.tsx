@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePageState } from "./saved";
-import { api, cleanTitle, errorText, imageUrl, Item, JfItem, Library, SegSummary, Status } from "./api";
-import { IntrosTab } from "./Intros";
+import { api, cleanTitle, errorText, imageUrl, Item, Library, SegSummary, Status } from "./api";
+import { ShowIntros } from "./Intros";
 import { track, useEpoch } from "./activity";
 import type { View } from "./nav";
 import { Icon, Tabs } from "./ui";
@@ -67,15 +67,13 @@ function ShowRow({ s, onPick }: { s: Item; onPick: () => void }) {
 }
 
 /** Intros and credits: shows per library, then a season's timeline. */
-export default function IntrosTool({ status, onNav }: { status: Status; onNav: (v: View) => void }) {
+export default function IntrosTool({ status }: { status: Status; onNav?: (v: View) => void }) {
   const epoch = useEpoch();
   const [query, setQuery] = usePageState("intros.query", "");
   const [libs, setLibs] = useState<Library[]>([]);
   const [lib, setLib] = useState<string | null>(null);
   const [shows, setShows] = useState<Item[]>([]);
   const [show, setShow] = useState<Item | null>(null);
-  const [seasons, setSeasons] = useState<JfItem[]>([]);
-  const [season, setSeason] = useState<JfItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [onlyGaps, setOnlyGaps] = usePageState("intros.onlyGaps", false);
   const [tab, setTab] = usePageState("intros.tab", "all");
@@ -100,17 +98,6 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
     }, 200);
     return () => clearTimeout(t);
   }, [query, lib, epoch, hidden.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    setSeasons([]);
-    setSeason(null);
-    if (!show) return;
-    api.details(show.id).then((d) => {
-      const list = d.seasons.filter((s) => s.Id);
-      setSeasons(list);
-      setSeason(list.find((s) => (s.IndexNumber ?? 0) > 0) ?? list[0] ?? null);
-    }).catch((e) => setError(errorText(e)));
-  }, [show]);
 
   const inFolder = tabFolder(tab);
   const visible = shows.filter((s) => {
@@ -154,15 +141,7 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
         </>
       )}
 
-      {show && (
-        <>
-          <Tabs active={season?.Id ?? ""} onChange={(id) => setSeason(seasons.find((x) => x.Id === id) ?? null)} tabs={seasons.map((x) => ({ id: x.Id, label: x.Name }))} />
-          {season && (
-            <IntrosTab key={season.Id} seasonId={season.Id} seasonName={season.Name} canEdit={!status.readOnly} onSettings={() => onNav("settings")}
-              show={{ name: show.name, seasonIds: seasons.map((s) => s.Id), onChanged: () => summaries.delete(show.id) }} />
-          )}
-        </>
-      )}
+      {show && <ShowIntros key={show.id} seriesId={show.id} canEdit={!status.readOnly} onChanged={() => summaries.delete(show.id)} />}
     </div>
   );
 }

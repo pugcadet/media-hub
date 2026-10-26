@@ -4,7 +4,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalSto
 import { Alert, api, bumpArt, Card, errorText, imageUrl } from "./api";
 import { clearDataCaches, dismiss, followEvent, isStopped, track, useEpoch, useJobs } from "./activity";
 import { nav } from "./nav";
-import { setPrefs as setPrefsLite, usePrefs as usePrefsLite } from "./prefs";
+import { prefs as usePrefsLiteSnapshot, setPrefs as setPrefsLite, usePrefs as usePrefsLite } from "./prefs";
 
 /* ------------------------------------------------------------------ store */
 
@@ -125,7 +125,7 @@ export function itemMenu(t: MenuTarget, canEdit = true): MenuItem[] {
   const playable = k === "movie" || k === "episode";
   const titled = k === "movie" || k === "series";
   const items: MenuItem[] = [
-    { label: "Open", run: () => (k === "collection" ? nav.route({ view: "collections", collection: t.id }) : nav.open(t.id)) },
+    { label: "Open", run: () => (k === "collection" && usePrefsLiteSnapshot().mode !== "manage" ? nav.route({ view: "collections", collection: t.id }) : nav.open(t.id)) },
     ...(playable ? [{ label: "Play", run: () => nav.play(t.id) }] : k === "series" || k === "season" ? [{ label: "Play", run: () => void playTitle(t.id) }] : []),
     ...(t.seriesId && (k === "episode" || k === "season") ? [{ label: "Go to show", run: () => nav.open(t.seriesId!) }] : []),
     ...(t.seasonId && k === "episode" ? [{ label: "Go to season", run: () => nav.open(t.seriesId ?? t.seasonId!, { tab: t.seasonId! }) }] : []),
@@ -145,9 +145,20 @@ export function itemMenu(t: MenuTarget, canEdit = true): MenuItem[] {
     items.push({ label: "Remove from this collection", disabled: !canEdit, run: () => void track("Removing from collection", () => api.collectionRemove(cid, [t.id])) });
   }
   items.push({ sep: true });
+  // On the Player side, editing happens in the Media manager: one entry that takes you there.
+  if (usePrefsLiteSnapshot().mode !== "manage") {
+    if (titled || k === "season" || k === "episode" || k === "collection") {
+      items.push({ label: "Edit in Media manager", run: () => { setPrefsLite({ mode: "manage" }); nav.open(t.id); } });
+    }
+    if (k !== "collection" && k !== "person") {
+      items.push({ sep: true });
+      items.push({ label: navigator.userAgent.includes("Windows") ? "Show in Explorer" : "Show in Finder", run: () => void api.revealItem(t.id).catch(() => undefined) });
+    }
+    return items;
+  }
   if (titled) {
     items.push({ label: "Identify…", run: () => nav.open(t.id, { tab: "identify" }) });
-    items.push({ label: "Rename files…", run: () => nav.open(t.id, { tab: "rename" }) });
+    items.push({ label: "Rename…", run: () => nav.route({ view: "renamer", item: t.id }) });
   }
   if (titled || k === "season") {
     items.push({
@@ -259,6 +270,12 @@ function LightboxHost() {
     <div className="lightbox" onClick={() => lightStore.set(null)}>
       <img src={l.src} alt="" />
       {l.caption && <div className="lightbox-cap">{l.caption}</div>}
+      {!l.src.startsWith("data:") && (
+        <button className="lightbox-dl" onClick={(e) => {
+          e.stopPropagation();
+          void track("Saving the picture", () => api.savePicture(l.src, (l.caption ?? "picture").split(" · ").slice(0, 2).join(" ")), { reload: false }).catch(() => undefined);
+        }}><Icon name="download" /> Download</button>
+      )}
       <button className="p-round lightbox-x" aria-label="Close">✕</button>
     </div>
   );
@@ -323,7 +340,7 @@ export type IconName =
   | "home" | "tv" | "film" | "stack" | "heart" | "inbox" | "rename" | "image" | "subtitles" | "skip"
   | "missing" | "copy" | "tag" | "disk" | "history" | "settings" | "music" | "info" | "warn" | "pause"
   | "next" | "prev" | "shuffle" | "volume" | "clock" | "wand" | "download" | "list" | "grid" | "trash" | "external"
-  | "undo" | "lock" | "server" | "stop" | "chevron" | "infuse" | "wrench" | "queue" | "sort" | "grip";
+  | "undo" | "lock" | "server" | "stop" | "chevron" | "infuse" | "wrench" | "queue" | "sort" | "grip" | "eye";
 
 const ICONS: Record<IconName, ReactNode> = {
   reload: <><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></>,
@@ -332,6 +349,7 @@ const ICONS: Record<IconName, ReactNode> = {
   play: <path d="M7 4.5v15l13-7.5z" fill="currentColor" />,
   pause: <><rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor" /><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor" /></>,
   plus: <><path d="M12 5v14" /><path d="M5 12h14" /></>,
+  eye: <><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>,
   check: <path d="M5 12l5 5 9-10" />,
   x: <><path d="M6 6l12 12" /><path d="M18 6L6 18" /></>,
   search: <><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></>,
@@ -566,12 +584,13 @@ function Alerts() {
   );
 }
 
-export function ActivityBar() {
+export function ActivityBar({ left }: { left?: ReactNode } = {}) {
   const jobs = useJobs();
   const [spin, setSpin] = useState(false);
   const running = jobs.filter((j) => !j.done);
   return (
     <div className="topbar">
+      {left}
       <div className="jobs">
         {jobs.length === 0 && <span className="muted small">Ready</span>}
         {jobs.slice(-3).map((j) => (

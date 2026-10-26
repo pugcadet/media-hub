@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Alert, api, Card, cleanTitle, HomeFeed, imageUrl, Item, localDate, Pick, Status } from "./api";
 import { onDataReload, track, useEpoch } from "./activity";
 import { nav } from "./nav";
-import { CardTile, Icon, Img, imageLoaded, itemMenu, openMenu, playTitle, preloadImages, Row, scanLibrary, SettingsLink } from "./ui";
+import { CardTile, Icon, Img, imageLoaded, itemMenu, openMenu, playTitle, preloadImages, Row, scanLibrary } from "./ui";
 import { prefs, setPrefs, usePrefs } from "./prefs";
 import { syncPicks } from "./scheduler";
 import { getPicks, PicksEditor } from "./Picks";
@@ -240,7 +240,6 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
           <div className="section-head">
             <h2>Picks of the day</h2>
             <div className="row end">
-              <span className="muted small">New ones at midnight · also in Jellyfin as a playlist and collection · <SettingsLink section="picks">where to find them in Infuse</SettingsLink></span>
               <button className="link small" onClick={() => setEditing(true)}>Edit</button>
               {canEdit && <button className="link small" onClick={syncNow}>Update in Jellyfin now</button>}
             </div>

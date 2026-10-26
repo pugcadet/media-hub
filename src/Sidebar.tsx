@@ -14,22 +14,19 @@ interface Props {
   onRoute: (r: Route) => void;
 }
 
-const TOOLS: { view: View; label: string; icon: IconName; also?: View[] }[] = [
-  { view: "health", label: "Library health", icon: "check" },
-  { view: "metadata", label: "Metadata and art", icon: "image" },
+/** The main menu: one place per job. */
+const MENU: { view: View; label: string; icon: IconName; also?: View[] }[] = [
+  { view: "home", label: "Home", icon: "home" },
+  { view: "library", label: "Library", icon: "film", also: ["metadata", "health", "collections"] },
+  { view: "renamer", label: "Renamer", icon: "rename" },
   { view: "subtitles", label: "Subtitles", icon: "subtitles" },
   { view: "intros", label: "Intros and credits", icon: "skip" },
-  { view: "renamer", label: "Renamer", icon: "rename" },
   { view: "cleanup", label: "Clean-up", icon: "wrench", also: ["missing", "duplicates", "tags", "storage"] },
-  // Downloads is parked for now (code kept, hidden from the menu).
+  { view: "history", label: "History and undo", icon: "history" },
 ];
 
-function libIcon(kind: string): IconName {
-  return kind === "movies" ? "film" : kind === "tvshows" ? "tv" : "stack";
-}
-
 /** The "hub" in the top-left corner: switches between the parts of Media Hub. */
-export function HubSwitcher() {
+export function HubSwitcher({ compact }: { compact?: boolean } = {}) {
   const { mode } = usePrefs();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -49,10 +46,10 @@ export function HubSwitcher() {
     <div className="hub" ref={ref}>
       <button className="hub-btn" onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
         <span className="logo big"><Icon name={mode === "watch" ? "play" : mode === "music" ? "music" : "wrench"} size={16} /></span>
-        <span className="hub-text">
+        {!compact && <span className="hub-text">
           <span className="hub-name">Media Hub</span>
           <span className="hub-mode">{mode === "watch" ? "Player" : mode === "music" ? "Music" : "Media manager"} ▾</span>
-        </span>
+        </span>}
       </button>
       {open && (
         <div className="hub-menu" role="menu">
@@ -74,7 +71,7 @@ export function HubSwitcher() {
   );
 }
 
-export default function Sidebar({ status, libraries, attention, route, onRoute }: Props) {
+export default function Sidebar({ status, attention, route, onRoute }: Props) {
   const [inbox, setInbox] = useState(0);
   const { subSkipFolders } = usePrefs();
   const [subsTodo, setSubsTodo] = useState<number | null>(null);
@@ -88,55 +85,40 @@ export default function Sidebar({ status, libraries, attention, route, onRoute }
     const t = window.setInterval(load, 5 * 60_000);
     return () => window.clearInterval(t);
   }, [route.view]);
-  const libs: { id: string | null; label: string; count: number; kind: string }[] = libraries.length
-    ? libraries.map((l) => ({ id: l.id, label: l.name, count: l.count, kind: l.kind }))
-    : [{ id: null, label: "Everything", count: status.movies + status.series, kind: "mixed" }];
   const badge = (v: View): string => {
     if (!attention) return "";
     if (v === "subtitles") return subsTodo ? String(subsTodo) : subsTodo === 0 ? "" : attention.noSubtitles ? String(attention.noSubtitles) : "";
-    if (v === "metadata" && attention.unmatched + attention.noPoster) return String(attention.unmatched + attention.noPoster);
+    if (v === "library" && attention.unmatched + attention.noPoster) return String(attention.unmatched + attention.noPoster);
     if (v === "add" && inbox) return String(inbox);
     return "";
   };
 
+  const { sidebarSmall } = usePrefs();
+  const item = (view: View, label: string, icon: IconName, on: boolean, extra?: string) => (
+    <button key={view + label} className={`sb-item ${on ? "on" : ""}`} onClick={() => onRoute({ view })} title={sidebarSmall ? label : undefined}>
+      <span><Icon name={icon} />{!sidebarSmall && label}</span>
+      {!sidebarSmall && extra ? <span className="sb-badge">{extra}</span> : null}
+    </button>
+  );
   return (
-    <nav className="sidebar">
-      <HubSwitcher />
-      <button className={`sb-item ${route.view === "home" ? "on" : ""}`} onClick={() => onRoute({ view: "home" })}><span><Icon name="home" />Home</span></button>
-      <div className="sb-head">Library</div>
-      {libs.map((l) => (
-        <button
-          key={l.id ?? "all"}
-          className={`sb-item ${route.view === "library" && (route.library === (l.id ?? undefined) || (l.id === null && !route.library)) && !route.flag ? "on" : ""}`}
-          onClick={() => onRoute({ view: "library", library: l.id ?? undefined })}
-        >
-          <span><Icon name={libIcon(l.kind)} />{l.label}</span>
-          <span className="sb-badge">{l.count}</span>
+    <nav className={`sidebar ${sidebarSmall ? "small" : ""}`}>
+      <div className="sb-top">
+        <HubSwitcher compact={sidebarSmall} />
+        <button className="icon-btn sb-collapse" onClick={() => setPrefs({ sidebarSmall: !sidebarSmall })} title={sidebarSmall ? "Show the menu" : "Make the menu small"} aria-label={sidebarSmall ? "Expand menu" : "Collapse menu"}>
+          <span className={sidebarSmall ? "" : "flip"}><Icon name="chevron" size={14} /></span>
         </button>
-      ))}
-      <button className={`sb-item ${route.view === "collections" ? "on" : ""}`} onClick={() => onRoute({ view: "collections" })}><span><Icon name="stack" />Collections</span></button>
-      <div className="sb-head">Fix</div>
-      {TOOLS.map((t) => (
-        <button key={t.view} className={`sb-item ${route.view === t.view || t.also?.includes(route.view) ? "on" : ""}`} onClick={() => onRoute({ view: t.view })}>
-          <span><Icon name={t.icon} />{t.label}</span>
-          <span className="sb-badge">{badge(t.view)}</span>
-        </button>
-      ))}
-      <button className={`sb-item ${route.view === "history" ? "on" : ""}`} onClick={() => onRoute({ view: "history" })}><span><Icon name="history" />History and undo</span></button>
+      </div>
+      {MENU.map((t) => item(t.view, t.label, t.icon, route.view === t.view || !!t.also?.includes(route.view), badge(t.view)))}
       <div className="spacer" />
-      <UpdateBadge />
-      <button className={`sb-item ${route.view === "add" ? "on" : ""}`} onClick={() => onRoute({ view: "add" })}>
-        <span><Icon name="plus" />Add show or movie</span>
-        <span className="sb-badge">{badge("add")}</span>
-      </button>
-      <button className={`sb-item ${route.view === "settings" ? "on" : ""}`} onClick={() => onRoute({ view: "settings" })}>
-        <span><Icon name="settings" />Settings</span>
-        <span className="sb-badge">{status.readOnly ? "read-only" : ""}</span>
-      </button>
-      <button className="sb-conn" onClick={() => onRoute({ view: "settings" })}>
-        <div className="sb-conn-title"><span className="dot ok" />{status.serverName ?? "Jellyfin"} connected</div>
-        <div className="mono sb-conn-path">{status.libraryRoot ?? "No library folder yet"}</div>
-      </button>
+      {!sidebarSmall && <UpdateBadge />}
+      {item("add", "Add show or movie", "plus", route.view === "add", badge("add"))}
+      {item("settings", "Settings", "settings", route.view === "settings", status.readOnly ? "read-only" : "")}
+      {!sidebarSmall && (
+        <button className="sb-conn" onClick={() => onRoute({ view: "settings" })}>
+          <div className="sb-conn-title"><span className="dot ok" />{status.serverName ?? "Jellyfin"} connected</div>
+          <div className="mono sb-conn-path">{status.libraryRoot ?? "No library folder yet"}</div>
+        </button>
+      )}
     </nav>
   );
 }

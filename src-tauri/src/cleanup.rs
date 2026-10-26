@@ -176,6 +176,44 @@ pub async fn remove_subtitle_files(app: AppHandle, state: State<'_, AppState>, f
     Ok(n)
 }
 
+/// An episode without its own picture.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BareEpisode {
+    id: String,
+    name: String,
+    series_id: String,
+    series: String,
+}
+
+/// Episodes (with a file) that have no picture of their own.
+#[tauri::command]
+pub async fn episodes_without_picture(state: State<'_, AppState>) -> Result<Vec<BareEpisode>> {
+    let items = state
+        .reader()
+        .await?
+        .items_query(
+            vec![
+                ("IncludeItemTypes", "Episode".into()),
+                ("Recursive", "true".into()),
+                ("IsMissing", "false".into()),
+                ("Fields", "SeriesId".into()),
+                ("ImageTypeLimit", "1".into()),
+                ("EnableUserData", "false".into()),
+            ],
+            100_000,
+        )
+        .await?;
+    Ok(items
+        .iter()
+        .filter(|v| v.get("ImageTags").and_then(|t| t.get("Primary")).is_none() && s(v, "LocationType") != "Virtual")
+        .filter_map(|v| {
+            let id = s(v, "Id").replace('-', "");
+            valid_item_id(&id).then(|| BareEpisode { name: label(v), series_id: s(v, "SeriesId").replace('-', ""), series: s(v, "SeriesName").to_string(), id })
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

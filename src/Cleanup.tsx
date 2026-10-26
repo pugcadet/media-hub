@@ -1,42 +1,154 @@
-// Clean-up: the tools you need now and then, together under one menu item with tabs.
-import { useState } from "react";
-import type { Status } from "./api";
+// Clean-up: one block per thing the scan looks at (duplicates, missing episodes, folders,
+// storage, episode pictures). Click a block to see the details and fix them below it.
+import { useEffect, useState } from "react";
+import { api, errorText, ImageKind, Status } from "./api";
 import type { View } from "./nav";
-import { Tabs } from "./ui";
+import { track } from "./activity";
+import { Icon } from "./ui";
 import Duplicates from "./Duplicates";
 import Missing from "./Missing";
-import Tags from "./Tags";
 import Storage from "./Storage";
-import { SubtitleCleanup } from "./Tools";
 import Structure from "./Structure";
+import { BlockRow, cleanupBlocks } from "./Dashboard";
+import { savePart, scanEverything, useScanSummary } from "./scan";
+import { rankImages } from "./ArtPicker";
+import { usePageState } from "./saved";
 
-export type CleanupTab = "duplicates" | "missing" | "folders" | "tags" | "subs" | "storage";
-
-const TABS: { id: CleanupTab; label: string }[] = [
-  { id: "duplicates", label: "Duplicates" },
-  { id: "missing", label: "Missing episodes" },
-  { id: "folders", label: "Folders" },
-  { id: "tags", label: "Genres and tags" },
-  { id: "subs", label: "Extra subtitles" },
-  { id: "storage", label: "Storage" },
-];
+export type CleanupTab = "duplicates" | "missing" | "folders" | "storage" | "pictures";
+const TABS: CleanupTab[] = ["duplicates", "missing", "folders", "storage", "pictures"];
+const asTab = (t?: string): CleanupTab | "" => (TABS.includes(t as CleanupTab) ? (t as CleanupTab) : "");
 
 export default function Cleanup({ status, tab, onNav }: { status: Status; tab?: string; onNav: (v: View) => void }) {
-  const [t, setT] = useState<CleanupTab>((TABS.find((x) => x.id === tab)?.id ?? "duplicates") as CleanupTab);
+  const [saved, setSaved] = usePageState<CleanupTab | "">("cleanup.open", "");
+  const [t, setT] = useState<CleanupTab | "">(asTab(tab) || saved);
+  useEffect(() => {
+    if (asTab(tab)) setT(asTab(tab));
+  }, [tab]);
+  const pick = (k: string) => {
+    const next = t === k ? "" : (k as CleanupTab);
+    setT(next);
+    setSaved(next);
+  };
+  const sum = useScanSummary();
+  const [scanning, setScanning] = useState(false);
   return (
     <div className="pg cleanup">
-      <div className="pg-head compact-head">
-        <h1>Clean-up</h1>
-        <Tabs tabs={TABS} active={t} onChange={(id) => setT(id as CleanupTab)} />
+      <div className="pg-head">
+        <div>
+          <h1>Clean-up</h1>
+          <div className="muted small">What the last scan found. Click a block to see it and fix it.</div>
+        </div>
+        <div className="pg-actions">
+          <button className="primary" disabled={scanning} onClick={() => { setScanning(true); void scanEverything(status).catch(() => undefined).finally(() => setScanning(false)); }}>
+            {scanning ? <span className="spinner" /> : <Icon name="reload" />} {scanning ? "Scanning…" : "Scan everything"}
+          </button>
+        </div>
       </div>
-      <div className="cleanup-body" key={t}>
-        {t === "duplicates" && <Duplicates status={status} />}
-        {t === "missing" && <Missing status={status} />}
-        {t === "folders" && <Structure status={status} />}
-        {t === "tags" && <Tags status={status} />}
-        {t === "subs" && <SubtitleCleanup status={status} />}
-        {t === "storage" && <Storage status={status} onNav={onNav} />}
-      </div>
+      <BlockRow blocks={cleanupBlocks(sum, status.series)} active={t} onPick={pick} compact={!!t} />
+      {t && (
+        <div className="cleanup-body" key={t}>
+          {t === "duplicates" && <Duplicates status={status} />}
+          {t === "missing" && <Missing status={status} />}
+          {t === "folders" && <Structure status={status} />}
+          {t === "storage" && <Storage status={status} onNav={onNav} />}
+          {t === "pictures" && <EpisodePictures status={status} />}
+        </div>
+      )}
     </div>
+  );
+}
+
+type Bare = { id: string; name: string; seriesId: string; series: string };
+
+/**
+ * Episodes without a picture: TMDB's still first (what Infuse would show), and when there's
+ * none, a frame from the video. Shows are listed so you can do one or all.
+ */
+function EpisodePictures({ status }: { status: Status }) {
+  const [eps, setEps] = useState<Bare[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [useFrames, setUseFrames] = usePageState("cleanup.pictures.frames", true);
+  const load = () => {
+    setError(null);
+    api.episodesWithoutPicture()
+      .then((l) => {
+        setEps(l);
+        savePart("pictures", { at: Date.now(), episodes: l.length });
+      })
+      .catch((e) => setError(errorText(e)));
+  };
+  useEffect(load, []);
+
+  const shows = new Map<string, { name: string; eps: Bare[] }>();
+  for (const e of eps ?? []) {
+    const s = shows.get(e.seriesId) ?? { name: e.series || "Other", eps: [] };
+    s.eps.push(e);
+    shows.set(e.seriesId, s);
+  }
+  const list = [...shows.entries()].sort((a, b) => b[1].eps.length - a[1].eps.length);
+
+  async function fill(items: Bare[]) {
+    if (!items.length) return;
+    await track(`Pictures for ${items.length} episode${items.length === 1 ? "" : "s"}`, async (job) => {
+      let fromTmdb = 0;
+      const left = new Set<string>();
+      for (const [i, e] of items.entries()) {
+        if (job.cancelled) break;
+        job.update(`TMDB · ${e.name}`, (i / items.length) * (useFrames ? 0.7 : 1));
+        try {
+          const best = rankImages(await api.remoteImages(e.id, "Primary" as ImageKind), "Primary", status.titleLang || "en")[0];
+          if (best?.Url) {
+            await api.setImage(e.id, "Primary", best.Url);
+            fromTmdb++;
+            continue;
+          }
+        } catch {
+          /* falls back to a frame */
+        }
+        left.add(e.seriesId);
+      }
+      let frames = 0;
+      if (useFrames && left.size && !job.cancelled) {
+        const ids = [...left];
+        for (const [i, sid] of ids.entries()) {
+          if (job.cancelled) break;
+          job.update(`Frames from the video · ${shows.get(sid)?.name ?? ""}`, 0.7 + (i / ids.length) * 0.3);
+          frames += await api.makeEpisodeStills(sid).catch(() => 0);
+        }
+      }
+      job.update(`${fromTmdb} from TMDB${useFrames ? `, ${frames} from the video` : ""}`, 1);
+    }, { cancellable: true, reload: false }).catch(() => undefined);
+    load();
+  }
+
+  return (
+    <section className="card form">
+      <div className="section-head">
+        <h2>Episode pictures</h2>
+        <span className="muted small">{eps === null ? "Looking…" : `${eps.length} episode${eps.length === 1 ? "" : "s"} in ${shows.size} show${shows.size === 1 ? "" : "s"} have no picture.`}</span>
+      </div>
+      {error && <p className="error">{error}</p>}
+      <div className="row">
+        <label className="check"><input type="checkbox" checked={useFrames} onChange={(e) => setUseFrames(e.target.checked)} />When TMDB has none, use a frame from the video (needs ffmpeg)</label>
+        <div className="spacer" />
+        <button onClick={load}><Icon name="reload" /> Look again</button>
+        <button className="primary" disabled={status.readOnly || !eps?.length} onClick={() => void fill(eps ?? [])}>Fill in all {eps?.length || ""}</button>
+      </div>
+      {list.length > 0 && (
+        <div className="table">
+          {list.map(([sid, s]) => (
+            <div className="op" key={sid}>
+              <div className="names">
+                <div className="strong">{s.name}</div>
+                <div className="small muted ellipsis">{s.eps.slice(0, 4).map((e) => e.name.split(" · ").slice(1).join(" · ")).join(" · ")}{s.eps.length > 4 ? ` · +${s.eps.length - 4} more` : ""}</div>
+              </div>
+              <span className="chip static">{s.eps.length}</span>
+              <button disabled={status.readOnly} onClick={() => void fill(s.eps)}>Fill in</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {eps && eps.length === 0 && <p className="muted">Every episode has a picture.</p>}
+    </section>
   );
 }

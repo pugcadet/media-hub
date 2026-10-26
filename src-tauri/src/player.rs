@@ -124,6 +124,8 @@ pub struct SubTrack {
     title: String,
     url: String,
     default: bool,
+    /// The subtitle file on the server (external subtitles only; empty when built in).
+    path: String,
 }
 
 #[derive(Serialize)]
@@ -351,6 +353,7 @@ pub async fn play_start(state: State<'_, AppState>, id: String, start: f64, audi
             title: s.get("DisplayTitle").and_then(Value::as_str).unwrap_or("Subtitle").to_string(),
             url: format!("{}/s/{tok}/sub/{index}", media_base()),
             default: s.get("IsDefault").and_then(Value::as_bool).unwrap_or(false),
+            path: if s.get("IsExternal").and_then(Value::as_bool).unwrap_or(false) { s.get("Path").and_then(Value::as_str).unwrap_or("").to_string() } else { String::new() },
         });
     }
     let default_audio = audio_index.or_else(|| source.get("DefaultAudioStreamIndex").and_then(Value::as_i64));
@@ -461,6 +464,7 @@ pub async fn play_subtitles(state: State<'_, AppState>, token: String) -> Result
             title: s.get("DisplayTitle").and_then(Value::as_str).unwrap_or("Subtitle").to_string(),
             url: format!("{}/s/{token}/sub/{index}", media_base()),
             default: s.get("IsDefault").and_then(Value::as_bool).unwrap_or(false),
+            path: if s.get("IsExternal").and_then(Value::as_bool).unwrap_or(false) { s.get("Path").and_then(Value::as_str).unwrap_or("").to_string() } else { String::new() },
         });
     }
     Ok(out)

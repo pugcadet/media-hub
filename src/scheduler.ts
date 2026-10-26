@@ -56,7 +56,7 @@ export async function runDaily(status: Status, force = false): Promise<void> {
           for (const x of plan) {
             try {
               const res = await api.subtitleAuto(e.Id, x.lang, [x.lang], x.minScore);
-              if (res.outcome === "downloaded") got++;
+              if (res.outcome === "downloaded" || res.outcome === "found") got++;
             } catch (err) {
               if (/rate|limit|quota|plugin/i.test(String(err))) { stop = true; break; } // the site says stop for today
             }

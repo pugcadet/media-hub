@@ -302,6 +302,9 @@ pub async fn save_segments(
     for s in &created {
         w.segment_create(&api, &item_id, &s.kind, s.start, s.end, PROVIDER).await?;
     }
+    if let Some(series) = item.get("SeriesId").and_then(Value::as_str) {
+        crate::library::seg_invalidate(&state.dir, series);
+    }
     Ok(())
 }
 

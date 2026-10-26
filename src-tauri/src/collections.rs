@@ -114,6 +114,28 @@ pub async fn collection_items(state: State<'_, AppState>, id: String) -> Result<
     Ok(cards(&state.reader().await?.collection_items(&id).await?))
 }
 
+/// The collections a title is in.
+#[tauri::command]
+pub async fn collections_of(state: State<'_, AppState>, id: String) -> Result<Vec<Card>> {
+    if !valid_item_id(&id) {
+        return Err(Error::msg("bad id"));
+    }
+    let c = state.reader().await?;
+    let want = id.replace('-', "").to_lowercase();
+    let mut out = Vec::new();
+    for col in c.collections().await? {
+        let cid = col.get("Id").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+        if !valid_item_id(&cid.replace('-', "")) {
+            continue;
+        }
+        let items = c.collection_items(&cid).await.unwrap_or_default();
+        if items.iter().any(|v| v.get("Id").and_then(serde_json::Value::as_str).map(|x| x.replace('-', "").to_lowercase() == want).unwrap_or(false)) {
+            out.push(col);
+        }
+    }
+    Ok(cards(&out))
+}
+
 #[tauri::command]
 pub async fn similar_items(state: State<'_, AppState>, id: String) -> Result<Vec<Card>> {
     Ok(cards(&state.reader().await?.similar(&id, 16).await?))

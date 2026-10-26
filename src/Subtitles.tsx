@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, AutoResult, codesFor, cultures, Culture, errorText, JfChild, languageName, SubOptions } from "./api";
+import { api, AutoResult, codesFor, cultures, Culture, errorText, JfChild, languageName, LocalSub, SubOptions } from "./api";
 import { track } from "./activity";
 import { prefs, setPrefs, subSkipped } from "./prefs";
-import { SettingsLink } from "./ui";
+import { Icon, SettingsLink } from "./ui";
 import { askConfirm } from "./confirm";
 
 function useCultures(): Culture[] {
@@ -35,10 +35,12 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [local, setLocal] = useState<LocalSub[]>([]);
 
   async function load() {
     setOpts(null);
     setError(null);
+    api.localSubtitles(id).then(setLocal).catch(() => setLocal([]));
     try {
       setOpts(await api.subtitleOptions(id, lang));
     } catch (e) {
@@ -87,6 +89,30 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
     }
   }
 
+  async function remove(path: string, label: string) {
+    if (!(await askConfirm(`Remove the ${label} subtitle? The file goes to the trash, so you can undo it in History.`, { okLabel: "Remove", danger: true }))) return;
+    try {
+      await track("Removing subtitle", () => api.removeSubtitleFiles([{ id, path }]), { items: [id] });
+      setNote("Removed.");
+      await load();
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
+  async function adopt() {
+    try {
+      const done = await track("Using the subtitles in the folder", () => api.adoptSubtitles(id), { items: [id] });
+      setNote(done.length ? `Now used: ${done.map((d) => d.name).join(", ")}. Jellyfin and Infuse pick ${done.length === 1 ? "it" : "them"} up after the next look at the folder.` : "Nothing could be used (no language in the name).");
+      await load();
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
+  const listed = new Set((opts?.current ?? []).map((c) => c.path).filter(Boolean));
+  const notListed = local.filter((l) => l.linked && !listed.has(l.path));
+  const loose = local.filter((l) => !l.linked);
   return (
     <section className="card form">
       <div className="row">
@@ -96,15 +122,29 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
       {opts && (
         <>
           <div className="muted small">File: <span className="mono">{opts.file}</span></div>
-          <div className="chips">
-            {opts.current.length === 0 && <span className="muted small">No subtitles yet.</span>}
+          <div className="section-head"><h3>This video has</h3></div>
+          <div className="sub-have-list">
+            {opts.current.length === 0 && notListed.length === 0 && <span className="muted small">No subtitles yet.</span>}
             {opts.current.map((s) => (
               <span className="chip static sub-have" key={s.index}>
-                {languageName(s.language, list) || "Unknown"}{s.forced ? " (forced)" : ""}{s.external ? "" : " · built in"}{/sdh|hearing/i.test(s.title) ? " · SDH" : ""}
+                <Icon name="subtitles" size={13} /> {languageName(s.language, list) || "Unknown"}{s.forced ? " (forced)" : ""}{s.external ? " · file" : " · built in"}{/sdh|hearing/i.test(s.title) ? " · SDH" : ""}
                 {s.external && canEdit && <button className="link small" title="Line it up with the speech in the video (needs ffmpeg)" onClick={() => void fixTiming(s.index)}>Fix timing</button>}
+                {s.external && canEdit && s.path && <button className="chip-x" aria-label="Remove this subtitle" title="Remove (goes to the trash, can be undone)" onClick={() => void remove(s.path, languageName(s.language, list) || "")}><Icon name="x" size={12} /></button>}
+              </span>
+            ))}
+            {notListed.map((l) => (
+              <span className="chip static sub-have pending" key={l.path} title="Saved next to the video. Jellyfin lists it after its next look at the folder.">
+                <Icon name="subtitles" size={13} /> {l.lang ? languageName(l.lang, list) : l.name} · file · new
+                {canEdit && <button className="chip-x" aria-label="Remove this subtitle" onClick={() => void remove(l.path, l.lang ? languageName(l.lang, list) : l.name)}><Icon name="x" size={12} /></button>}
               </span>
             ))}
           </div>
+          {loose.length > 0 && (
+            <div className="note row between">
+              <span className="small">In the folder but not used: {loose.map((l) => <span key={l.path} className="mono">{l.name} </span>)}{loose.some((l) => l.lang) ? "" : "(no language in the name)"}</span>
+              {canEdit && loose.some((l) => l.lang) && <button className="primary" onClick={() => void adopt()}>Use {loose.filter((l) => l.lang).length === 1 ? "it" : "them"}</button>}
+            </div>
+          )}
         </>
       )}
       {error && <p className="error">{error}</p>}
@@ -135,6 +175,7 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
 
 const OUTCOME: Record<AutoResult["outcome"], string> = {
   has: "already has it",
+  found: "found in the folder, now used",
   downloaded: "downloaded",
   low: "best match too weak",
   none: "nothing found",

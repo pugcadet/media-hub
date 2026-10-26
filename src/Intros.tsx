@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SettingsLink } from "./ui";
+import { Icon, openMenu, SettingsLink, type MenuItem } from "./ui";
 import { listen } from "@tauri-apps/api/event";
 import Hls from "hls.js";
 import { api, errorText, SegEpisode, SegOverview, Span } from "./api";
@@ -36,6 +36,28 @@ export async function autoDetectSeason(seasonId: string, seasonLabel: string): P
   }, { reload: false, stop: "detect" }).catch(() => undefined);
 }
 
+/** Finds markers in the given seasons and saves the sure ones (no problem reported). */
+export async function detectAndSave(seasonIds: string[], job?: JobHandle, only?: Set<string>): Promise<number> {
+  const { detectIntro, detectCredits } = prefs();
+  let saved = 0;
+  const un = job ? await listen<{ done: number; total: number; label: string }>("detect-progress", (e) => job.update(e.payload.label, e.payload.total ? e.payload.done / e.payload.total : null)) : null;
+  try {
+    for (const sid of seasonIds) {
+      if (job?.cancelled) break;
+      const res = await api.detectSeason(sid, 6 * 60, 5 * 60, detectIntro, detectCredits);
+      for (const r of res) {
+        if (only && !only.has(r.id)) continue;
+        if (r.problem || (!r.intro && !r.credits)) continue;
+        await api.saveSegments(r.id, r.intro, r.credits, null, []).then(() => saved++).catch(() => undefined);
+      }
+    }
+  } finally {
+    un?.();
+  }
+  job?.update(saved ? `Markers saved for ${saved} episodes` : "Nothing sure enough to save", 1);
+  return saved;
+}
+
 /** Removes every marker of `kinds` ("Intro" | "Outro" | "Recap") in the given seasons. */
 export async function removeSegments(seasonIds: string[], kinds: string[], job?: JobHandle): Promise<number> {
   let n = 0;
@@ -54,7 +76,7 @@ export async function removeSegments(seasonIds: string[], kinds: string[], job?:
   return n;
 }
 
-type Part = "intro" | "recap" | "credits";
+export type Part = "intro" | "recap" | "credits";
 const KIND: Record<Part, string> = { intro: "Intro", recap: "Recap", credits: "Outro" };
 const LABEL: Record<Part, string> = { intro: "Intro", recap: "Recap", credits: "Credits" };
 
@@ -119,6 +141,11 @@ function TimeInput({ value, onChange }: { value: number | undefined; onChange: (
   );
 }
 
+/** What an action works on. */
+export type Scope = "episode" | "selected" | "season" | "show";
+/** Asks the editor to get ready to set a part for a scope (from a right-click "Set intro…"). */
+export interface SetCommand { part: Part; scope: Scope; n: number }
+
 interface Flag {
   id: string;
   ep: SegEpisode;
@@ -127,10 +154,12 @@ interface Flag {
   actions: { label: string; danger?: boolean; run: () => void }[];
 }
 
-export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
+export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
   seasonId: string; seasonName?: string; canEdit: boolean; onSettings?: () => void;
   /** When opened for a whole show: offers removing markers in every season. */
   show?: { name: string; seasonIds: string[]; onChanged?: () => void };
+  /** A right-click "Set intro…" from the show above: set the part and scope in the top box. */
+  command?: SetCommand | null;
 }) {
   const [ov, setOv] = useState<SegOverview | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -146,8 +175,8 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
   const [mode, setMode] = useState<"fixed" | "end" | "percent">("end");
   const [v1, setV1] = useState("3:00");
   const [v2, setV2] = useState("");
-  const [applyTo, setApplyTo] = useState<"season" | "selected">("season");
-  const [shiftBy, setShiftBy] = useState(2);
+  const [applyTo, setApplyTo] = useState<Scope>("season");
+  const firstInput = useRef<HTMLInputElement>(null);
   const [drawing, setDrawing] = useState<Part>("intro");
   const [preview, setPreview] = useState<string | null>(null);
   const p = usePrefs();
@@ -180,9 +209,19 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
   const eps = (ov?.episodes ?? []).map((e) => (e.duration > 0 ? e : { ...e, duration: Math.max(60, ...e.segments.map((x) => x.end + 60)) }));
   const maxDur = Math.max(60, ...eps.map((e) => e.duration));
   const set = (id: string, p: Part, s: Span | null) => setDrafts((d) => ({ ...d, [id]: { ...d[id], [p]: s, source: "manual" } }));
-  const targets = () => eps.filter((e) => applyTo === "season" || selected.has(e.id));
+  const targetsOf = (scope: Scope, epId?: string) => eps.filter((e) => (scope === "episode" ? e.id === epId : scope === "selected" ? selected.has(e.id) : true));
 
-  async function detect() {
+  useEffect(() => {
+    if (!command) return;
+    setPart(command.part);
+    setApplyTo(command.scope === "show" && !show ? "season" : command.scope);
+    window.setTimeout(() => firstInput.current?.focus(), 50);
+  }, [command]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function detect(scope: Scope = applyTo, epId?: string) {
+    if (scope === "show" && show) return detectShow();
+    const only = new Set(targetsOf(scope, epId).map((e) => e.id));
+    if (!only.size) return setError("Select one or more episodes first.");
     setError(null);
     setNote(null);
     setProgress("Starting…");
@@ -201,6 +240,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
       setDrafts((old) => {
         const next = { ...old };
         for (const r of res) {
+          if (!only.has(r.id)) continue;
           next[r.id] = {
             ...next[r.id],
             intro: r.intro ?? old[r.id]?.intro ?? null,
@@ -211,7 +251,8 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
         }
         return next;
       });
-      setNote(`Found an intro in ${res.filter((r) => r.intro).length} of ${res.length} episodes and credits in ${res.filter((r) => r.credits).length}. Review below, then save.`);
+      const got = res.filter((r) => only.has(r.id));
+      setNote(`Found an intro in ${got.filter((r) => r.intro).length} of ${got.length} episode${got.length === 1 ? "" : "s"} and credits in ${got.filter((r) => r.credits).length}. Review below, then save.`);
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -219,42 +260,100 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
     }
   }
 
-  function applyRule() {
+  /** The span the top box describes for an episode of this length (null: times don't fit). */
+  function ruleSpan(dur: number, pt: Part): Span | null | "bad" {
     const a = parseTime(v1);
     const b = v2.trim() ? parseTime(v2) : null;
-    if (a === null) return setError("Type a time like 3:00 or 1:30.");
+    if (a === null) return "bad";
+    let span: Span;
+    if (mode === "fixed") span = { start: a, end: b ?? Math.min(dur, a + 60) };
+    else if (mode === "end") span = pt === "credits" ? { start: Math.max(0, dur - a), end: dur } : { start: Math.max(0, dur - a), end: Math.max(0, dur - (b ?? 0)) };
+    else span = { start: (dur * a) / 100, end: b != null ? (dur * b) / 100 : pt === "credits" ? dur : (dur * a) / 100 + 60 };
+    return span.end > span.start ? span : null;
+  }
+
+  async function applyRule(scope: Scope = applyTo) {
+    if (ruleSpan(3600, part) === "bad") return setError("Type a time like 3:00 or 1:30.");
     setError(null);
+    if (scope === "show" && show) {
+      if (!(await askConfirm(`Set the ${LABEL[part].toLowerCase()} times in every season of ${show.name}? Saved straight to Jellyfin; each one can be undone.`, { okLabel: "Set them" }))) return;
+      await track(`${LABEL[part]} times for ${show.name}`, async (job) => {
+        let n = 0;
+        for (const [si, sid] of show.seasonIds.entries()) {
+          if (job.cancelled) break;
+          const o = await api.segmentsOverview(sid);
+          for (const e of o.episodes) {
+            if (job.cancelled) break;
+            job.update(e.name, si / show.seasonIds.length);
+            const sp = ruleSpan(e.duration, part);
+            if (!sp || sp === "bad" || e.duration <= 0) continue;
+            await api.saveSegments(e.id, part === "intro" ? sp : null, part === "credits" ? sp : null, part === "recap" ? sp : null, []);
+            n++;
+          }
+        }
+        job.update(`${n} episodes set`, 1);
+      }, { cancellable: true, reload: false }).catch((e) => setError(errorText(e)));
+      show.onChanged?.();
+      return load();
+    }
+    const list = targetsOf(scope);
+    if (!list.length) return setError("Select one or more episodes first.");
     setDrafts((d) => {
       const next = { ...d };
-      for (const e of targets()) {
-        let span: Span | null = null;
-        if (mode === "fixed") span = { start: a, end: b ?? Math.min(e.duration, a + 60) };
-        else if (mode === "end") span = part === "credits" ? { start: Math.max(0, e.duration - a), end: e.duration } : { start: Math.max(0, e.duration - a), end: Math.max(0, e.duration - (b ?? 0)) };
-        else span = { start: (e.duration * a) / 100, end: b != null ? (e.duration * b) / 100 : part === "credits" ? e.duration : (e.duration * a) / 100 + 60 };
-        if (span.end > span.start) next[e.id] = { ...next[e.id], [part]: span, source: "manual" };
+      for (const e of list) {
+        const sp = ruleSpan(e.duration, part);
+        if (sp && sp !== "bad") next[e.id] = { ...next[e.id], [part]: sp, source: "manual" };
       }
       return next;
     });
   }
 
-  /** Bulk: clear this part in the whole season (or the selected episodes). Review, then save. */
-  function removePart() {
+  /** Clears a part in the scope: in your draft (review, then save), or straight away for the whole show. */
+  async function clearPart(pt: Part, scope: Scope = applyTo, epId?: string) {
+    if (scope === "show" && show) {
+      const label = pt === "credits" ? "credits" : `${LABEL[pt].toLowerCase()}s`;
+      if (!(await askConfirm(`Remove all ${label} in every season of ${show.name}?`, { okLabel: `Remove ${label}`, danger: true }))) return;
+      await track(`Removing ${label}`, (job) => removeSegments(show.seasonIds, [KIND[pt]], job), { cancellable: true, reload: false }).catch(() => undefined);
+      show.onChanged?.();
+      return load();
+    }
     setDrafts((d) => {
       const next = { ...d };
-      for (const e of targets()) if (next[e.id]?.[part]) next[e.id] = { ...next[e.id], [part]: null, source: "manual" };
+      for (const e of targetsOf(scope, epId)) if (next[e.id]?.[pt]) next[e.id] = { ...next[e.id], [pt]: null, source: "manual" };
       return next;
     });
   }
 
-  function shift(sign: number) {
-    setDrafts((d) => {
-      const next = { ...d };
-      for (const e of targets()) {
-        const cur = next[e.id]?.[part];
-        if (cur) next[e.id] = { ...next[e.id], [part]: { start: Math.max(0, cur.start + sign * shiftBy), end: Math.min(e.duration, cur.end + sign * shiftBy) }, source: "manual" };
-      }
-      return next;
+  async function detectShow() {
+    if (!show) return;
+    if (!(await askConfirm(`Listen to every episode of ${show.name} and save the intros and credits that are found for sure? Each one can be undone.`, { okLabel: "Find them" }))) return;
+    await track(`Finding intros: ${show.name}`, (job) => detectAndSave(show.seasonIds, job).then(() => undefined), { cancellable: true, reload: false, stop: "detect" }).catch((e) => setError(errorText(e)));
+    show.onChanged?.();
+    await load();
+  }
+
+  /** Right-click menu for an episode, the selected episodes, this season or the whole show. */
+  function menuFor(scope: Scope, epId?: string): MenuItem[] {
+    const what = scope === "episode" ? "this episode" : scope === "selected" ? `${selected.size} selected` : scope === "season" ? "this season" : "the whole show";
+    const setItem = (pt: Part): MenuItem => ({
+      label: `Set ${LABEL[pt].toLowerCase()}…`,
+      disabled: pt === "recap" && recapsOff,
+      run: () => {
+        if (scope === "episode" && epId) { setOpen(epId); setPreview(epId); setDrawing(pt); return; }
+        setPart(pt);
+        setApplyTo(scope);
+        window.setTimeout(() => firstInput.current?.focus(), 50);
+      },
     });
+    return [
+      { label: `Analyze ${what}`, disabled: !ov?.ffmpeg || (!p.detectIntro && !p.detectCredits), run: () => void detect(scope, epId) },
+      { sep: true },
+      setItem("intro"), setItem("recap"), setItem("credits"),
+      { sep: true },
+      { label: "Clear intro", danger: true, run: () => void clearPart("intro", scope, epId) },
+      { label: "Clear recap", danger: true, run: () => void clearPart("recap", scope, epId) },
+      { label: "Clear credits", danger: true, run: () => void clearPart("credits", scope, epId) },
+    ];
   }
 
   // "Looks wrong": compared with the rest of the season.
@@ -351,10 +450,17 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
     <div className="seg-layout">
       <aside className="seg-side">
         <div className="card form">
-          <h2>Set for the whole season</h2>
+          <h2>Set, clear or find</h2>
+          <label>Works on
+            <select value={applyTo} onChange={(e) => setApplyTo(e.target.value as Scope)}>
+              <option value="selected">Selected episodes ({selected.size})</option>
+              <option value="season">{seasonName ?? "This season"} ({eps.length} episodes)</option>
+              {show && <option value="show">The whole show ({show.seasonIds.length} seasons)</option>}
+            </select>
+          </label>
           <div className="seg wide3">
-            {(["intro", "recap", "credits"] as Part[]).map((p) => (
-              <button key={p} className={part === p ? "on" : ""} disabled={p === "recap" && recapsOff} onClick={() => setPart(p)}>{LABEL[p]}</button>
+            {(["intro", "recap", "credits"] as Part[]).map((x) => (
+              <button key={x} className={part === x ? "on" : ""} disabled={x === "recap" && recapsOff} onClick={() => setPart(x)}>{LABEL[x]}</button>
             ))}
           </div>
           <div className="seg wide3">
@@ -364,41 +470,32 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
           </div>
           {mode === "fixed" && (
             <div className="row">
-              <label>{LABEL[part]} starts at<input className="mono" value={v1} onChange={(e) => setV1(e.target.value)} placeholder="0:45" /></label>
+              <label>{LABEL[part]} starts at<input ref={firstInput} className="mono" value={v1} onChange={(e) => setV1(e.target.value)} placeholder="0:45" /></label>
               <label>and ends at<input className="mono" value={v2} onChange={(e) => setV2(e.target.value)} placeholder="1:45" /></label>
             </div>
           )}
           {mode === "end" && (
-            <label>{LABEL[part]} start{part === "credits" ? "s" : ""} this long before the end<input className="mono" value={v1} onChange={(e) => setV1(e.target.value)} placeholder="3:00" /></label>
+            <label>{LABEL[part]} start{part === "credits" ? "s" : ""} this long before the end<input ref={firstInput} className="mono" value={v1} onChange={(e) => setV1(e.target.value)} placeholder="3:00" /></label>
           )}
           {mode === "percent" && (
             <div className="row">
-              <label>Starts at (%)<input className="mono" value={v1} onChange={(e) => setV1(e.target.value)} placeholder="95" /></label>
+              <label>Starts at (%)<input ref={firstInput} className="mono" value={v1} onChange={(e) => setV1(e.target.value)} placeholder="95" /></label>
               <label>Ends at (%)<input className="mono" value={v2} onChange={(e) => setV2(e.target.value)} placeholder={part === "credits" ? "100" : ""} /></label>
             </div>
           )}
-          <label>Apply to
-            <select value={applyTo} onChange={(e) => setApplyTo(e.target.value as "season" | "selected")}>
-              <option value="season">{seasonName ?? "This season"} ({eps.length} episodes)</option>
-              <option value="selected">Selected episodes only ({selected.size})</option>
-            </select>
-          </label>
           <div className="row">
-            <button className="grow" onClick={applyRule}>Apply {LABEL[part].toLowerCase()} times</button>
-            <button className="danger-outline" onClick={removePart} title="Clears it in the episodes above; review, then save">Remove all {part === "credits" ? "credits" : `${LABEL[part].toLowerCase()}s`}</button>
-          </div>
-          <div className="shift">
-            <span className="muted small">Shift {LABEL[part].toLowerCase()} by</span>
-            <button onClick={() => shift(-1)} aria-label="Earlier">−</button>
-            <input className="mono num" value={shiftBy} onChange={(e) => setShiftBy(Math.max(0, Math.min(600, Number(e.target.value) || 0)))} />
-            <span className="muted small">s</span>
-            <button onClick={() => shift(1)} aria-label="Later">+</button>
+            <button className="grow" disabled={applyTo === "show" && !canEdit} onClick={() => void applyRule()}>Set {LABEL[part].toLowerCase()} times</button>
+            <button className="danger-outline" disabled={applyTo === "show" && !canEdit} onClick={() => void clearPart(part)} title={applyTo === "show" ? "Saved straight to Jellyfin; can be undone" : "Clears it in the episodes; review, then save"}>Clear {part === "credits" ? "credits" : LABEL[part].toLowerCase()}</button>
           </div>
           <div className="detect-what">
+            <span className="muted small">Auto-detect finds</span>
             <label className="check small"><input type="checkbox" checked={p.detectIntro} onChange={(e) => setPrefs({ detectIntro: e.target.checked })} />Intros</label>
             <label className="check small"><input type="checkbox" checked={p.detectCredits} onChange={(e) => setPrefs({ detectCredits: e.target.checked })} />Credits</label>
           </div>
-          <button className="outline" disabled={!!progress || !ov.ffmpeg || (!p.detectIntro && !p.detectCredits)} onClick={() => void detect()}>{progress ? "Listening…" : "Auto-detect this season"}</button>
+          <button className="outline" disabled={!!progress || !ov.ffmpeg || (!p.detectIntro && !p.detectCredits) || (applyTo === "selected" && !selected.size)} onClick={() => void detect()}>
+            {progress ? "Listening…" : applyTo === "show" ? "Auto-detect the whole show" : applyTo === "selected" ? `Auto-detect ${selected.size} selected` : "Auto-detect this season"}
+          </button>
+          <p className="muted small">{applyTo === "show" ? "Whole-show changes are saved straight away." : "Right-click an episode, the season or the show for more."}</p>
           {!ov.ffmpeg && <p className="muted small">Auto-detect needs ffmpeg. <SettingsLink section="tools">How to install</SettingsLink></p>}
           <button className="primary" disabled={!changes.length || saving || !canEdit || !ov.canWriteSegments} onClick={() => void saveAll()}>
             {saving ? "Saving…" : `Save ${changes.length || ""} change${changes.length === 1 ? "" : "s"} to Jellyfin`}
@@ -420,24 +517,11 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
           <p className="muted small">Every saved change goes into the undo list, so you can put it back.</p>
         </div>
 
-        {show && (
-          <div className="card form">
-            <h2>Whole show</h2>
-            <p className="muted small">Remove a kind of marker from every season of {show.name} at once. Saved straight to Jellyfin; each one can be undone.</p>
-            <div className="seg wide3">
-              {([["Recap", "recaps"], ["Intro", "intros"], ["Outro", "credits"]] as const).map(([k, label]) => (
-                <button key={k} disabled={!canEdit} onClick={() => void askConfirm(`Remove all ${label} in every season of ${show.name}?`, { okLabel: `Remove ${label}`, danger: true }).then((ok) => {
-                  if (ok) void track(`Removing ${label}`, (job) => removeSegments(show.seasonIds, [k], job), { cancellable: true }).catch(() => undefined).then(() => { show.onChanged?.(); void load(); });
-                })}>Remove {label}</button>
-              ))}
-            </div>
-          </div>
-        )}
       </aside>
 
       <section className="seg-main">
-        <div className="section-head">
-          <h2 className="big">{seasonName ?? "Season"} timeline</h2>
+        <div className="section-head" onContextMenu={(e) => openMenu(e, menuFor("season"))}>
+          <h2 className="big">{seasonName ?? "Season"} timeline <button className="icon-btn" aria-label="Season actions" onClick={(e) => openMenu(e, menuFor("season"))}><Icon name="more" /></button></h2>
           <div className="legend small muted">
             <span><span className="key intro" />Intro</span>
             <span><span className="key recap" />Recap</span>
@@ -472,7 +556,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
             const f = flags.find((x) => x.ep.id === e.id);
             return (
               <div key={e.id}>
-                <div className="tl-row">
+                <div className="tl-row" onContextMenu={(ev) => openMenu(ev, selected.size > 1 && selected.has(e.id) ? menuFor("selected") : menuFor("episode", e.id))}>
                   <div className="tl-name">
                     <input type="checkbox" checked={selected.has(e.id)} onChange={() => setSelected((s) => { const n = new Set(s); if (n.has(e.id)) n.delete(e.id); else n.add(e.id); return n; })} aria-label="Select episode" />
                     <button className="link-plain" onClick={() => setOpen(open === e.id ? null : e.id)}>
@@ -497,7 +581,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show }: {
                   </div>
                 )}
                 {open === e.id && preview === e.id && (
-                  <SegPreview ep={e} draft={d} parts={parts} onSet={(p, s2) => set(e.id, p, s2)} />
+                  <SegPreview ep={e} draft={d} parts={parts} first={drawing} onSet={(p, s2) => set(e.id, p, s2)} />
                 )}
               </div>
             );
@@ -563,9 +647,10 @@ function Bars({ ep, draft, maxDur, drawing, wrong, onDraw }: {
  * Watch an episode inside the intros tool and set the start and end of each part at the
  * current moment (keys: I = start, O = end, J/L = back/forward 5 s, space = play/pause).
  */
-function SegPreview({ ep, draft, parts, onSet }: { ep: SegEpisode; draft: Draft; parts: Part[]; onSet: (p: Part, s: Span | null) => void }) {
+function SegPreview({ ep, draft, parts, first, onSet }: { ep: SegEpisode; draft: Draft; parts: Part[]; first?: Part; onSet: (p: Part, s: Span | null) => void }) {
   const video = useRef<HTMLVideoElement>(null);
-  const [part, setPart] = useState<Part>(draft.intro ? "intro" : "intro");
+  const [part, setPart] = useState<Part>(first ?? "intro");
+  useEffect(() => { if (first) setPart(first); }, [first]);
   const [time, setTime] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -652,6 +737,79 @@ function SegPreview({ ep, draft, parts, onSet }: { ep: SegEpisode; draft: Draft;
         </div>
         <p className="muted small">Changes appear in “Changes to review”; press Save to send them to Jellyfin.</p>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The intros editor for a whole show: pick a season (right-click a season or the show for
+ * quick actions), then edit its timeline. Changes for the whole show are in the top box.
+ */
+export function ShowIntros({ seriesId, canEdit, onChanged }: { seriesId: string; canEdit: boolean; onChanged?: () => void }) {
+  const [name, setName] = useState("");
+  const [seasons, setSeasons] = useState<{ id: string; name: string; count: number }[]>([]);
+  const [season, setSeason] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [command, setCommand] = useState<SetCommand | null>(null);
+  const [nonce, setNonce] = useState(0);
+  const { detectIntro, detectCredits } = usePrefs();
+
+  useEffect(() => {
+    api.details(seriesId).then((d) => {
+      setName(d.item.Name);
+      const list = d.seasons.filter((x) => x.Id).map((x) => ({ id: x.Id, name: x.Name, count: x.ChildCount ?? 0 }));
+      setSeasons(list);
+      setSeason((cur) => cur && list.some((x) => x.id === cur) ? cur : (d.seasons.find((x) => (x.IndexNumber ?? 0) > 0) ?? d.seasons[0])?.Id ?? null);
+    }).catch((e) => setError(errorText(e)));
+  }, [seriesId]);
+
+  const ids = seasons.map((x) => x.id);
+  const changed = () => { onChanged?.(); setNonce((n) => n + 1); };
+  const label = (k: string) => (k === "Outro" ? "credits" : `${k.toLowerCase()}s`);
+
+  function menu(scope: "season" | "show", sid?: string): MenuItem[] {
+    const where = scope === "show" ? ids : sid ? [sid] : [];
+    const what = scope === "show" ? `every season of ${name}` : seasons.find((x) => x.id === sid)?.name ?? "this season";
+    const set = (part: Part): MenuItem => ({
+      label: `Set ${part === "credits" ? "credits" : part}…`,
+      run: () => {
+        if (sid) setSeason(sid);
+        setCommand({ part, scope, n: Date.now() });
+      },
+    });
+    return [
+      {
+        label: `Analyze ${scope === "show" ? "the whole show" : what}`, disabled: !canEdit || (!detectIntro && !detectCredits),
+        run: () => void track(`Finding intros: ${what}`, (job) => detectAndSave(where, job).then(() => undefined), { cancellable: true, reload: false, stop: "detect" }).catch(() => undefined).then(changed),
+      },
+      { sep: true },
+      set("intro"), set("recap"), set("credits"),
+      { sep: true },
+      ...(["Intro", "Recap", "Outro"] as const).map((k): MenuItem => ({
+        label: `Clear ${k === "Outro" ? "credits" : k.toLowerCase()}`, danger: true, disabled: !canEdit,
+        run: () => void askConfirm(`Remove all ${label(k)} in ${what}? Each one can be undone.`, { okLabel: `Remove ${label(k)}`, danger: true }).then((ok) => {
+          if (ok) void track(`Removing ${label(k)}`, (job) => removeSegments(where, [k], job), { cancellable: true, reload: false }).catch(() => undefined).then(changed);
+        }),
+      })),
+    ];
+  }
+
+  if (error) return <p className="error">{error}</p>;
+  return (
+    <div className="stack show-intros">
+      <div className="si-seasons" onContextMenu={(e) => openMenu(e, menu("show"))}>
+        {seasons.map((x) => (
+          <button key={x.id} className={`chip ${season === x.id ? "on" : ""}`} onClick={() => setSeason(x.id)} onContextMenu={(e) => openMenu(e, menu("season", x.id))}>
+            {x.name}{x.count ? <span className="muted"> · {x.count}</span> : null}
+          </button>
+        ))}
+        <button className="icon-btn" title="Actions for the whole show" aria-label="Show actions" onClick={(e) => openMenu(e, menu("show"))}><Icon name="more" /></button>
+        {seasons.length === 0 && <span className="muted small">Loading seasons…</span>}
+      </div>
+      {season && (
+        <IntrosTab key={`${season}-${nonce}`} seasonId={season} seasonName={seasons.find((x) => x.id === season)?.name} canEdit={canEdit}
+          command={command} show={{ name, seasonIds: ids, onChanged }} />
+      )}
     </div>
   );
 }

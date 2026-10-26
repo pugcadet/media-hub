@@ -98,10 +98,31 @@ export default function Settings({ status, onChanged, section }: { status: Statu
     void run(() => api.disconnect());
   }
 
+  const clicked = useRef(0);
   const go = (id: string) => {
     setActive(id);
+    clicked.current = Date.now();
     document.getElementById(`set-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+  // The menu on the left follows what you scroll to.
+  useEffect(() => {
+    const page = scroller.current?.closest(".page");
+    if (!page) return;
+    const onScroll = () => {
+      if (Date.now() - clicked.current < 900) return;
+      const top = page.getBoundingClientRect().top + 80;
+      let current = SECTIONS[0].id;
+      for (const s of SECTIONS) {
+        const el = document.getElementById(`set-${s.id}`);
+        if (el && el.getBoundingClientRect().top <= top) current = s.id;
+      }
+      // At the very bottom the last section counts, even when it's short.
+      if (page.scrollTop + page.clientHeight >= page.scrollHeight - 4) current = SECTIONS[SECTIONS.length - 1].id;
+      setActive(current);
+    };
+    page.addEventListener("scroll", onScroll, { passive: true });
+    return () => page.removeEventListener("scroll", onScroll);
+  }, []);
 
   return (
     <div className="pg settings-page" ref={scroller}>
@@ -196,6 +217,15 @@ function LookSettings() {
         {p.accent !== DEFAULT_PREFS.accent && <button className="link small" onClick={() => setPrefs({ accent: DEFAULT_PREFS.accent })}>Reset</button>}
       </div>
       <p className="muted small">Status colours don't change: green is fine, amber needs a look, red is a problem.</p>
+      <label className="wide-label">Size of everything · {Math.round((p.uiScale || 1) * 100)}%
+        <div className="row">
+          <button className="icon-btn" onClick={() => setPrefs({ uiScale: Math.max(0.75, Math.round((p.uiScale - 0.05) * 100) / 100) })} aria-label="Smaller">−</button>
+          <input type="range" min={0.75} max={1.4} step={0.05} value={p.uiScale || 1} onChange={(e) => setPrefs({ uiScale: Number(e.target.value) })} className="grow" />
+          <button className="icon-btn" onClick={() => setPrefs({ uiScale: Math.min(1.4, Math.round((p.uiScale + 0.05) * 100) / 100) })} aria-label="Bigger">+</button>
+          <button className="link small" onClick={() => setPrefs({ uiScale: 1 })}>Reset</button>
+        </div>
+        <span className="muted small">Shortcut: ⌘+ and ⌘− (⌘0 for normal).</span>
+      </label>
     </Section>
   );
 }

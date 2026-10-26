@@ -1,7 +1,7 @@
 // The safe, automatic fixes shared by Library health, the library wall and a title's page:
 // fill in missing artwork, get missing subtitles, rename 100%-sure names. Everything they do
 // is journaled by the backend, so it can be undone in History.
-import { api, applyPlan, CheckRow, errorText, HealthRow, ImageKind, scanAround } from "./api";
+import { api, applyPlan, CheckRow, errorText, HealthRow, ImageKind, PlanOp, scanAround } from "./api";
 import type { JobHandle } from "./activity";
 import { prefs, subPlan, subSkipped, withShowYear, yearOptional, minimalNames } from "./prefs";
 
@@ -82,7 +82,7 @@ export async function getSubtitles(t: { id: string; kind: "series" | "movie" }, 
   if (t.kind === "movie") {
     for (const x of plan) {
       const res = await api.subtitleAuto(t.id, x.lang, [x.lang], x.minScore).catch(stopOnLimit);
-      if (res?.outcome === "downloaded") n++;
+      if (res?.outcome === "downloaded" || res?.outcome === "found") n++;
     }
     return n;
   }
@@ -94,23 +94,34 @@ export async function getSubtitles(t: { id: string; kind: "series" | "movie" }, 
       if (job?.cancelled) break;
       for (const x of plan) {
         const res = await api.subtitleAuto(e.Id, x.lang, [x.lang], x.minScore).catch(stopOnLimit);
-        if (res?.outcome === "downloaded") n++;
+        if (res?.outcome === "downloaded" || res?.outcome === "found") n++;
       }
     }
   }
   return n;
 }
 
-/** Renames a 100%-sure title like the renamer's library check does. Returns files renamed. */
-export async function renameSure(r: CheckRow): Promise<number> {
+/** The rename plan for a 100%-sure title (the same one `renameSure` applies). */
+function surePlan(r: CheckRow) {
   const series = r.kind === "series";
-  const plan = await api.plan({
+  return api.plan({
     mode: series ? "tv" : "movie", folder: r.folder,
     template: series ? withShowYear("{show}< ({year})>/{seasondir}/{show}< ({year})> - {sxe}< - {title}>.{ext}") : "{title}< ({year})>/{title}< ({year})>.{ext}",
     show: null, year: null, yearOptional: yearOptional(), minimal: minimalNames(), findReplace: [], recursive: series, source: series ? "jellyfin" : "none",
     matchId: series ? `jellyfin:${r.id}` : null, renameFolder: series ? true : null, seasonFolders: false,
     onlyFile: series ? null : r.file, itemId: series ? null : r.id,
   });
+}
+
+/** What renaming a 100%-sure title would change, without changing anything (for the Fix dialog). */
+export async function previewRename(r: CheckRow): Promise<PlanOp[]> {
+  return (await surePlan(r)).ops.filter((o) => o.status === "ok");
+}
+
+/** Renames a 100%-sure title like the renamer's library check does. Returns files renamed. */
+export async function renameSure(r: CheckRow): Promise<number> {
+  const series = r.kind === "series";
+  const plan = await surePlan(r);
   const ok = plan.ops.filter((o) => o.status === "ok").map((o) => o.from);
   if (!ok.length) return 0;
   return (await applyPlan(plan, true, ok, series ? r.id : null, r.folder)).done;
@@ -140,6 +151,7 @@ export async function fixTitles(list: FixTarget[], what: FixKind[], subLangs: st
     job.update(t.name, i / list.length);
     if (what.includes("art") && t.identified && t.missingArt.length) {
       r.art += (await api.fillMissingArt(t.id, t.missingArt).catch((e) => { fail(e); return [] as string[]; })).length;
+      await api.fillMissingArt(t.id, ["Banner", "Art", "Disc"]).catch(() => undefined); // optional ones: just add them when found
       // The same save problem on three titles in a row won't fix itself: stop and say so.
       if (r.art === 0 && r.errors.length && i >= 2 && /couldn't save the picture/.test(r.errors[0])) break;
     }

@@ -97,6 +97,13 @@ export interface Prefs {
    * Jellyfin might misread); "style": everything that differs from the naming style.
    */
   tidy: "messy" | "style";
+  /** The left menu shows icons only. */
+  sidebarSmall: boolean;
+  /** Size of the whole interface (1 = normal). */
+  uiScale: number;
+  /** Library: tiles or a list, and how big the tiles are. */
+  libraryView: "list" | "tiles";
+  tileSize: number;
   /** What auto-detect looks for. */
   detectIntro: boolean;
   detectCredits: boolean;
@@ -136,6 +143,10 @@ export const DEFAULT_PREFS: Prefs = {
   picksFolders: [],
   folderTabs: {},
   tidy: "messy",
+  sidebarSmall: false,
+  uiScale: 1,
+  libraryView: "list",
+  tileSize: 150,
   detectIntro: true,
   detectCredits: true,
   pageState: {},

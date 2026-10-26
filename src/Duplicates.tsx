@@ -5,6 +5,7 @@ import { askConfirm } from "./confirm";
 import { nav } from "./nav";
 import { Icon } from "./ui";
 import { agoText, useSaved } from "./saved";
+import { duplicatesSummary, savePart } from "./scan";
 
 function size(b: number): string {
   if (!b) return "";
@@ -25,7 +26,10 @@ export default function Duplicates({ status }: { status: Status }) {
   const groups = saved?.data ?? null;
   const setGroups = (f: DupGroup[] | null | ((g: DupGroup[] | null) => DupGroup[] | null)) => {
     const next = typeof f === "function" ? f(groups) : f;
-    if (next) save(next);
+    if (next) {
+      save(next);
+      savePart("duplicates", duplicatesSummary(next, Date.now()));
+    }
   };
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

@@ -94,6 +94,14 @@ export interface PlanResult {
   mode: "tv" | "movie";
 }
 
+export interface BulkOptions {
+  rules: FindReplace[];
+  dropTags: boolean;
+  /** "keep" | "add" | "remove" the S01E01 part */
+  episodeTag: "keep" | "add" | "remove";
+  includeFolder: boolean;
+}
+
 export interface FindReplace {
   find: string;
   replace: string;
@@ -348,6 +356,13 @@ export interface ScoredSub {
   reasons: string[];
 }
 
+export interface LocalSub {
+  name: string;
+  path: string;
+  lang: string | null;
+  linked: boolean;
+}
+
 export interface SubOptions {
   file: string;
   current: SubStream[];
@@ -355,7 +370,7 @@ export interface SubOptions {
 }
 
 export interface AutoResult {
-  outcome: "has" | "downloaded" | "low" | "none";
+  outcome: "has" | "found" | "downloaded" | "low" | "none";
   score: number | null;
   name: string | null;
 }
@@ -485,6 +500,8 @@ export interface SubTrack {
   title: string;
   url: string;
   default: boolean;
+  /** Server path of an external subtitle file (empty when built into the video). */
+  path?: string;
 }
 
 export interface ImportSource {
@@ -683,10 +700,44 @@ export interface FileRow {
 
 export interface StorageJob {
   rel: string;
-  mode: "hevc" | "loudness";
+  mode: "hevc" | "loudness" | "strip";
   encoder: string | null;
   quality: number | null;
   targetLufs: number | null;
+  /** strip: languages to keep (original audio and untagged tracks always stay) */
+  keepLangs?: string[];
+  stripAudio?: boolean;
+  stripSubs?: boolean;
+}
+
+export interface MediaTrack {
+  index: number;
+  kind: "audio" | "subtitle";
+  language: string;
+  codec: string;
+  title: string;
+  channels: number;
+  default: boolean;
+  /** In a language you don't keep: can be taken out. */
+  extra: boolean;
+}
+
+export interface OverviewRow {
+  id: string;
+  name: string;
+  rel: string;
+  folder: string;
+  size: number;
+  duration: number;
+  bitrate: number;
+  codec: string;
+  width: number;
+  height: number;
+  hdr: boolean;
+  gbPerHour: number;
+  big: boolean;
+  canShrink: boolean;
+  tracks: MediaTrack[];
 }
 
 export type Sort = "name" | "rating" | "year" | "added";
@@ -716,6 +767,8 @@ export const api = {
   pickRoot: () => invoke<string | null>("pick_library_root"),
   folders: (folder: string) => invoke<{ name: string }[]>("list_folders", { folder }),
   plan: (args: PlanArgs) => invoke<PlanResult>("plan_rename", { args }),
+  /** Renamer "Find & replace": the same edits over many titles (files and their own folder), as a plan. */
+  bulkPlan: (targets: { folder: string; file?: string | null }[], options: BulkOptions) => invoke<PlanResult>("bulk_plan", { targets, options }),
   segmentsSnapshot: (seriesId: string) => invoke<SegSnap[]>("segments_snapshot", { seriesId }),
   segmentsCarry: (snapshot: SegSnap[], folderName: string, oldSeriesId: string) => invoke<void>("segments_carry", { snapshot, folderName, oldSeriesId }),
   apply: (planId: string, removeEmpty: boolean, selected: string[] | null = null) =>
@@ -730,6 +783,17 @@ export const api = {
   remoteImages: (id: string, kind: ImageKind) => invoke<RemoteImage[]>("remote_images", { id, kind }),
   setImage: (id: string, kind: ImageKind, url: string) => artChange(id, invoke<void>("set_image", { id, kind, url })),
   uploadImageFile: (id: string, kind: ImageKind) => artChange(id, invoke<boolean>("upload_image_file", { id, kind })),
+  /** A pasted or cropped picture (data URL or base64). */
+  uploadImageBytes: (id: string, kind: ImageKind, data: string, label?: string) => artChange(id, invoke<void>("upload_image_bytes", { id, kind, data, label: label ?? null })),
+  /** A picture from a pasted https link (any public site). */
+  setImageFromLink: (id: string, kind: ImageKind, url: string) => artChange(id, invoke<void>("set_image_from_link", { id, kind, url })),
+  /** Saves the full-size picture behind a picture address to a file (asks where). */
+  savePicture: (src: string, name: string) => invoke<boolean>("save_picture", { src, name }),
+  /** Subtitle files next to a video on disk (also loose ones like "English.srt"). */
+  localSubtitles: (id: string) => invoke<LocalSub[]>("local_subtitles", { id }),
+  /** Names loose subtitle files after the video so Jellyfin and Infuse use them. */
+  adoptSubtitles: (id: string) => invoke<{ name: string; lang: string }[]>("adopt_subtitles", { id }),
+  collectionsOf: (id: string) => invoke<Card[]>("collections_of", { id }),
   undoChange: (changeId: number) => invoke<void>("undo_change", { changeId }).finally(() => bumpArt()),
   refreshItem: (id: string, replaceAll: boolean) => artChange(id, invoke<void>("refresh_item", { id, replaceAll })),
   setReadOnly: (value: boolean) => invoke<void>("set_read_only", { value }),
@@ -761,11 +825,14 @@ export const api = {
   /** Shows a downloaded file (or with null, the download folder) in Finder / Explorer. */
   dlReveal: (path: string | null) => invoke<void>("dl_reveal", { path }),
   storageScan: (folder: string) => invoke<FileRow[]>("storage_scan", { folder }),
+  /** Every video with size, codec and tracks, from Jellyfin (no file is opened). */
+  storageOverview: (keep: string[]) => invoke<OverviewRow[]>("storage_overview", { keep }),
   hevcEncoders: () => invoke<string[]>("hevc_encoders"),
   storageStart: (req: StorageJob) => invoke<number>("storage_start", { req }),
   storageCancel: (id: number) => invoke<void>("storage_cancel", { id }),
   storageHistory: () => invoke<Change[]>("storage_history"),
   trashInfo: () => invoke<{ files: number; bytes: number }>("trash_info"),
+  trashList: () => invoke<{ rel: string; bytes: number; at: number }[]>("trash_list"),
   trashEmpty: (confirm: string) => invoke<void>("trash_empty", { confirm }),
   mainBackdrop: (id: string, index: number) => artChange(id, invoke<void>("main_backdrop", { id, index })),
   removeImage: (id: string, kind: ImageKind, index: number) => artChange(id, invoke<void>("remove_image", { id, kind, index })),
@@ -840,10 +907,18 @@ export const api = {
   tagStats: () => invoke<TagStat[]>("tag_stats"),
   tagsMerge: (kind: "genre" | "tag", from: string[], to: string | null) => invoke<number>("tags_merge", { kind, from, to }),
   makeEpisodeStills: (parentId: string) => invoke<number>("make_episode_stills", { parentId }),
+  /** Episodes (with a file) without a picture of their own. */
+  episodesWithoutPicture: () => invoke<{ id: string; name: string; seriesId: string; series: string }[]>("episodes_without_picture"),
   healthAlerts: () => invoke<Alert[]>("health_alerts"),
   syncPicksPlaylist: (ids: string[]) => invoke<number>("sync_picks_playlist", { ids }),
   journalAll: (limit: number) => invoke<JournalRow[]>("journal_all", { limit }),
   segmentSummary: (seriesId: string, fresh = false) => invoke<SegSummary>("segment_summary", { seriesId, fresh }),
+  /** Intro/credits coverage per show (saved list; with fill, unknown shows are read from Jellyfin). */
+  segmentCoverage: (ids: string[], fill: boolean) => invoke<Record<string, SegSummary>>("segment_coverage", { ids, fill }),
+  /** One title's health row read again after a change (null when it's gone). */
+  healthRow: (id: string) => invoke<HealthRow | null>("health_row", { id }),
+  /** YouTube-style show: number the videos 1…n by date in Jellyfin only (locked, undoable). */
+  youtubeNumber: (seriesId: string) => invoke<number>("youtube_number", { seriesId }),
   undo: (batch: string) => invoke<{ restored: number; skipped: string[] }>("undo_rename", { batch }),
 };
 

@@ -275,6 +275,61 @@ pub async fn upload_image_file(app: tauri::AppHandle, state: State<'_, AppState>
     Ok(true)
 }
 
+/// Puts picture bytes on a title (a pasted picture, a cropped one, or one from a link).
+async fn put_image_bytes(state: &AppState, id: &str, kind: &'static str, bytes: Vec<u8>, label: &str) -> Result<()> {
+    if bytes.len() > 20 * 1024 * 1024 {
+        return Err(Error::msg("That picture is larger than 20 MB."));
+    }
+    let ct = sniff_image(&bytes).ok_or_else(|| Error::msg("Use a JPEG, PNG or WebP picture."))?;
+    let w = state.writer().await?;
+    let backup = backup_current(state, &w, id, kind).await?;
+    let entry = state.store()?.journal_add("image", &format!("{id}|{kind}|0"), &backup, label)?;
+    if let Err(e) = w.upload_image(id, kind, 0, &bytes, ct).await {
+        state.store()?.journal_delete(entry)?;
+        return Err(e);
+    }
+    lock_after_edit(state, &w, id).await;
+    Ok(())
+}
+
+/// A pasted or cropped picture (base64) as this title's picture of that kind.
+#[tauri::command]
+pub async fn upload_image_bytes(state: State<'_, AppState>, id: String, kind: String, data: String, label: Option<String>) -> Result<()> {
+    use base64::Engine;
+    check_id(&id)?;
+    let kind = image_kind(&kind).ok_or_else(|| Error::msg("bad image kind"))?;
+    let raw = data.split_once(',').map(|(_, b)| b).unwrap_or(&data);
+    let bytes = base64::engine::general_purpose::STANDARD.decode(raw.trim()).map_err(|_| Error::msg("That isn't a picture."))?;
+    put_image_bytes(&state, &id, kind, bytes, &label.unwrap_or_else(|| "pasted".into())).await
+}
+
+/// A picture from a link you pasted (any public https address).
+#[tauri::command]
+pub async fn set_image_from_link(state: State<'_, AppState>, id: String, kind: String, url: String) -> Result<()> {
+    check_id(&id)?;
+    let kind = image_kind(&kind).ok_or_else(|| Error::msg("bad image kind"))?;
+    let (bytes, _) = crate::images::fetch_any(&url).await?;
+    let host = url::Url::parse(&url).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_default();
+    put_image_bytes(&state, &id, kind, bytes, &format!("link:{host}")).await
+}
+
+/// Saves the full-size picture behind a picture address to a file you pick.
+#[tauri::command]
+pub async fn save_picture(app: tauri::AppHandle, state: State<'_, AppState>, src: String, name: String) -> Result<bool> {
+    use tauri_plugin_dialog::DialogExt;
+    let (bytes, ct) = crate::images::original_of(&state, &src).await?;
+    let ext = if ct.contains("png") { "png" } else if ct.contains("webp") { "webp" } else { "jpg" };
+    let clean: String = name.chars().map(|c| if c.is_alphanumeric() || " -_().".contains(c) { c } else { ' ' }).collect();
+    let file = format!("{}.{ext}", clean.trim().chars().take(120).collect::<String>());
+    let picked = tauri::async_runtime::spawn_blocking(move || app.dialog().file().set_file_name(&file).blocking_save_file())
+        .await
+        .map_err(|e| Error::msg(e.to_string()))?;
+    let Some(fp) = picked else { return Ok(false) };
+    let path = fp.into_path().map_err(|_| Error::msg("That place cannot be used."))?;
+    std::fs::write(path, bytes)?;
+    Ok(true)
+}
+
 #[tauri::command]
 pub async fn set_image(state: State<'_, AppState>, id: String, kind: String, url: String) -> Result<()> {
     check_id(&id)?;
@@ -572,6 +627,9 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
         "segment" => {
             check_id(&ch.target)?;
             crate::seg_cmds::undo_segments(&w, &ch.target, &ch.old_value).await?;
+            if let Some(series) = w.reader().item_json(&ch.target).await.ok().and_then(|v| v.get("SeriesId").and_then(serde_json::Value::as_str).map(String::from)) {
+                crate::library::seg_invalidate(&state.dir, &series);
+            }
         }
         "subtitle" => {
             check_id(&ch.target)?;
@@ -596,8 +654,90 @@ pub fn set_read_only(state: State<'_, AppState>, value: bool) -> Result<()> {
     state.update_settings(|s| s.read_only = value)
 }
 
+/// YouTube-style shows (one folder, no seasons): the order to number the videos in. Oldest
+/// first by air date, then by when Jellyfin added it, then by file name; videos without any
+/// date go last.
+pub(crate) fn youtube_order(eps: &[Value]) -> Vec<String> {
+    let st = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).filter(|x| !x.is_empty()).map(String::from);
+    let mut list: Vec<(Option<String>, String, String)> = eps
+        .iter()
+        .filter(|e| e.get("LocationType").and_then(Value::as_str) != Some("Virtual"))
+        .filter_map(|e| {
+            let id = st(e, "Id")?.replace('-', "");
+            let date = st(e, "PremiereDate").or_else(|| st(e, "DateCreated"));
+            let path = st(e, "Path").unwrap_or_default();
+            let file = path.rsplit(['/', '\\']).next().unwrap_or("").to_lowercase();
+            Some((date, file, id))
+        })
+        .collect();
+    list.sort_by(|a, b| match (&a.0, &b.0) {
+        (Some(x), Some(y)) => x.cmp(y).then_with(|| a.1.cmp(&b.1)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.1.cmp(&b.1),
+    });
+    list.into_iter().map(|x| x.2).collect()
+}
+
+/// Numbers the videos of a YouTube-style show 1…n (season 1) in Jellyfin's details only,
+/// locked so a refresh keeps it. Files and folders stay as they are. Each change is journaled
+/// (item_update), so it can be undone. Returns how many videos got a new number.
+#[tauri::command]
+pub async fn youtube_number(state: State<'_, AppState>, series_id: String) -> Result<usize> {
+    check_id(&series_id)?;
+    let w = state.writer().await?;
+    let eps = w
+        .reader()
+        .items_query(
+            vec![
+                ("ParentId", series_id.clone()),
+                ("IncludeItemTypes", "Episode".into()),
+                ("Recursive", "true".into()),
+                ("Fields", "PremiereDate,DateCreated,Path".into()),
+                ("EnableImages", "false".into()),
+                ("EnableUserData", "false".into()),
+            ],
+            20_000,
+        )
+        .await?;
+    let mut changed = 0;
+    for (n, id) in youtube_order(&eps).iter().enumerate() {
+        if !valid_item_id(id) {
+            continue;
+        }
+        let old = w.reader().item_json(id).await?;
+        let mut new = old.clone();
+        new["IndexNumber"] = Value::from(n as i64 + 1);
+        new["ParentIndexNumber"] = Value::from(1);
+        new["LockData"] = Value::Bool(true);
+        if new == old {
+            continue;
+        }
+        let entry = state.store()?.journal_add("item_update", id, &old.to_string(), &new.to_string())?;
+        if let Err(e) = w.update_item(id, &new).await {
+            state.store()?.journal_delete(entry)?;
+            return Err(e);
+        }
+        changed += 1;
+    }
+    Ok(changed)
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn youtube_videos_are_numbered_oldest_first() {
+        let eps = vec![
+            serde_json::json!({"Id": "c", "PremiereDate": "2024-03-01T00:00:00Z", "Path": "/yt/Ch/c.mp4"}),
+            serde_json::json!({"Id": "a", "PremiereDate": "2023-01-01T00:00:00Z", "Path": "/yt/Ch/z.mp4"}),
+            serde_json::json!({"Id": "d", "Path": "/yt/Ch/b.mp4"}),
+            serde_json::json!({"Id": "b", "DateCreated": "2023-06-01T00:00:00Z", "Path": "/yt/Ch/a.mp4"}),
+            serde_json::json!({"Id": "e", "Path": "/yt/Ch/a.mp4"}),
+            serde_json::json!({"Id": "v", "LocationType": "Virtual", "PremiereDate": "2000-01-01"}),
+        ];
+        assert_eq!(youtube_order(&eps), vec!["a", "b", "c", "e", "d"]);
+    }
     use super::*;
 
     #[test]

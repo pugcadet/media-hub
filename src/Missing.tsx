@@ -5,11 +5,20 @@ import { nav } from "./nav";
 import { Icon } from "./ui";
 import { setPrefs, usePrefs } from "./prefs";
 import { readSaved, usePageState, writeSaved } from "./saved";
+import { missingSummary, savePart } from "./scan";
 
 // Results are kept on this computer (also "nothing missing"), so a check isn't lost when you
 // leave the page or close the app.
 const cache = new Map<string, MissingReport | string>(Object.entries(readSaved<Record<string, MissingReport | string>>("missing")?.data ?? {}));
-const persist = () => writeSaved("missing", Object.fromEntries(cache));
+const persist = () => {
+  const s = writeSaved("missing", Object.fromEntries(cache));
+  savePart("missing", missingSummary(s.data, s.at));
+};
+/** "Scan everything" may have checked shows meanwhile: start from what's saved. */
+const reload = () => {
+  cache.clear();
+  for (const [k, v] of Object.entries(readSaved<Record<string, MissingReport | string>>("missing")?.data ?? {})) cache.set(k, v);
+};
 
 /** Missing episodes: each show compared with TMDB (or TVmaze). Unaired episodes don't count. */
 export default function Missing({ status }: { status: Status }) {
@@ -24,6 +33,7 @@ export default function Missing({ status }: { status: Status }) {
   const ignore = (id: string, on: boolean) => setPrefs((p) => ({ missingIgnored: on ? [...new Set([...p.missingIgnored, id])] : p.missingIgnored.filter((x) => x !== id) }));
 
   useEffect(() => {
+    reload();
     api.list("series", "", "name", 0, 5000).then(setShows).catch(() => setShows([]));
   }, [epoch]);
 

@@ -7,6 +7,7 @@ import { track } from "./activity";
 import { askConfirm } from "./confirm";
 import { Icon, TriCheck, useUndoableSet } from "./ui";
 import { agoText, useSaved } from "./saved";
+import { foldersSummary, savePart } from "./scan";
 
 export interface LooseShow { folder: string; name: string; loose: number; seasons: number }
 export interface TopFolder { folder: string; kind: "tv" | "movies" | "mixed" | "empty"; shows: LooseShow[]; looseMovies: string[]; folderedMovies: string[] }
@@ -28,6 +29,7 @@ export default function Structure({ status }: { status: Status }) {
     try {
       const r = await track("Looking at your folders", () => api.structureScan(), { reload: false });
       save(r);
+      savePart("folders", foldersSummary(r, Date.now()));
       sel.reset([
         ...r.flatMap((t) => t.shows.map((s) => `seasons:${s.folder}`)),
         ...r.flatMap((t) => t.looseMovies.map((m) => `own:${m}`)),

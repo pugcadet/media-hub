@@ -101,6 +101,60 @@ async fn fetch_remote(raw: &str) -> Result<(Vec<u8>, String)> {
     Ok((bytes.to_vec(), ct))
 }
 
+/// A picture from any https address you gave (pasted link). Not for addresses inside your
+/// network: only public host names, and only pictures.
+pub async fn fetch_any(raw: &str) -> Result<(Vec<u8>, String)> {
+    let u = url::Url::parse(raw.trim()).map_err(|_| Error::msg("That isn't a web address."))?;
+    if u.scheme() != "https" || !u.username().is_empty() || u.password().is_some() {
+        return Err(Error::msg("Use an https:// link to a picture."));
+    }
+    match u.host() {
+        Some(url::Host::Domain(d)) if d.contains('.') && !d.ends_with(".local") && !d.ends_with(".lan") && d != "localhost" => {}
+        _ => return Err(Error::msg("Use a link to a picture on a public website.")),
+    }
+    static C: OnceLock<reqwest::Client> = OnceLock::new();
+    let client = C.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::limited(4))
+            .user_agent("Mozilla/5.0 MediaHub")
+            .build()
+            .expect("http client")
+    });
+    let resp = client.get(u).send().await.map_err(|e| Error::Network(e.without_url().to_string()))?;
+    if !resp.status().is_success() || resp.url().scheme() != "https" {
+        return Err(Error::msg("That picture couldn't be loaded."));
+    }
+    let bytes = resp.bytes().await.map_err(|e| Error::Network(e.without_url().to_string()))?;
+    if bytes.len() > MAX_REMOTE_BYTES {
+        return Err(Error::msg("That picture is too large."));
+    }
+    let ct = crate::meta_cmds::sniff_image(&bytes).ok_or_else(|| Error::msg("That link isn't a JPEG, PNG or WebP picture."))?;
+    Ok((bytes.to_vec(), ct.to_string()))
+}
+
+/// The full-size picture behind a hubimg:// address (for saving it to a file).
+pub async fn original_of(state: &AppState, src: &str) -> Result<(Vec<u8>, String)> {
+    let u = url::Url::parse(src).map_err(|_| Error::msg("bad picture address"))?;
+    let path = u.path().to_string();
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    match parts.as_slice() {
+        ["remote"] => {
+            let r = u.query_pairs().find(|(k, _)| k == "u").map(|(_, v)| v.into_owned()).ok_or_else(|| Error::msg("missing url"))?;
+            fetch_remote(&r).await
+        }
+        [id, kind] | [id, kind, _] => {
+            if !crate::jellyfin::valid_item_id(id) || !kind.chars().all(|c| c.is_ascii_alphabetic()) {
+                return Err(Error::msg("bad picture address"));
+            }
+            let index: u32 = parts.get(2).and_then(|i| i.parse().ok()).unwrap_or(0);
+            let c = state.reader().await?;
+            c.image_original(id, kind, index).await?.ok_or_else(|| Error::msg("That picture isn't there any more."))
+        }
+        _ => Err(Error::msg("bad picture address")),
+    }
+}
+
 async fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<Vec<u8>>> {
     let uri = request.uri();
     let parts: Vec<&str> = uri.path().split('/').filter(|p| !p.is_empty()).collect();
@@ -253,7 +307,9 @@ pub fn prune(dir: &std::path::Path) {
 
 pub fn handle(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
     tauri::async_runtime::spawn(async move {
-        let response = serve(&app, &request).await.unwrap_or_else(|_| plain(404));
+        let mut response = serve(&app, &request).await.unwrap_or_else(|_| plain(404));
+        // Lets the window draw pictures onto a canvas (cropping one picture into another kind).
+        response.headers_mut().insert("Access-Control-Allow-Origin", tauri::http::HeaderValue::from_static("*"));
         responder.respond(response);
     });
 }

@@ -631,6 +631,8 @@ function FolderFix({ status, onChanged, preset, embedded, onDone }: { status: St
 /** The library check's show pattern (standard, with the year where Settings wants it). */
 const tvTemplate = () => withShowYear(STYLES.tv[0].value);
 const MOVIE_TEMPLATE = STYLES.movie[0].value;
+/** The naming settings the library check uses (for scanning everything from Home). */
+export const namingArgs = (): [string, string, boolean, boolean] => [tvTemplate(), MOVIE_TEMPLATE, yearOptional(), minimalNames()];
 
 function presetFor(r: CheckRow): Preset {
   return r.kind === "series"
@@ -691,7 +693,6 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showRight, setShowRight] = useState(false);
-  const [showAll, setShowAll] = useState<Set<string>>(new Set());
   const { tidy, showYear } = usePrefs();
   const [renameTop, setRenameTop] = useState(true);
   const [seasonDirs, setSeasonDirs] = useState(false);
@@ -820,7 +821,7 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
                 </div>
               );
             })()}
-            {isOpen(g) && (showAll.has(g) ? ops : ops.slice(0, 4)).map((o) => {
+            {isOpen(g) && ops.map((o) => {
               const can = o.status === "ok";
               return (
                 <label key={o.from} className={`change ${can ? "" : "off"}`} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
@@ -834,9 +835,6 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
                 </label>
               );
             })}
-            {isOpen(g) && ops.length > 4 && !showAll.has(g) && (
-              <button className="link small change-more" onClick={() => setShowAll((s) => new Set([...s, g]))}>Show all {ops.length} files</button>
-            )}
           </div>
         ))}
         {changes.length === 0 && <p className="muted small pad">Nothing to change.</p>}
@@ -906,7 +904,7 @@ function FolderScope({ rows, top, sel }: { rows: CheckRow[]; top: (r: CheckRow) 
   );
 }
 
-function CheckList({ status }: { status: Status }) {
+function CheckList({ status, focus }: { status: Status; focus?: string }) {
   const epoch = useEpoch();
   const [res, setRes] = useState<CheckResult | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
@@ -1017,8 +1015,27 @@ function CheckList({ status }: { status: Status }) {
     tail: r.sure && show === "todo" ? <span className="chip static on">100%</span> : undefined,
   }));
   const openRow = listed.find((r) => r.id === open) ?? null;
+  // Opened for one title ("Rename…" on a title): select it, checking it first when it isn't listed.
+  const focused = useRef<string | null>(null);
+  const tried = useRef<string | null>(null);
   useEffect(() => {
-    if (!openRow && listed.length) setOpen(listed[0].id);
+    if (!focus || focused.current === focus || !res) return;
+    const row = rows.find((r) => r.id === focus);
+    if (!row) {
+      if (!checking && tried.current !== focus) {
+        tried.current = focus;
+        void check([focus]);
+      }
+      return;
+    }
+    focused.current = focus;
+    setFilter("");
+    if (!scope.has(focus)) scope.reset([...scope.set, focus]);
+    setShow(row.error ? "errors" : todo.includes(row) ? "todo" : "right");
+    setOpen(focus);
+  }, [focus, res]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!openRow && listed.length && !(focus && focused.current !== focus)) setOpen(listed[0].id);
   }, [openRow, listed.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const sureKeys = sure.filter(match).map((r) => r.id);
   const pickedCount = sure.filter((r) => picked.has(r.id) && match(r)).length;
@@ -1092,20 +1109,220 @@ function CheckList({ status }: { status: Status }) {
   );
 }
 
+const TAGS_HINT = "2160p, 1080p, x264, x265, HEVC, WEB-DL, WEBRip, BluRay, HDR, AAC, DDP5.1, [YTS.MX] … and dots for spaces";
+
+/** The same edits over many titles at once: find & replace, release tags, S01E01. */
+function BulkEdit({ status, onCheck }: { status: Status; onCheck: () => void }) {
+  const epoch = useEpoch();
+  const [res, setRes] = useState<CheckResult | null | undefined>(undefined);
+  useEffect(() => {
+    api.namingCheckLast().then(setRes).catch(() => setRes(null));
+  }, [epoch]);
+  const titles = useUndoableSet<string>();
+  const picked = useUndoableSet<string>();
+  const [q, setQ] = useState("");
+  const [openTops, setOpenTops] = useState<Set<string>>(new Set());
+  const [rules, setRules] = useState<FindReplace[]>([{ find: "", replace: "", regex: false }]);
+  const [dropTags, setDropTags] = useState(true);
+  const [epTag, setEpTag] = useState<"keep" | "add" | "remove">("keep");
+  const [incFolder, setIncFolder] = useState(true);
+  const [showSame, setShowSame] = useState(false);
+  const [plan, setPlan] = useState<PlanResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const rows = (res?.rows ?? []).filter((r) => r.folder && !r.error);
+  const top = (r: CheckRow) => r.folder.split("/")[0] || "(library folder)";
+  const ql = q.toLowerCase();
+  const shown = rows.filter((r) => !ql || r.name.toLowerCase().includes(ql) || r.folder.toLowerCase().includes(ql)).sort((a, b) => top(a).localeCompare(top(b)) || a.name.localeCompare(b.name));
+  const byTop = new Map<string, CheckRow[]>();
+  for (const r of shown) byTop.set(top(r), [...(byTop.get(top(r)) ?? []), r]);
+  const chosen = rows.filter((r) => titles.has(r.id));
+  const ruleKey = JSON.stringify([rules, dropTags, epTag, incFolder, [...titles.set].sort()]);
+  // Any change to the edits or the titles makes the preview old.
+  useEffect(() => setPlan(null), [ruleKey]);
+  const hasEdit = dropTags || epTag !== "keep" || rules.some((r) => r.find);
+
+  async function preview() {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const targets = chosen.map((r) => ({ folder: r.folder, file: r.kind === "movie" ? r.file : null }));
+      const p = await api.bulkPlan(targets, { rules: rules.filter((r) => r.find), dropTags, episodeTag: epTag, includeFolder: incFolder });
+      setPlan(p);
+      picked.reset(p.ops.filter((o) => o.status === "ok").map((o) => o.from));
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function apply() {
+    if (!plan || !picked.size) return;
+    if (!(await askConfirm(`Rename ${picked.size} files and folders? Nothing is deleted or overwritten, and the whole batch can be undone in History.`, { okLabel: "Rename" }))) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await track(`Renaming ${picked.size} files`, async () => {
+        const rep = await applyPlan(plan, true, [...picked.set], null, null);
+        await scanAround(chosen.map((r) => r.folder));
+        if (rep.failed.length) throw `${rep.done} renamed; ${rep.failed.length} skipped: ${rep.failed[0]}`;
+        setNote(`${rep.done} renamed. Jellyfin is looking at the folders again; run the library check afterwards to see the new names here.`);
+      });
+      setPlan(null);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!status.libraryRoot) return <p className="muted">Choose your library folder in Settings first.</p>;
+  if (res === undefined) return <div className="pg-loading"><span className="spinner" /> Loading…</div>;
+  if (!rows.length) {
+    return (
+      <div className="card form">
+        <p>Run the library check first, so the Renamer knows where every title's files are. Checking renames nothing.</p>
+        <div className="row"><button className="primary" onClick={onCheck}>Go to the library check</button></div>
+      </div>
+    );
+  }
+
+  // The changes per title (by its folder), so a long list stays readable.
+  const ownerOf = (from: string) => chosen.find((r) => from === r.folder || from.startsWith(`${r.folder}/`));
+  const ops = (plan?.ops ?? []).filter((o) => o.status !== "unchanged" || showSame);
+  const groups = new Map<string, PlanOp[]>();
+  for (const o of ops) {
+    const r = ownerOf(o.from);
+    const g = r ? `${r.name}${r.year ? ` (${r.year})` : ""}` : "Other";
+    groups.set(g, [...(groups.get(g) ?? []), o]);
+  }
+  const okKeys = (list: PlanOp[]) => list.filter((o) => o.status === "ok").map((o) => o.from);
+
+  return (
+    <div className="bulk-grid">
+      <div className="card bulk-titles">
+        <div className="strong">Titles</div>
+        <label className="searchbox"><Icon name="search" /><input placeholder="Find a title or folder" value={q} onChange={(e) => setQ(e.target.value)} /></label>
+        <BulkSelect sel={titles} keys={shown.map((r) => r.id)} noun="titles" />
+        <div className="bulk-list">
+          {[...byTop.entries()].map(([t, list]) => {
+            const ids = list.map((r) => r.id);
+            const open = openTops.has(t) || !!ql;
+            return (
+              <div key={t}>
+                <div className="scope-row">
+                  <TriCheck state={titles.state(ids)} onChange={(on) => titles.setMany(ids, on)} />
+                  <button className="link-plain grow scope-name" onClick={() => setOpenTops((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n; })}>
+                    <span className={`chev ${open ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
+                    <Icon name="folder" size={13} /> <span className="ellipsis">{t}</span>
+                  </button>
+                  <span className="muted small">{ids.filter((i) => titles.has(i)).length}/{ids.length}</span>
+                </div>
+                {open && list.map((r) => (
+                  <label key={r.id} className="scope-row sub">
+                    <input type="checkbox" checked={titles.has(r.id)} onChange={() => titles.toggle(r.id)} />
+                    <span className="ellipsis grow" title={r.folder}>{r.name}{r.year ? <span className="muted"> ({r.year})</span> : null}</span>
+                  </label>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="stack">
+        <section className="card form">
+          <div className="section-head"><h2>What to change</h2><span className="muted small">Applies to the files of the chosen titles{incFolder ? " and their own folder" : ""}.</span></div>
+          <label className="check"><input type="checkbox" checked={dropTags} onChange={(e) => setDropTags(e.target.checked)} />Drop release tags <span className="muted small">({TAGS_HINT})</span></label>
+          <div className="row">
+            <span className="small strong">Episode numbers (S01E01)</span>
+            <div className="seg" role="group" aria-label="Episode numbers">
+              <button className={epTag === "keep" ? "on" : ""} onClick={() => setEpTag("keep")}>Keep</button>
+              <button className={epTag === "remove" ? "on" : ""} onClick={() => setEpTag("remove")} title="For YouTube channels and other videos that aren't episodes">Remove</button>
+              <button className={epTag === "add" ? "on" : ""} onClick={() => setEpTag("add")} title="Videos without one are numbered oldest first">Add</button>
+            </div>
+            <span className="muted small">{epTag === "remove" ? "“Show - S01E02 - Title” becomes “Show - Title”." : epTag === "add" ? "Videos without a number get one, oldest first (S01E01, S01E02 …)." : ""}</span>
+          </div>
+          <div className="stack-s">
+            <span className="small strong">Find and replace</span>
+            {rules.map((r, i) => (
+              <div key={i} className="row fr-rule">
+                <input className="mono grow" placeholder="Find" value={r.find} onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, find: e.target.value } : x)))} spellCheck={false} />
+                <span className="muted">→</span>
+                <input className="mono grow" placeholder="Replace with (empty removes it)" value={r.replace} onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, replace: e.target.value } : x)))} spellCheck={false} />
+                <label className="check small" title="Use a regular expression ($1 for groups)"><input type="checkbox" checked={r.regex} onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, regex: e.target.checked } : x)))} />Pattern</label>
+                <button className="icon-btn" aria-label="Remove rule" disabled={rules.length === 1 && !r.find} onClick={() => setRules(rules.length === 1 ? [{ find: "", replace: "", regex: false }] : rules.filter((_, j) => j !== i))}><Icon name="x" size={12} /></button>
+              </div>
+            ))}
+            <div><button className="link small" onClick={() => setRules([...rules, { find: "", replace: "", regex: false }])}><Icon name="plus" size={12} /> Another rule</button></div>
+          </div>
+          <label className="check"><input type="checkbox" checked={incFolder} onChange={(e) => setIncFolder(e.target.checked)} />Also rename each title's own folder <span className="muted small">(a folder shared by several movies is left alone)</span></label>
+          <div className="row end">
+            <span className="muted small grow">{chosen.length ? `${chosen.length} title${chosen.length === 1 ? "" : "s"} chosen` : "Choose titles on the left"}</span>
+            <button className="primary" disabled={!chosen.length || !hasEdit || busy} onClick={() => void preview()}>{busy && !plan ? "Working it out…" : "Show the changes"}</button>
+          </div>
+        </section>
+        {error && <p className="error">{error}</p>}
+        {note && <p className="note">{note}</p>}
+        {plan && (
+          <section className="card form">
+            <div className="row between">
+              <div className="row">
+                <BulkSelect sel={picked} keys={okKeys(plan.ops)} noun="changes" />
+                <label className="check small"><input type="checkbox" checked={showSame} onChange={(e) => setShowSame(e.target.checked)} />Also show what stays the same ({plan.unchanged})</label>
+              </div>
+              <button className="primary" disabled={!picked.size || busy} onClick={() => void apply()}>{busy ? "Renaming…" : `Rename ${picked.size} selected`}</button>
+            </div>
+            {plan.conflict > 0 && <p className="note small">{plan.conflict} would clash with another name and are skipped.</p>}
+            <div className="change-list">
+              {[...groups.entries()].map(([g, list]) => (
+                <div key={g}>
+                  <div className="change-group">
+                    <TriCheck state={picked.state(okKeys(list))} disabled={!okKeys(list).length} onChange={(on) => picked.setMany(okKeys(list), on)} />
+                    <span className="strong small">{g}</span>
+                    <span className="muted small">{okKeys(list).filter((k) => picked.has(k)).length} of {okKeys(list).length} selected</span>
+                  </div>
+                  {list.map((o) => (
+                    <label key={o.from} className={`change ${o.status === "ok" ? "" : "off"}`} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
+                      <input type="checkbox" disabled={o.status !== "ok"} checked={picked.has(o.from)} onChange={() => picked.toggle(o.from)} />
+                      <div className="names">
+                        <div className="mono small"><span className="muted">{o.kind === "folder" ? `${last(o.from)}/` : last(o.from)}</span></div>
+                        {o.from !== o.to && <div className="mono small accent">→ {o.kind === "folder" ? `${last(o.to)}/` : last(o.to)}</div>}
+                        {o.note && <div className="why small">{o.note}</div>}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              ))}
+              {ops.length === 0 && <p className="muted small pad">Nothing changes with these edits.</p>}
+            </div>
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Renamer({ status, onChanged, start, embedded }: {
   status: Status; onChanged: () => void; onNav: (v: View) => void;
   start?: { folder?: string; item?: string }; embedded?: boolean;
 }) {
-  const [mode, setMode] = useState<"check" | "folder">(start ? "folder" : "check");
+  // A folder given (from Clean-up → Folders) opens that folder; a title selects it in the check.
+  const [mode, setMode] = useState<"check" | "bulk" | "folder">(start?.folder !== undefined && !start?.item ? "folder" : "check");
   const [preset, setPreset] = useState<Preset | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
 
-  // Opened for one title: find its folder (and file, for a movie) first.
   useEffect(() => {
     if (!start?.item) {
       if (start?.folder !== undefined) setPreset({ folder: start.folder, kind: "auto", matchId: null, onlyFile: null, itemId: null });
       return;
     }
+    if (!embedded) return;
+    // Inside a title's page: find its folder (and file, for a movie) first.
     setError(null);
     api.namingCheck(tvTemplate(), MOVIE_TEMPLATE, [start.item], yearOptional(), minimalNames())
       .then((r) => {
@@ -1115,7 +1332,7 @@ export default function Renamer({ status, onChanged, start, embedded }: {
         setPreset(presetFor(row));
       })
       .catch((e) => setError(errorText(e)));
-  }, [start?.item, start?.folder]);
+  }, [start?.item, start?.folder, embedded]);
 
   if (embedded) {
     if (!status.libraryRoot) return <p className="muted">Choose your library folder in Settings first.</p>;
@@ -1131,20 +1348,23 @@ export default function Renamer({ status, onChanged, start, embedded }: {
     <div className={`pg ${mode === "check" && status.libraryRoot ? "studio-page" : ""}`}>
       <div className="pg-head compact-head">
         <h1 title="Fixes file and folder names so Jellyfin and Infuse recognise every show, season and movie.">Renamer</h1>
-        <div className="seg">
-          <button className={mode === "check" ? "on" : ""} onClick={() => setMode("check")}>Library check</button>
-          <button className={mode === "folder" ? "on" : ""} onClick={() => { setPreset(undefined); setMode("folder"); }}>Pick a folder</button>
-        </div>
+        {status.libraryRoot && (
+          <div className="seg">
+            <button className={mode === "check" ? "on" : ""} onClick={() => setMode("check")}><Icon name="check" size={13} /> Library check</button>
+            <button className={mode === "bulk" ? "on" : ""} onClick={() => setMode("bulk")}><Icon name="rename" size={13} /> Find &amp; replace</button>
+          </div>
+        )}
       </div>
       {error && <p className="error">{error}</p>}
-      {mode === "check" ? (
-        status.libraryRoot ? <CheckList status={status} /> : <FolderFix status={status} onChanged={onChanged} />
-      ) : (
-        <>
-          {preset && <p className="muted small"><button className="link" onClick={() => setMode("check")}>← Back to the list</button></p>}
-          <FolderFix key={preset ? `${preset.folder}|${preset.itemId ?? ""}` : "free"} status={status} onChanged={onChanged} preset={preset} />
-        </>
-      )}
+      {!status.libraryRoot ? <FolderFix status={status} onChanged={onChanged} />
+        : mode === "check" ? <CheckList status={status} focus={start?.item} />
+        : mode === "bulk" ? <BulkEdit status={status} onCheck={() => setMode("check")} />
+        : (
+          <>
+            <p className="muted small"><button className="link" onClick={() => setMode("check")}>← Back to the list</button></p>
+            <FolderFix key={preset ? `${preset.folder}|${preset.itemId ?? ""}` : "free"} status={status} onChanged={onChanged} preset={preset} />
+          </>
+        )}
     </div>
   );
 }

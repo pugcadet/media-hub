@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { askConfirm } from "./confirm";
 import { api, cleanTitle, errorText, imageUrl, PlayInfo, ScoredSub, Status, SubTrack, toVtt } from "./api";
 import { autoDetectSeason, fmt } from "./Intros";
 import { DEFAULT_PREFS, prefs, setPrefs, subCss, usePrefs, type SubStyle, SUB_FONTS } from "./prefs";
@@ -50,6 +51,30 @@ function isLang(t: SubTrack, code: string): boolean {
 }
 
 /** Cue text → safe HTML (only <i>, <b>, <u> and line breaks survive). */
+interface Cue { start: number; end: number; text: string }
+
+/** "01:02:03.456", "02:03,456" or "3.5" -> seconds. */
+function cueTime(v: string): number {
+  const parts = v.trim().replace(",", ".").split(":").map(Number);
+  return parts.reduce((a, x) => a * 60 + (Number.isFinite(x) ? x : 0), 0);
+}
+
+/** Cues of a WebVTT or SRT text, sorted by start. Drawn by the player itself (no text tracks). */
+function parseCues(text: string): Cue[] {
+  const out: Cue[] = [];
+  for (const block of text.replace(/\r\n?/g, "\n").split(/\n{2,}/)) {
+    const lines = block.split("\n");
+    const at = lines.findIndex((l) => l.includes("-->"));
+    if (at < 0) continue;
+    const [a, b] = lines[at].split("-->");
+    const start = cueTime(a);
+    const end = cueTime(b.trim().split(/\s+/)[0] ?? "");
+    const body = lines.slice(at + 1).join("\n").trim();
+    if (body && end > start) out.push({ start, end, text: body });
+  }
+  return out.sort((x, y) => x.start - y.start);
+}
+
 function cueHtml(text: string): string {
   const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return esc
@@ -71,7 +96,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   const [loadState, setLoadState] = useState<"start" | "buffer" | "ok">("start");
   const [pausedLong, setPausedLong] = useState(false);
   const [sub, setSub] = useState<number>(-1);
-  const [subUrls, setSubUrls] = useState<Record<number, string>>({});
+  const [subUrls, setSubUrls] = useState<Record<number, Cue[]>>({});
   const [cue, setCue] = useState<string>("");
   const [controls, setControls] = useState(true);
   const [panel, setPanel] = useState<Panel>("none");
@@ -85,11 +110,9 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   const [hover, setHover] = useState<{ x: number; t: number } | null>(null);
   const idle = useRef<number | undefined>(undefined);
   const audioGraph = useRef<{ ctx: AudioContext; src: MediaElementAudioSourceNode; comp: DynamicsCompressorNode; gain: GainNode } | null>(null);
-  const appliedOffset = useRef(0);
   const tokenRef = useRef<string | null>(null);
   // Last known position: on close the video element is already gone, so this is what gets saved.
   const lastPos = useRef(0);
-  const blobUrls = useRef<string[]>([]);
   const [askResume, setAskResume] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   // The volume you set last time (also for the next video).
@@ -109,12 +132,10 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   };
   const subLang = p.subLang || status?.subLangs[0] || "eng";
 
-  async function loadTrack(t: SubTrack): Promise<string | null> {
+  async function loadTrack(t: SubTrack): Promise<Cue[] | null> {
     try {
       const text = await (await fetch(t.url)).text();
-      const u = URL.createObjectURL(new Blob([text], { type: "text/vtt" }));
-      blobUrls.current.push(u);
-      return u;
+      return parseCues(text);
     } catch {
       return null;
     }
@@ -181,14 +202,13 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           if (startAt > 0) v.currentTime = startAt;
         }
         if (!offerResume) v.play().catch(() => undefined);
-        const loaded: Record<number, string> = {};
+        const loaded: Record<number, Cue[]> = {};
         for (const t of pi.subtitles) {
           const u = await loadTrack(t);
           if (u) loaded[t.index] = u;
         }
         if (!cancelled) {
           setSubUrls(loaded);
-          appliedOffset.current = 0;
           setOffset(0);
           const def = pi.subtitles.find((t) => t.default && loaded[t.index]);
           setSub((cur) => (cur >= 0 && loaded[cur] ? cur : def ? def.index : -1));
@@ -206,7 +226,6 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     };
   }, [id, session]);
 
-  useEffect(() => () => blobUrls.current.forEach((u) => URL.revokeObjectURL(u)), []);
 
   // Sleep timer: pause when the time is up (or at the end of this video).
   useEffect(() => {
@@ -241,47 +260,31 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
 
   useEffect(() => () => void getCurrentWindow().setFullscreen(false).catch(() => undefined), []);
 
-  // The chosen track is read by the app (hidden), and drawn by us so it can be styled freely.
+  // The chosen subtitle is drawn by us (styled freely, shifted by the timing offset). Cues
+  // are kept in memory, so switching tracks is instant and doesn't depend on text tracks.
   useEffect(() => {
-    const v = video.current;
-    if (!v) return;
-    const handlers: [TextTrack, () => void][] = [];
-    for (let i = 0; i < v.textTracks.length; i++) {
-      const tt = v.textTracks[i];
-      const on = tt.label === String(sub);
-      tt.mode = on ? "hidden" : "disabled";
-      if (on) {
-        const h = () => {
-          const active = tt.activeCues;
-          const parts: string[] = [];
-          for (let j = 0; active && j < active.length; j++) parts.push(cueHtml((active[j] as VTTCue).text));
-          setCue(parts.join("<br>"));
-        };
-        tt.addEventListener("cuechange", h);
-        handlers.push([tt, h]);
-        h();
-      }
+    const cues = sub >= 0 ? subUrls[sub] : undefined;
+    if (!cues) {
+      setCue("");
+      return;
     }
-    if (sub < 0) setCue("");
-    return () => handlers.forEach(([tt, h]) => tt.removeEventListener("cuechange", h));
-  }, [sub, subUrls]);
-
-  // Subtitle timing: move every cue of every track.
-  useEffect(() => {
-    const v = video.current;
-    if (!v) return;
-    const delta = offset - appliedOffset.current;
-    if (!delta) return;
-    for (let i = 0; i < v.textTracks.length; i++) {
-      const cues = v.textTracks[i].cues;
-      if (!cues) continue;
-      for (let j = 0; j < cues.length; j++) {
-        cues[j].startTime = Math.max(0, cues[j].startTime + delta);
-        cues[j].endTime = Math.max(0, cues[j].endTime + delta);
+    let raf = 0;
+    let last = "\u0000";
+    const tick = () => {
+      const v = video.current;
+      if (v) {
+        const t = v.currentTime - offset;
+        const html = cues.filter((c) => c.start <= t && t < c.end).map((c) => cueHtml(c.text)).join("<br>");
+        if (html !== last) {
+          last = html;
+          setCue(html);
+        }
       }
-    }
-    appliedOffset.current = offset;
-  }, [offset]);
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => cancelAnimationFrame(raf);
+  }, [sub, subUrls, offset]);
 
   // Volume leveling: a gentle compressor so quiet talk and loud scenes come closer together.
   useEffect(() => {
@@ -536,6 +539,23 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     }
   }
 
+  /** Removes an external subtitle file (to the trash, undoable) and drops it from the menu. */
+  async function removeTrack(t: SubTrack) {
+    if (!t.path) return;
+    const ok = await askConfirm(`Remove the subtitle “${t.title}”? The file goes to the trash folder, so you can put it back from History.`, { okLabel: "Remove", danger: true });
+    if (!ok) return;
+    try {
+      const n = await api.removeSubtitleFiles([{ id, path: t.path }]);
+      if (!n) return say("That file couldn't be removed (not found under your library folder).", 3000);
+      if (sub === t.index) setSub(-1);
+      setTracks((l) => l.filter((x) => x.index !== t.index));
+      setSubUrls((m) => { const n2 = { ...m }; delete n2[t.index]; return n2; });
+      say("Subtitle removed", 1800);
+    } catch (e) {
+      say(errorText(e), 3000);
+    }
+  }
+
   /** Shift+C: Off → each subtitle → Off. */
   function cycleSubtitles() {
     if (!loadedTracks.length) return void toggleMainSubs();
@@ -580,10 +600,9 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       // Saved by Media Hub: show it straight away; Jellyfin lists it on its next look.
       if (d.text && (d.format === "srt" || d.format === "vtt")) {
         const idx = 100000 + Object.keys(subUrls).length;
-        const u = URL.createObjectURL(new Blob([toVtt(d.text)], { type: "text/vtt" }));
-        blobUrls.current.push(u);
-        setTracks((l) => [...l, { index: idx, language: subLang, title: `${s.sub.Name ?? subLang} (downloaded)`.slice(0, 60), url: u, default: false }]);
-        setSubUrls((m) => ({ ...m, [idx]: u }));
+        const cues = parseCues(toVtt(d.text));
+        setTracks((l) => [...l, { index: idx, language: subLang, title: `${s.sub.Name ?? subLang} (downloaded)`.slice(0, 60), url: "", default: false }]);
+        setSubUrls((m) => ({ ...m, [idx]: cues }));
         done(idx);
         return;
       }
@@ -598,7 +617,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       }
       setTracks(list);
       const fresh = list.filter((t) => !subUrls[t.index]);
-      const loaded: Record<number, string> = { ...subUrls };
+      const loaded: Record<number, Cue[]> = { ...subUrls };
       for (const t of fresh) {
         const u = await loadTrack(t);
         if (u) loaded[t.index] = u;
@@ -670,7 +689,6 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
         }}
         crossOrigin="anonymous"
       >
-        {Object.entries(subUrls).map(([idx, u]) => <track key={`${session.n}-${idx}-${u}`} kind="subtitles" src={u} label={idx} />)}
       </video>
 
       {cue && (
@@ -773,7 +791,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       )}
 
       {panel !== "none" && (
-        <div className="p-settings" onClick={(e) => e.stopPropagation()}>
+        <div className={`p-settings ${panel === "subs" ? "p-subs-panel" : ""}`} onClick={(e) => e.stopPropagation()}>
           <div className="p-tabs">
             {([["subs", "Subtitles"], ["style", "Look"], ["audio", "Audio"], ["speed", "Speed"], ...(chapters.length ? [["chapters", "Chapters"]] : []), ["sleep", sleep ? "Sleep ●" : "Sleep"]] as [Panel, string][]).map(([k, label]) => (
               <button key={k} className={panel === k ? "on" : ""} onClick={() => setPanel(k)}>{label}</button>
@@ -784,23 +802,33 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           <div className="p-settings-body">
             {panel === "subs" && (
               <>
-                <button className={`p-opt ${sub === -1 ? "on" : ""}`} onClick={() => setSub(-1)}><span>Off</span>{sub === -1 && <Icon name="check" size={14} />}</button>
-                {loadedTracks.map((t) => (
-                  <button key={t.index} className={`p-opt ${sub === t.index ? "on" : ""}`} onClick={() => setSub(t.index)}>
-                    <span>{t.title}</span>{sub === t.index ? <Icon name="check" size={14} /> : <span className="small muted">{t.default ? "Default" : ""}</span>}
-                  </button>
-                ))}
+                <div className="p-sub-grid">
+                  <button className={`p-opt ${sub === -1 ? "on" : ""}`} onClick={() => setSub(-1)}><span>Off</span>{sub === -1 && <Icon name="check" size={14} />}</button>
+                  {loadedTracks.map((t) => (
+                    <div key={t.index} className={`p-opt p-sub-opt ${sub === t.index ? "on" : ""}`} role="button" tabIndex={0} title={t.title}
+                      onClick={() => setSub(t.index)} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setSub(t.index)}>
+                      <span className="ellipsis">{t.title}</span>
+                      {sub === t.index ? <Icon name="check" size={14} /> : t.default ? <span className="small muted">Default</span> : null}
+                      {t.path && !status?.readOnly && (
+                        <button className="p-sub-x" aria-label={`Remove ${t.title}`} title="Remove this subtitle file (it goes to the trash; can be undone in History)" onClick={(e) => { e.stopPropagation(); void removeTrack(t); }}><Icon name="x" size={12} /></button>
+                      )}
+                    </div>
+                  ))}
+                </div>
                 {online === null ? (
                   <button className="p-opt" disabled={!!onlineBusy} onClick={() => void searchOnline()}><span><Icon name="search" size={14} /> {onlineBusy === "search" ? "Searching…" : "Find more online"}</span></button>
                 ) : (
                   <>
                     {online.length === 0 && <div className="small muted">Nothing found online.</div>}
-                    {online.map((o) => (
-                      <button key={o.sub.Id} className="p-opt" disabled={!!onlineBusy || status?.readOnly} onClick={() => void downloadOnline(o)} title={o.sub.Name}>
-                        <span className="ellipsis">{o.sub.Name}</span>
-                        <span className={`small strong ${o.score >= 85 ? "ok" : o.score >= 60 ? "warn" : "bad"}`}>{onlineBusy === o.sub.Id ? "…" : `${o.score}${o.score === 100 ? " · Best" : ""}`}</span>
-                      </button>
-                    ))}
+                    {online.length > 0 && <div className="small muted p-sub-head">Online (best {Math.min(6, online.length)})</div>}
+                    <div className="p-sub-grid">
+                      {online.slice(0, 6).map((o) => (
+                        <button key={o.sub.Id} className="p-opt" disabled={!!onlineBusy || status?.readOnly} onClick={() => void downloadOnline(o)} title={o.sub.Name}>
+                          <span className="ellipsis">{o.sub.Name}</span>
+                          <span className={`small strong ${o.score >= 85 ? "ok" : o.score >= 60 ? "warn" : "bad"}`}>{onlineBusy === o.sub.Id ? "…" : `${o.score}${o.score === 100 ? " · Best" : ""}`}</span>
+                        </button>
+                      ))}
+                    </div>
                     {status?.readOnly && <div className="small muted">Downloading needs changes switched on. <SettingsLink section="changes">Turn them on</SettingsLink></div>}
                   </>
                 )}
