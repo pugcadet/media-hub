@@ -3,7 +3,7 @@ import Hls from "hls.js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, cleanTitle, errorText, imageUrl, PlayInfo, ScoredSub, Status, SubTrack, toVtt } from "./api";
 import { autoDetectSeason, fmt } from "./Intros";
-import { DEFAULT_PREFS, prefs, setPrefs, subCss, usePrefs, type SubStyle } from "./prefs";
+import { DEFAULT_PREFS, prefs, setPrefs, subCss, usePrefs, type SubStyle, SUB_FONTS } from "./prefs";
 import { nav } from "./nav";
 import { Icon, SettingsLink } from "./ui";
 import { logProblem } from "./activity";
@@ -16,7 +16,7 @@ function progressFailed(e: unknown) {
   logProblem("Saving where you are in Jellyfin", errorText(e));
 }
 
-type Panel = "none" | "subs" | "audio" | "style" | "speed" | "chapters";
+type Panel = "none" | "subs" | "audio" | "style" | "speed" | "chapters" | "sleep";
 const SPEEDS = [0.75, 1, 1.1, 1.25, 1.5, 2];
 
 const TICKS = 10_000_000;
@@ -92,7 +92,12 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   const blobUrls = useRef<string[]>([]);
   const [askResume, setAskResume] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [volume, setVolume] = useState(1);
+  // The volume you set last time (also for the next video).
+  const [volume, setVolumeState] = useState(() => { try { return Number(localStorage.getItem("mediahub.volume") ?? "1") || 1; } catch { return 1; } });
+  const setVolume = (v: number) => { setVolumeState(v); try { localStorage.setItem("mediahub.volume", String(v)); } catch { /* ignore */ } };
+  // Sleep timer: minutes left, or "end" (stop when this video ends).
+  const [sleep, setSleep] = useState<{ until: number } | "end" | null>(null);
+  const [showKeys, setShowKeys] = useState(false);
   const [upNextDismissed, setUpNextDismissed] = useState(false);
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
   const [countdown, setCountdown] = useState<{ key: string; left: number } | null>(null);
@@ -202,6 +207,19 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   }, [id, session]);
 
   useEffect(() => () => blobUrls.current.forEach((u) => URL.revokeObjectURL(u)), []);
+
+  // Sleep timer: pause when the time is up (or at the end of this video).
+  useEffect(() => {
+    if (!sleep || sleep === "end") return;
+    const t = window.setInterval(() => {
+      if (Date.now() >= sleep.until) {
+        video.current?.pause();
+        setSleep(null);
+        say("Sleep timer: paused", 4000);
+      }
+    }, 5000);
+    return () => window.clearInterval(t);
+  }, [sleep]);
 
   // Nothing behind the player scrolls while it's open.
   useEffect(() => {
@@ -378,7 +396,10 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     return () => window.clearInterval(t);
   }, [autoNext, nextTotal]);
   useEffect(() => {
-    if (nextLeft !== null && nextLeft <= 0) playNext();
+    if (nextLeft !== null && nextLeft <= 0) {
+      if (sleep === "end") { video.current?.pause(); setSleep(null); say("Sleep timer: stopped after this one", 4000); return; }
+      playNext();
+    }
   }, [nextLeft]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -398,6 +419,8 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       else if (e.key === "]" || e.key === "PageDown") { e.preventDefault(); jumpChapter(1); }
       else if (e.key === "[" || e.key === "PageUp") { e.preventDefault(); jumpChapter(-1); }
       else if (k === "f") void fullscreen();
+      else if (k === "p") void pip();
+      else if (e.key === "?") setShowKeys((x) => !x);
       else if (k === "s" && current) skipCurrent();
       else if (e.key === "Escape") { if (panel !== "none") setPanel("none"); else onClose(); }
     };
@@ -415,6 +438,19 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     say(target.name || `Chapter ${chapters.indexOf(target) + 1}`);
   }
   const chapterAt = (t: number) => [...chapters].reverse().find((c) => c.start <= t);
+
+  /** Picture in picture: the video in a small window that stays on top. */
+  async function pip() {
+    const v = video.current as (HTMLVideoElement & { webkitSetPresentationMode?: (m: string) => void; webkitPresentationMode?: string }) | null;
+    if (!v) return;
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else if (v.requestPictureInPicture) await v.requestPictureInPicture();
+      else if (v.webkitSetPresentationMode) v.webkitSetPresentationMode(v.webkitPresentationMode === "picture-in-picture" ? "inline" : "picture-in-picture");
+    } catch {
+      say("Picture in picture isn't available here");
+    }
+  }
 
   function changeVolume(d: number) {
     const v = video.current;
@@ -616,7 +652,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           }
         }}
         onDoubleClick={() => void fullscreen()}
-        onLoadedMetadata={(e) => { e.currentTarget.playbackRate = speed; }}
+        onLoadedMetadata={(e) => { e.currentTarget.playbackRate = speed; e.currentTarget.volume = volume; }}
         onPlay={() => setPlaying(true)}
         onWaiting={() => setLoadState((s) => (s === "start" ? s : "buffer"))}
         onPlaying={() => setLoadState("ok")}
@@ -702,6 +738,14 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       {loadState === "buffer" && !error && <div className="p-buffer"><span className="spinner big" /></div>}
       {error && <div className="p-error">{error}</div>}
       {toast && <div className="p-toast">{toast}</div>}
+      {showKeys && (
+        <div className="p-keys" onClick={(e) => { e.stopPropagation(); setShowKeys(false); }}>
+          <h3>Keyboard</h3>
+          {([["Space / K", "Play or pause"], ["← / →", "Back / forward 10 s (Shift: 30 s)"], ["↑ / ↓", "Volume"], ["M", "Mute"], ["C", "Subtitles on/off (Shift+C: next language)"], ["S", "Skip intro or credits"], ["N", "Next episode"], ["[ / ]", "Previous / next chapter"], ["F", "Full screen"], ["P", "Picture in picture"], ["?", "This list"], ["Esc", "Close"]] as [string, string][]).map(([k, v]) => (
+            <div key={k} className="p-key"><span className="mono">{k}</span><span>{v}</span></div>
+          ))}
+        </div>
+      )}
       {askResume !== null && (
         <div className="p-resumed" onClick={(e) => e.stopPropagation()}>
           <span>Continuing from {fmt(askResume)}</span>
@@ -731,7 +775,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       {panel !== "none" && (
         <div className="p-settings" onClick={(e) => e.stopPropagation()}>
           <div className="p-tabs">
-            {([["subs", "Subtitles"], ["style", "Look"], ["audio", "Audio"], ["speed", "Speed"], ...(chapters.length ? [["chapters", "Chapters"]] : [])] as [Panel, string][]).map(([k, label]) => (
+            {([["subs", "Subtitles"], ["style", "Look"], ["audio", "Audio"], ["speed", "Speed"], ...(chapters.length ? [["chapters", "Chapters"]] : []), ["sleep", sleep ? "Sleep ●" : "Sleep"]] as [Panel, string][]).map(([k, label]) => (
               <button key={k} className={panel === k ? "on" : ""} onClick={() => setPanel(k)}>{label}</button>
             ))}
             <span className="spacer" />
@@ -791,6 +835,19 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
                 <span>{x === 1 ? "Normal" : `${x}×`}</span>{speed === x && <Icon name="check" size={14} />}
               </button>
             ))}
+            {panel === "sleep" && (
+              <>
+                {([["Off", null], ["End of this episode", "end"], ["15 minutes", 15], ["30 minutes", 30], ["45 minutes", 45], ["1 hour", 60], ["1½ hours", 90]] as [string, number | "end" | null][]).map(([label, v]) => {
+                  const on = v === null ? !sleep : v === "end" ? sleep === "end" : false;
+                  return (
+                    <button key={label} className={`p-opt ${on ? "on" : ""}`} onClick={() => { setSleep(v === null ? null : v === "end" ? "end" : { until: Date.now() + v * 60000 }); say(v === null ? "Sleep timer off" : `Sleep timer: ${label.toLowerCase()}`); }}>
+                      <span>{label}</span>{on && <Icon name="check" size={14} />}
+                    </button>
+                  );
+                })}
+                {sleep && sleep !== "end" && <div className="muted small p-sleep-left">Pauses in {Math.max(1, Math.round((sleep.until - Date.now()) / 60000))} min</div>}
+              </>
+            )}
             {panel === "chapters" && chapters.map((c, i) => {
               const on = chapterAt(time) === c;
               return (
@@ -847,6 +904,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           {info?.next && onNext && <button className="p-ic" onClick={playNext} title={`Next: ${info.next.label} (N)`} aria-label="Next episode"><Icon name="next" size={22} /></button>}
           <button className={`p-ic ${sub >= 0 ? "on" : ""}`} onClick={() => setPanel(panel === "subs" ? "none" : "subs")} title={`Subtitles: ${subTitle} (C)`} aria-label="Subtitles"><Icon name="subtitles" size={22} /></button>
           <button className={`p-ic ${panel !== "none" && panel !== "subs" ? "on" : ""}`} onClick={() => setPanel(panel === "none" || panel === "subs" ? "audio" : "none")} title="Audio, speed, chapters" aria-label="Settings"><Icon name="settings" size={22} /></button>
+          <button className="p-ic" onClick={() => void pip()} aria-label="Picture in picture" title="Picture in picture (P)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="5" width="18" height="14" rx="2" /><rect x="12" y="11" width="7" height="6" rx="1" fill="currentColor" /></svg></button>
           <button className="p-ic" onClick={() => void fullscreen()} aria-label="Full screen" title="Full screen (F)"><Icon name="expand" size={20} /></button>
         </div>
       </div>
@@ -881,8 +939,8 @@ export function SubStyleEditor({ compact }: { compact?: boolean }) {
       </div>
       <div className="fields3">
         <label>Font
-          <select value={s.font} onChange={(e) => set({ font: e.target.value as SubStyle["font"] })}>
-            <option value="sans">Clean (sans)</option><option value="rounded">Rounded</option><option value="serif">Classic (serif)</option><option value="mono">Typewriter</option>
+          <select value={s.font} onChange={(e) => set({ font: e.target.value })}>
+            {SUB_FONTS.map((f) => <option key={f.id} value={f.id} style={{ fontFamily: f.css }}>{f.label}</option>)}
           </select>
         </label>
         <label>Edge

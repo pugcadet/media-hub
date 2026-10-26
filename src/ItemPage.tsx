@@ -14,6 +14,7 @@ import { Icon, itemMenu, openMenu, playTitle, Row, scanLibrary, showPicture, Set
 import { setPrefs, subSkipped, usePrefs } from "./prefs";
 import { artSkipped, CORE_ART, fixTitles, FixTarget, namesToFix, noSubsOf, safeFixes } from "./fixers";
 import { askFixes } from "./FixDialog";
+import { applyArt, askArt } from "./ArtPicker";
 
 export const ART_KINDS: { kind: ImageKind; label: string; wide: boolean; hint: string }[] = [
   { kind: "Primary", label: "Poster", wide: false, hint: "The main picture in every app." },
@@ -241,7 +242,7 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
               {item.UserData?.Played && <span className="ok">Watched</span>}
             </div>
             {item.Overview && <p className="cine-overview">{item.Overview}</p>}
-            {kind && <TitleHealth d={d} kind={kind} canEdit={d.canEdit} subLangs={subLangs} onTab={setTab} />}
+            {kind && <TitleHealth d={d} kind={kind} canEdit={d.canEdit} subLangs={subLangs} onTab={setTab} artOnly={!!embedded} />}
             {!kind && (
               <div className="row bb-actions">
                 {playable && <button className="bb-play" onClick={() => nav.play(id)}><Icon name="play" size={20} /> {item.UserData?.PlaybackPositionTicks ? "Resume" : "Play"}</button>}
@@ -372,7 +373,7 @@ interface Chip {
  * and "Fix N things" (artwork, subtitles and 100%-sure names, done for you; the rest opens
  * the right tab).
  */
-function TitleHealth({ d, kind, canEdit, subLangs, onTab }: { d: Details; kind: "series" | "movie"; canEdit: boolean; subLangs: string[]; onTab: (t: string) => void }) {
+function TitleHealth({ d, kind, canEdit, subLangs, onTab, artOnly }: { d: Details; kind: "series" | "movie"; canEdit: boolean; subLangs: string[]; onTab: (t: string) => void; artOnly?: boolean }) {
   const epoch = useEpoch();
   const item = d.item;
   const [check, setCheck] = useState<CheckRow | null>(null);
@@ -402,11 +403,24 @@ function TitleHealth({ d, kind, canEdit, subLangs, onTab }: { d: Details; kind: 
     chips.push({ ok: seg.intro >= seg.episodes * 0.8, label: seg.intro === 0 ? "No intro markers" : seg.intro >= seg.episodes ? "Intro markers" : `Intros in ${seg.intro} of ${seg.episodes}`, go: () => firstSeason && onTab(firstSeason.Id) });
   }
   const target: FixTarget = { id: item.Id, name: cleanTitle(item.Name, item.ProductionYear), kind, identified, missingArt: missingArt.map((a) => a.kind), noSubs, check };
-  const auto = safeFixes(target);
+  // In Metadata and art, Fix is only about artwork (no renaming or subtitles there).
+  const auto = safeFixes(target).filter((k) => !artOnly || k === "art");
   const todo = chips.filter((c) => c.ok === false).length;
 
   async function fix() {
-    const plan = await askFixes(`Fix ${target.name}`, [target], auto);
+    // Pictures first: you see the options and pick (or take the recommended ones).
+    if (auto.includes("art")) {
+      const choice = await askArt(item.Id, target.name, target.missingArt);
+      if (choice) {
+        await track(`Artwork for ${target.name}`, async (job) => {
+          const n = await applyArt(item.Id, choice);
+          job.update(`${n} picture${n === 1 ? "" : "s"} added`, 1);
+        }).catch(() => undefined);
+      }
+    }
+    const rest = auto.filter((k) => k !== "art");
+    if (!rest.length) return;
+    const plan = await askFixes(`Fix ${target.name}`, [target], rest);
     if (!plan) return;
     void track(`Fixing ${target.name}`, (job) => fixTitles(plan.list, plan.what, subLangs, job).then(() => undefined), { cancellable: true }).catch(() => undefined);
   }
@@ -535,7 +549,7 @@ function ArtworkTab({ id, title, images, canEdit, isEpisode }: { id: string; tit
       <div className="row between">
         <div className="muted small">{missing.length ? `Missing: ${missing.map((k) => k.label).join(", ")}` : "Every picture Infuse uses is there."}{skipped.length ? ` Skipped (can't be found): ${skipped.map((k) => ART_KINDS.find((a) => a.kind === k)?.label ?? k).join(", ")}.` : ""}</div>
         <div className="row end">
-          <button disabled={!canEdit || !!saving || !missing.length} onClick={() => void act(`Filling in artwork for ${title}`, () => api.fillMissingArt(id, missing.map((k) => k.kind)))}>Fill in missing artwork</button>
+          <button disabled={!canEdit || !!saving || !missing.length} onClick={() => void askArt(id, title, missing.map((k) => k.kind)).then((c) => c && act(`Artwork for ${title}`, () => applyArt(id, c)))}>Fill in missing artwork…</button>
           <button disabled={!canEdit || !!saving} onClick={() => void act("Uploading picture", () => api.uploadImageFile(id, kind))}>Upload {info.label.toLowerCase()}…</button>
         </div>
       </div>
@@ -544,7 +558,7 @@ function ArtworkTab({ id, title, images, canEdit, isEpisode }: { id: string; tit
         {kinds.map((k) => {
           const cur = have(k.kind);
           return (
-            <button key={k.kind} className={`art-kind ${kind === k.kind ? "on" : ""}`} onClick={() => setKind(k.kind)}>
+            <button key={k.kind} className={`art-kind ${kind === k.kind ? "on" : ""} ${!cur.length && !OPTIONAL.includes(k.kind) && !skipped.includes(k.kind) ? "missing" : ""}`} onClick={() => setKind(k.kind)}>
               <div className={`art ${k.wide ? "wide" : ""}`}>
                 {cur.length ? <img src={artSrc(id, k.kind, 400, images)} alt="" loading="lazy" /> : <div className="noart small muted">{OPTIONAL.includes(k.kind) ? "Optional" : skipped.includes(k.kind) ? "Skipped" : "Missing"}</div>}
               </div>

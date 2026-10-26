@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Alert, api, cultures, Culture, errorText, LibraryLang, Status, Tuning, TuneRow } from "./api";
+import { api, cultures, Culture, errorText, LibraryLang, Status, Tuning, TuneRow } from "./api";
 import { askConfirm } from "./confirm";
 import { ToolsSettings } from "./Intros";
 import { UpdateSettings } from "./Updates";
@@ -556,26 +556,44 @@ function ScheduleSettings({ status }: { status: Status }) {
 
 function PluginSettings() {
   const epoch = useEpoch();
-  const [alerts, setAlerts] = useState<Alert[] | null>(null);
+  const [installed, setInstalled] = useState<{ name: string; version: string; status: string }[] | null>(null);
   useEffect(() => {
-    api.healthAlerts().then(setAlerts).catch(() => setAlerts([]));
+    api.pluginsInstalled().then(setInstalled).catch(() => setInstalled([]));
   }, [epoch]);
-  const needs = (s: string) => alerts?.some((a) => a.fix === "settings:plugins" && a.detail.includes(s));
-  const rows: [string, string, string][] = [
-    ["MediaSegments API", "Saving intro, credits and recap markers (and Infuse's Skip buttons).", "MediaSegments"],
-    ["Open Subtitles", "Downloading subtitles. Sign in to it in the plugin's settings.", "Open Subtitles"],
-    ["Fanart", "Logos, banners, clear art and disc pictures.", "Fanart"],
-    ["TheTVDB", "Banners and episode data for shows.", "TheTVDB"],
+  const has = (...names: string[]) => installed?.find((p) => names.some((n) => p.name.toLowerCase().replace(/\s/g, "").includes(n.toLowerCase().replace(/\s/g, ""))));
+  const rows: { names: string[]; label: string; why: string; need: boolean }[] = [
+    { names: ["MediaSegments"], label: "MediaSegments API", why: "Saving intro, credits and recap markers (Infuse's Skip buttons).", need: true },
+    { names: ["Open Subtitles", "OpenSubtitles"], label: "Open Subtitles", why: "Subtitles. Sign in in the plugin's settings; free accounts get a few downloads a day.", need: true },
+    { names: ["subbuzz"], label: "SubBuzz (optional)", why: "More free subtitle sites (several providers in one plugin, by josdion on GitHub). Media Hub uses every subtitle plugin Jellyfin has, so it finds more matches and isn't stuck at one site's daily limit.", need: false },
+    { names: ["Intro Skipper"], label: "Intro Skipper (optional)", why: "Lets Jellyfin find intros and credits itself, on the server. Media Hub can start it from Intros and credits; its markers show up in Infuse like Media Hub's.", need: false },
+    { names: ["Fanart"], label: "Fanart", why: "Logos, banners, clear art and disc pictures.", need: true },
+    { names: ["TheTVDB", "TVDB"], label: "TheTVDB", why: "Banners and episode data for shows.", need: true },
+    { names: ["MusicBrainz"], label: "MusicBrainz / AudioDB (built in)", why: "Album covers and artist pictures for music in Jellyfin. Switch them on in the music library's settings.", need: false },
   ];
+  const webOnly = (installed ?? []).filter((p) => /enhanced|home ?screen|sections|custom ?tabs|file ?transformation|plugin ?pages|media ?bar/i.test(p.name));
   return (
     <Section id="plugins" title="Jellyfin plugins" icon="stack" hint="Installed in Jellyfin: Dashboard → Plugins → Catalog, then restart Jellyfin.">
-      {rows.map(([n, why, key]) => (
-        <div key={n} className="plugin-row">
-          <span className={alerts === null ? "muted" : needs(key) ? "warn" : "ok"}><Icon name={alerts === null ? "clock" : needs(key) ? "warn" : "check"} /></span>
-          <div className="grow"><div className="strong small">{n}</div><div className="muted small">{why}</div></div>
-          <span className={`small ${needs(key) ? "warn" : "ok"}`}>{alerts === null ? "Checking…" : needs(key) ? "Not installed" : "Installed"}</span>
-        </div>
-      ))}
+      {rows.map((r) => {
+        const p = has(...r.names);
+        const state = installed === null ? "…" : p ? "ok" : r.need ? "warn" : "muted";
+        return (
+          <div key={r.label} className="plugin-row">
+            <span className={state === "…" ? "muted" : state}><Icon name={installed === null ? "clock" : p ? "check" : r.need ? "warn" : "plus"} /></span>
+            <div className="grow"><div className="strong small">{r.label}</div><div className="muted small">{r.why}</div></div>
+            <span className={`small ${p ? "ok" : r.need ? "warn" : "muted"}`}>{installed === null ? "Checking…" : p ? `Installed · ${p.version}` : r.need ? "Not installed" : "Not installed (optional)"}</span>
+          </div>
+        );
+      })}
+      {webOnly.length > 0 && (
+        <p className="muted small">
+          {webOnly.map((p) => p.name).join(", ")}: these change Jellyfin's own web app (home sections, player extras). Infuse builds its own screens from your library, so they don't show there; Media Hub's Player home has similar rows (Because you watched, genres, picks).
+        </p>
+      )}
+      {installed && installed.length > 0 && (
+        <details className="small"><summary className="muted">All {installed.length} installed plugins</summary>
+          <div className="plugin-all">{installed.map((p) => <span key={p.name} className="chip static">{p.name} <span className="muted">{p.version}</span></span>)}</div>
+        </details>
+      )}
     </Section>
   );
 }

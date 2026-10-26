@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePageState } from "./saved";
+import { applyArt, askArt } from "./ArtPicker";
 import { api, CheckRow, Details, errorText, HealthRow, imageUrl, Status } from "./api";
 import { followEvent, track, useEpoch } from "./activity";
 import { nav } from "./nav";
@@ -118,11 +119,15 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
     if (c === "subs") return nav.open(r.id, { tab: r.kind === "movie" ? "subs" : "main" });
     if (!canEdit) return nav.open(r.id, { tab: "art" });
     const kindMap: Record<string, "Primary" | "Backdrop" | "Logo" | "Thumb" | "Banner"> = { poster: "Primary", backdrop: "Backdrop", logo: "Logo", thumb: "Thumb", banner: "Banner" };
-    void track(`${LABEL[c]} for ${r.name}`, async (job) => {
-      const added = await api.fillMissingArt(r.id, [kindMap[c]]);
-      job.update(added.length ? "Added" : "Nothing found online; pick or upload one on the Artwork tab");
-      if (added.length) setRows((rs) => rs?.map((x) => (x.id === r.id ? { ...x, [c]: true } : x)) ?? null);
-    }, { reload: false });
+    // Shows what's online for this picture (recommended picked) and lets you choose.
+    void askArt(r.id, r.name, [kindMap[c]]).then((choice) => {
+      if (!choice) return;
+      void track(`${LABEL[c]} for ${r.name}`, async (job) => {
+        const n = await applyArt(r.id, choice);
+        job.update(n ? "Added" : "Skipped", 1);
+        if (n) setRows((rs) => rs?.map((x) => (x.id === r.id ? { ...x, [c]: true } : x)) ?? null);
+      }, { reload: false }).catch(() => undefined);
+    });
   }
 
   async function fixAll() {
@@ -155,6 +160,7 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
       sub: `${r.kind === "series" ? "Show" : "Movie"}${r.libraryFolder ? ` · ${r.libraryFolder}` : ""}`,
       thumb: imageUrl(r.id, "Primary", 80),
       dots: checks.map((c) => ({ ok: status(r, c), label: LABEL[c] })),
+      warn: checks.some((c) => c !== "identified" && status(r, c) === false),
     }));
     return (
       <div className="pg studio-page">

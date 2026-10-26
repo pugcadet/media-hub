@@ -8,12 +8,14 @@ import Missing from "./Missing";
 import Tags from "./Tags";
 import Storage from "./Storage";
 import { SubtitleCleanup } from "./Tools";
+import Structure from "./Structure";
 
-export type CleanupTab = "duplicates" | "missing" | "tags" | "subs" | "storage";
+export type CleanupTab = "duplicates" | "missing" | "folders" | "tags" | "subs" | "storage";
 
 const TABS: { id: CleanupTab; label: string }[] = [
   { id: "duplicates", label: "Duplicates" },
   { id: "missing", label: "Missing episodes" },
+  { id: "folders", label: "Folders" },
   { id: "tags", label: "Genres and tags" },
   { id: "subs", label: "Extra subtitles" },
   { id: "storage", label: "Storage" },
@@ -30,6 +32,7 @@ export default function Cleanup({ status, tab, onNav }: { status: Status; tab?: 
       <div className="cleanup-body" key={t}>
         {t === "duplicates" && <Duplicates status={status} />}
         {t === "missing" && <Missing status={status} />}
+        {t === "folders" && <Structure status={status} />}
         {t === "tags" && <Tags status={status} />}
         {t === "subs" && <SubtitleCleanup status={status} />}
         {t === "storage" && <Storage status={status} onNav={onNav} />}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { usePageState } from "./saved";
 import { api, cleanTitle, errorText, imageUrl, Item, JfItem, Library, SegSummary, Status } from "./api";
 import { IntrosTab } from "./Intros";
-import { useEpoch } from "./activity";
+import { track, useEpoch } from "./activity";
 import type { View } from "./nav";
 import { Icon, Tabs } from "./ui";
 import { usePrefs } from "./prefs";
@@ -79,6 +79,8 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
   const [error, setError] = useState<string | null>(null);
   const [onlyGaps, setOnlyGaps] = usePageState("intros.onlyGaps", false);
   const [tab, setTab] = usePageState("intros.tab", "all");
+  const [skipper, setSkipper] = useState(false);
+  useEffect(() => void api.pluginsInstalled().then((l) => setSkipper(l.some((p) => /intro ?skipper/i.test(p.name)))).catch(() => undefined), []);
   const folderMap = useFolderMap();
 
   useEffect(() => {
@@ -138,6 +140,11 @@ export default function IntrosTool({ status, onNav }: { status: Status; onNav: (
           )}
           <div className="toolbar">
             <label className="check small"><input type="checkbox" checked={onlyGaps} onChange={(e) => setOnlyGaps(e.target.checked)} />Only shows with missing markers</label>
+            {skipper && (
+              <button className="mini-btn" onClick={() => void track("Starting Intro Skipper in Jellyfin", async (job) => { const n = await api.runIntroSkipper(); job.update(`“${n}” runs in Jellyfin now; markers appear as it goes`, 1); }, { reload: false }).catch(() => undefined)} title="Jellyfin's Intro Skipper plugin finds intros and credits on the server">
+                Let Intro Skipper scan everything
+              </button>
+            )}
             <label className="searchbox wide"><Icon name="search" /><input placeholder="Search shows" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
           </div>
           <div className="card list-card">

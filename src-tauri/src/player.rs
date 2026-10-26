@@ -544,7 +544,7 @@ async fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<V
     let uri = request.uri();
     let path = uri.path();
     // Songs and covers from your music folder (no Jellyfin involved).
-    if path.starts_with("/lf/") || path.starts_with("/lc/") {
+    if path.starts_with("/lf/") || path.starts_with("/lc/") || path.starts_with("/la/") {
         let (app2, p) = (app.clone(), path.to_string());
         let (bytes, ct) = tauri::async_runtime::spawn_blocking(move || crate::localmusic::serve(&app2, &p))
             .await

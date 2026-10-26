@@ -20,6 +20,8 @@ export interface StudioItem {
   lead?: ReactNode;
   /** Something at the end (a chip). */
   tail?: ReactNode;
+  /** Missing artwork: an amber outline around the picture. */
+  warn?: boolean;
 }
 
 export function Dots({ dots }: { dots: Dot[] }) {
@@ -81,7 +83,7 @@ export function Studio({ items, selected, onSelect, head, empty, children, limit
                 <div className={`studio-item ${selected === it.id ? "on" : ""}`} onClick={() => onSelect(it.id)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onSelect(it.id)}>
                   {it.lead && <span className="studio-lead" onClick={(e) => e.stopPropagation()}>{it.lead}</span>}
                   {it.thumb !== undefined && (
-                    <span className="studio-thumb">{it.thumb ? <img src={it.thumb} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /> : null}</span>
+                    <span className={`studio-thumb ${it.warn ? "warn" : ""}`}>{it.thumb ? <img src={it.thumb} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /> : null}</span>
                   )}
                   <span className="studio-text">
                     <span className="studio-title ellipsis">{it.title}</span>

@@ -438,3 +438,42 @@ mod tests {
         assert!(!version_at_least("10.9.11", 10, 10));
     }
 }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInfo {
+    name: String,
+    version: String,
+    status: String,
+}
+
+/// Plugins installed in Jellyfin (name, version, status).
+#[tauri::command]
+pub async fn plugins_installed(state: State<'_, AppState>) -> Result<Vec<PluginInfo>> {
+    let list = state.reader().await?.plugins().await?;
+    Ok(list.into_iter().map(|(name, version, status)| PluginInfo { name, version, status }).collect())
+}
+
+/// Starts Jellyfin's own intro/credits detection (the Intro Skipper plugin's task), when
+/// installed. Returns the task's name.
+#[tauri::command]
+pub async fn run_intro_skipper(state: State<'_, AppState>) -> Result<String> {
+    let w = state.writer().await?;
+    let tasks = w.reader().scheduled_tasks().await?;
+    let pick = |want: &[&str]| {
+        tasks.iter().find(|t| {
+            let n = s(t, "Name").to_lowercase();
+            let cat = s(t, "Category").to_lowercase();
+            want.iter().all(|w| n.contains(w)) || (cat.contains("intro skipper") && want.iter().any(|w| n.contains(w)))
+        })
+    };
+    let task = pick(&["detect", "intro"]).or_else(|| pick(&["intro", "credit"])).or_else(|| pick(&["segment"])).or_else(|| {
+        tasks.iter().find(|t| s(t, "Category").to_lowercase().contains("intro skipper"))
+    });
+    let Some(task) = task else {
+        return Err(Error::msg("Jellyfin has no Intro Skipper task. Install the Intro Skipper plugin (Dashboard → Plugins → Repositories) and restart Jellyfin."));
+    };
+    let id = s(task, "Id").to_string();
+    w.run_task(&id).await?;
+    Ok(s(task, "Name").to_string())
+}

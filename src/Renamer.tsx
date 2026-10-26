@@ -691,6 +691,7 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showRight, setShowRight] = useState(false);
+  const [showAll, setShowAll] = useState<Set<string>>(new Set());
   const { tidy, showYear } = usePrefs();
   const [renameTop, setRenameTop] = useState(true);
   const [seasonDirs, setSeasonDirs] = useState(false);
@@ -808,7 +809,18 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
               ) : <span className="strong small">{g}</span>}
               <span className="muted small">{okKeys(ops).filter((k) => picked.has(k)).length} of {okKeys(ops).length} selected{ops.length > okKeys(ops).length ? ` · ${ops.length - okKeys(ops).length} left alone` : ""}</span>
             </div>
-            {isOpen(g) && ops.map((o) => {
+            {(() => {
+              // What happens to this group, counted once instead of on every file.
+              const tally = new Map<string, number>();
+              for (const o of ops.filter((x) => x.status === "ok" && x.kind !== "sidecar")) for (const w of explain(o, source)) tally.set(w, (tally.get(w) ?? 0) + 1);
+              const parts = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+              return parts.length > 0 && (
+                <div className="change-summary">
+                  {parts.map(([w, n]) => <span key={w} className="chip static">{n}× {w.replace(/ “[^”]*”/, "").replace(/ from .*$/, "")}</span>)}
+                </div>
+              );
+            })()}
+            {isOpen(g) && (showAll.has(g) ? ops : ops.slice(0, 4)).map((o) => {
               const can = o.status === "ok";
               return (
                 <label key={o.from} className={`change ${can ? "" : "off"}`} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
@@ -822,6 +834,9 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
                 </label>
               );
             })}
+            {isOpen(g) && ops.length > 4 && !showAll.has(g) && (
+              <button className="link small change-more" onClick={() => setShowAll((s) => new Set([...s, g]))}>Show all {ops.length} files</button>
+            )}
           </div>
         ))}
         {changes.length === 0 && <p className="muted small pad">Nothing to change.</p>}

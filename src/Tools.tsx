@@ -72,10 +72,53 @@ function showsOf(list: JfChild[]): ShowGroup[] {
   return [...m.values()];
 }
 
+/** The season number of an episode: Jellyfin's number, else the season folder or SxxEyy in the file name. */
+function seasonOf(e: JfChild): number | null {
+  if (e.ParentIndexNumber != null) return e.ParentIndexNumber;
+  const name = (e as JfChild & { SeasonName?: string }).SeasonName ?? "";
+  const fromName = /(\d+)/.exec(name);
+  if (fromName) return Number(fromName[1]);
+  const path = e.Path ?? "";
+  const m = /season[ ._-]*(\d+)/i.exec(path) ?? /[Ss](\d{1,2})[Ee]\d{1,3}/.exec(path);
+  return m ? Number(m[1]) : null;
+}
+
 function seasonsOf(list: JfChild[]): { key: string; name: string; items: JfChild[] }[] {
   const m = new Map<number, JfChild[]>();
-  for (const e of list) m.set(e.ParentIndexNumber ?? 0, [...(m.get(e.ParentIndexNumber ?? 0) ?? []), e]);
-  return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([n, items]) => ({ key: String(n), name: n === 0 ? "Specials" : `Season ${n}`, items }));
+  for (const e of list) {
+    const n = seasonOf(e) ?? -1;
+    m.set(n, [...(m.get(n) ?? []), e]);
+  }
+  return [...m.entries()]
+    .sort((a, b) => (a[0] < 0 ? 1e9 : a[0]) - (b[0] < 0 ? 1e9 : b[0]))
+    .map(([n, items]) => ({
+      key: String(n),
+      name: n === 0 ? "Specials" : n < 0 ? "Episodes without a season number" : `Season ${n}`,
+      items: items.sort((a, b) => (a.IndexNumber ?? 0) - (b.IndexNumber ?? 0)),
+    }));
+}
+
+/** Where one video stands: no subtitles yet, working, downloaded, nothing found, failed. */
+function SubState({ text }: { text?: string }) {
+  if (!text) return <span className="sub-state none" title="No subtitles yet">No subtitles</span>;
+  if (text === "working…") return <span className="sub-state busy"><span className="spinner" /> Downloading</span>;
+  if (/^(downloaded|already has it)/.test(text)) return <span className="sub-state ok" title={text}><Icon name="check" size={12} /> {text.startsWith("downloaded") ? "Downloaded" : "Has subtitles"}</span>;
+  if (/^(nothing found|best match too weak)/.test(text)) return <span className="sub-state warn" title={text}>{text.startsWith("nothing") ? "Nothing found" : "No good match"}</span>;
+  return <span className="sub-state bad" title={text}>Failed</span>;
+}
+
+function Tally({ list, results }: { list: JfChild[]; results: Record<string, string> }) {
+  const ok = list.filter((e) => /^(downloaded|already has it)/.test(results[e.Id] ?? "")).length;
+  if (!ok) return <span className="sub-done" />;
+  return <span className="sub-done small ok">{ok} of {list.length} done</span>;
+}
+
+/** "Get subtitles", with a progress bar while this group is being done. */
+function GetBtn({ running, disabled, p, k, onClick, small }: { running: boolean; disabled: boolean; p: { key: string; done: number; total: number } | null; k: string; onClick: () => void; small?: boolean }) {
+  if (p && p.key === k) {
+    return <span className="sub-get-progress" title={`${p.done} of ${p.total}`}><span style={{ width: `${(p.done / Math.max(1, p.total)) * 100}%` }} /></span>;
+  }
+  return <button className="mini-btn" disabled={running || disabled} onClick={onClick} title="Download subtitles">{small ? <Icon name="download" size={13} /> : <><Icon name="download" size={13} /> Get subtitles</>}</button>;
 }
 
 const OUTCOME: Record<AutoResult["outcome"], string> = { has: "already has it", downloaded: "downloaded", low: "best match too weak", none: "nothing found" };
@@ -103,6 +146,7 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
   const isOpenKey = (k: string) => openKeys.includes(k);
   const toggleKey = (k: string) => setOpenKeys((o) => (o.includes(k) ? o.filter((x) => x !== k) : [...o, k]));
   const [stopReason, setStopReason] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ key: string; done: number; total: number } | null>(null);
   const folderMap = useFolderMap();
   const folderOf = (e: JfChild) => folderMap.get(e.SeriesId ?? e.Id) ?? "Other";
   const load = () =>
@@ -131,16 +175,18 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
     return [...g.entries()];
   }, [shownItems, sort]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function fill(items: JfChild[] = shownItems, what = `${items.length} videos`) {
+  async function fill(items: JfChild[] = shownItems, what = `${items.length} videos`, key = "all") {
     setRunning(true);
     setStopReason(null);
     stop.current = false;
     let downloaded = 0;
+    setProgress({ key, done: 0, total: items.length });
     await track(`Subtitles for ${what}`, async (job) => {
     for (const [i, e] of items.entries()) {
       if (stop.current || job.cancelled) break;
       job.update(label(e), i / items.length);
-      if (results[e.Id]) continue;
+      setProgress({ key, done: i, total: items.length });
+      if (/^(downloaded|already has it)/.test(results[e.Id] ?? "")) continue;
       setResults((r) => ({ ...r, [e.Id]: "working…" }));
       try {
         const res = await api.subtitleAuto(e.Id, lang, codes, minScore);
@@ -159,13 +205,27 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
     job.update(`${downloaded} downloaded`, 1);
     }, { cancellable: true, reload: false }).catch(() => undefined);
     setRunning(false);
-    void load();
+    setProgress(null);
+    // The list keeps what was just downloaded (marked ✓) until you reload it.
   }
 
   const label = (e: JfChild) =>
     e.Type === "Episode"
       ? `${e.SeriesName ?? ""} · S${String(e.ParentIndexNumber ?? 0).padStart(2, "0")}E${String(e.IndexNumber ?? 0).padStart(2, "0")} · ${e.Name}`
       : e.Name;
+
+  const row = (e: JfChild, movie: boolean) => {
+    const st = results[e.Id];
+    return (
+      <div className={`tool-row sub-ep ${movie ? "movie" : ""}`} key={e.Id} onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: e.Type === "Episode" ? "Episode" : "Movie", title: label(e), played: false }))}>
+        <button className="link-plain names" onClick={() => onOpen(e.Id)}>
+          <div className={`title ${movie ? "" : "small"}`}>{e.Type === "Episode" ? `E${String(e.IndexNumber ?? 0).padStart(2, "0")} · ${e.Name}` : e.Name}</div>
+        </button>
+        <SubState text={st} />
+        <GetBtn running={running} disabled={status.readOnly} p={progress} k={`ep:${e.Id}`} onClick={() => void fill([e], e.Name, `ep:${e.Id}`)} small />
+      </div>
+    );
+  };
 
   return (
     <div className="pg">
@@ -202,11 +262,24 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
         <span className="muted small">{shownItems.length} videos</span>
       </div>
       {stopReason && <p className="error">{stopReason}</p>}
+      {progress && (
+        <div className="sub-progress" role="progressbar" aria-valuenow={progress.done} aria-valuemax={progress.total}>
+          <span className="small">Getting subtitles · {progress.done} of {progress.total}</span>
+          <span className="bar"><span style={{ width: `${(progress.done / Math.max(1, progress.total)) * 100}%` }} /></span>
+          <button className="mini-btn" onClick={() => (stop.current = true)}>Stop</button>
+        </div>
+      )}
       <div className="card list-card sub-tree">
         {groups.map(([g, list]) => (
           <div key={g || "all"}>
-            {g && <div className="change-group"><Icon name="folder" size={14} /><span className="strong small">{g}</span><span className="muted small">{list.length} videos</span></div>}
-            {showsOf(list).map((sh) => {
+            {g && (
+              <div className="change-group sub-folder">
+                <Icon name="folder" size={14} /><span className="strong small">{g}</span><span className="muted small grow">{list.length} videos</span>
+                <GetBtn running={running} disabled={status.readOnly} p={progress} k={`folder:${g}`} onClick={() => void fill(list, g, `folder:${g}`)} />
+              </div>
+            )}
+            {list.filter((e) => e.Type !== "Episode").map((e) => row(e, true))}
+            {showsOf(list.filter((e) => e.Type === "Episode")).map((sh) => {
               const k = `show:${sh.key}`;
               const open = isOpenKey(k);
               return (
@@ -215,35 +288,26 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
                     <button className="link-plain sub-toggle" onClick={() => toggleKey(k)} aria-expanded={open}>
                       <span className={`chev ${open ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
                       <span className="strong">{sh.name}</span>
-                      <span className="muted small">{sh.items.length} {sh.movie ? (sh.items.length === 1 ? "movie" : "movies") : `episode${sh.items.length === 1 ? "" : "s"}`}</span>
+                      <span className="muted small">{sh.items.length} episode{sh.items.length === 1 ? "" : "s"}</span>
                     </button>
-                    <span className="muted small sub-done">{sh.items.filter((e) => results[e.Id]).length ? `${sh.items.filter((e) => /downloaded/.test(results[e.Id] ?? "")).length} downloaded` : ""}</span>
-                    <button className="small-btn" disabled={running || status.readOnly} onClick={() => void fill(sh.items, sh.name)}>Get subtitles</button>
+                    <Tally list={sh.items} results={results} />
+                    <GetBtn running={running} disabled={status.readOnly} p={progress} k={k} onClick={() => void fill(sh.items, sh.name, k)} />
                   </div>
-                  {open && (sh.movie ? [{ key: "m", name: "", items: sh.items }] : seasonsOf(sh.items)).map((se) => {
+                  {open && seasonsOf(sh.items).map((se) => {
                     const sk = `${k}|${se.key}`;
-                    const sopen = sh.movie || isOpenKey(sk);
+                    const sopen = isOpenKey(sk);
                     return (
                       <div key={se.key} className="sub-season">
-                        {!sh.movie && (
-                          <div className="sub-head sub-head2">
-                            <button className="link-plain sub-toggle" onClick={() => toggleKey(sk)} aria-expanded={sopen}>
-                              <span className={`chev ${sopen ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
-                              <span className="small strong">{se.name}</span>
-                              <span className="muted small">{se.items.length}</span>
-                            </button>
-                            <button className="small-btn" disabled={running || status.readOnly} onClick={() => void fill(se.items, `${sh.name} ${se.name}`)}>Get subtitles</button>
-                          </div>
-                        )}
-                        {sopen && se.items.map((e) => (
-                          <button className="tool-row sub-ep" key={e.Id} onClick={() => onOpen(e.Id)} onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: e.Type === "Episode" ? "Episode" : "Movie", title: label(e), played: false }))}>
-                            <div className="names">
-                              <div className="title small">{e.Type === "Episode" ? `E${String(e.IndexNumber ?? 0).padStart(2, "0")} · ${e.Name}` : e.Name}</div>
-                              <div className={`small ${/limit|stopped|couldn't|refused/i.test(results[e.Id] ?? "") ? "bad" : "muted"}`}>{results[e.Id] ?? "No subtitles"}</div>
-                            </div>
-                            <span className="muted">›</span>
+                        <div className="sub-head sub-head2">
+                          <button className="link-plain sub-toggle" onClick={() => toggleKey(sk)} aria-expanded={sopen}>
+                            <span className={`chev ${sopen ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
+                            <span className="small strong">{se.name}</span>
+                            <span className="muted small">{se.items.length}</span>
                           </button>
-                        ))}
+                          <Tally list={se.items} results={results} />
+                          <GetBtn running={running} disabled={status.readOnly} p={progress} k={sk} onClick={() => void fill(se.items, `${sh.name} ${se.name}`, sk)} />
+                        </div>
+                        {sopen && se.items.map((e) => row(e, false))}
                       </div>
                     );
                   })}

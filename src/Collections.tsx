@@ -126,7 +126,7 @@ export default function Collections({ status, selected, variant = "manage" }: { 
         <h1>Collections</h1>
         <div className="pg-actions"><button className="primary" disabled={!canEdit} onClick={() => void create()}>+ New collection</button></div>
       </div>
-      {!canEdit && <p className="note">Making and changing collections needs changes switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
+      {!canEdit && variant === "manage" && <p className="note">Making and changing collections needs changes switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
       {error && <p className="error">{error}</p>}
       {list === null && !error && <p className="muted">Loading…</p>}
       {list && list.length === 0 && (

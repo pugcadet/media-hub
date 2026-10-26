@@ -465,7 +465,7 @@ impl Client {
         let req = self.http.get(self.url(&Self::image_path(id, kind, index)?));
         match self.send(req).await {
             Ok(resp) => Ok(Some(Self::image_bytes(resp).await?)),
-            Err(Error::Msg(m)) if m.starts_with("Jellyfin does not know") => Ok(None),
+            Err(Error::Msg(m)) if m.starts_with("Jellyfin does not know") || m.contains("no such picture") => Ok(None),
             Err(e) => Err(e),
         }
     }

@@ -93,6 +93,7 @@ fn answer(st: &Arc<Mutex<FakeState>>, method: &str, target: &str, body: &str) ->
             (code, text)
         }
         ("GET", p) if p.starts_with("/MediaSegments/") => (404, String::new()),
+        ("GET", p) if p == format!("/Items/{ITEM}/Images/Backdrop/0") || p == format!("/Items/{ITEM}/Images/Backdrop") => (200, "\u{FFD8}fakejpeg".into()),
         _ => (404, String::new()),
     }
 }
@@ -147,6 +148,15 @@ mod tests {
         let w = client(&f).into_writer();
         let bytes = tauri::async_runtime::block_on(w.subtitle_file("srt-eng-123")).unwrap();
         assert!(String::from_utf8_lossy(&bytes).contains("-->"));
+    }
+
+    #[test]
+    fn a_missing_picture_is_none_not_an_error() {
+        let f = start();
+        let c = client(&f);
+        // Jellyfin answers 404 for a picture a title doesn't have (here: no thumbnail).
+        let r = tauri::async_runtime::block_on(c.image_original(ITEM, "Thumb", 0)).unwrap();
+        assert!(r.is_none());
     }
 
     #[test]

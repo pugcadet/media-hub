@@ -34,6 +34,7 @@ mod state;
 mod storage;
 mod store;
 mod sub_cmds;
+mod structure;
 mod subs;
 mod updater;
 
@@ -62,6 +63,11 @@ pub fn run() {
             commands::status,
             images::images_revalidate,
             library::find_moved,
+            structure::structure_scan,
+            structure::structure_plan,
+            meta_cmds::make_thumb,
+            backend::plugins_installed,
+            backend::run_intro_skipper,
             collections::collection_folder_plan,
             collections::collection_relink,
             commands::connect,
@@ -150,6 +156,7 @@ pub fn run() {
             localmusic::set_music_source,
             localmusic::pick_music_folder,
             localmusic::music_rescan,
+            localmusic::music_fetch_art,
             cleanup::remove_subtitle_files,
             naming_check::naming_check,
             naming_check::naming_check_last,

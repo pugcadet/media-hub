@@ -5,7 +5,7 @@ import type { Pick } from "./api";
 
 export interface SubStyle {
   size: number; // % of the normal size
-  font: "sans" | "serif" | "rounded" | "mono";
+  font: string;
   color: string;
   background: number; // 0..1 opacity of the box behind the text
   shadow: "none" | "soft" | "outline";
@@ -254,12 +254,28 @@ export function yearOptional(): boolean {
   return current.showYear !== "everywhere";
 }
 
-const FONTS: Record<SubStyle["font"], string> = {
-  sans: '"Inter Variable", "Manrope", -apple-system, "Helvetica Neue", Arial, sans-serif',
-  serif: 'Georgia, "Times New Roman", serif',
-  rounded: '"SF Pro Rounded", "Arial Rounded MT Bold", "Manrope", sans-serif',
-  mono: '"JetBrains Mono", Menlo, monospace',
-};
+/** Subtitle fonts: the app's own, plus fonts every Mac has. */
+export const SUB_FONTS: { id: string; label: string; css: string }[] = [
+  { id: "sans", label: "Clean (Inter)", css: '"Inter Variable", -apple-system, "Helvetica Neue", Arial, sans-serif' },
+  { id: "helvetica", label: "Helvetica Neue", css: '"Helvetica Neue", Helvetica, Arial, sans-serif' },
+  { id: "sf", label: "San Francisco (system)", css: '-apple-system, BlinkMacSystemFont, system-ui, sans-serif' },
+  { id: "rounded", label: "Rounded", css: '"SF Pro Rounded", ui-rounded, "Arial Rounded MT Bold", "Manrope", sans-serif' },
+  { id: "manrope", label: "Manrope", css: '"Manrope", sans-serif' },
+  { id: "avenir", label: "Avenir Next", css: '"Avenir Next", Avenir, sans-serif' },
+  { id: "futura", label: "Futura", css: 'Futura, "Century Gothic", sans-serif' },
+  { id: "gill", label: "Gill Sans", css: '"Gill Sans", "Gill Sans MT", sans-serif' },
+  { id: "optima", label: "Optima", css: 'Optima, Candara, sans-serif' },
+  { id: "verdana", label: "Verdana (very readable)", css: 'Verdana, Geneva, sans-serif' },
+  { id: "trebuchet", label: "Trebuchet", css: '"Trebuchet MS", sans-serif' },
+  { id: "black", label: "Heavy (Arial Black)", css: '"Arial Black", "Helvetica Neue", sans-serif' },
+  { id: "serif", label: "Classic (Georgia)", css: 'Georgia, "Times New Roman", serif' },
+  { id: "palatino", label: "Palatino", css: 'Palatino, "Palatino Linotype", serif' },
+  { id: "baskerville", label: "Baskerville", css: 'Baskerville, "Baskerville Old Face", serif' },
+  { id: "mono", label: "Typewriter", css: '"JetBrains Mono", Menlo, monospace' },
+  { id: "marker", label: "Marker Felt", css: '"Marker Felt", "Comic Sans MS", cursive' },
+  { id: "chalk", label: "Chalkboard", css: '"Chalkboard SE", "Comic Sans MS", cursive' },
+];
+const FONTS: Record<string, string> = Object.fromEntries(SUB_FONTS.map((f) => [f.id, f.css]));
 
 /** CSS for the subtitle text, used by the player and the preview in Settings. */
 function hexToRgb(h: string): string {
@@ -277,7 +293,7 @@ export function subCss(s: SubStyle): CSSProperties {
     : "none";
   const shadow = s.shadow === "outline" ? ring : s.shadow === "soft" ? "0 2px 6px rgba(0,0,0,.85), 0 0 2px rgba(0,0,0,.7)" : "none";
   return {
-    fontFamily: FONTS[s.font],
+    fontFamily: FONTS[s.font] ?? FONTS.sans,
     fontSize: `calc(clamp(16px, 2.6vw, 44px) * ${s.size / 100})`,
     color: s.color,
     opacity: s.textOpacity ?? 1,

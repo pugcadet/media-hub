@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ConfirmHost } from "./confirm";
 import { FixDialogHost } from "./FixDialog";
+import { ArtPickerHost } from "./ArtPicker";
 import { Hosts } from "./ui";
 import "@fontsource-variable/inter";
 import "@fontsource/manrope/400.css";
@@ -17,6 +18,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <App />
     <ConfirmHost />
     <FixDialogHost />
+    <ArtPickerHost />
     <Hosts />
   </React.StrictMode>,
 );

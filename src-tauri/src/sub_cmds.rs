@@ -137,9 +137,12 @@ pub async fn subtitle_options(state: State<'_, AppState>, id: String, lang: Stri
     let item = c.item_json(&id).await?;
     let file = file_stem(&item);
     let found = c.subtitle_search(&id, &lang).await.map_err(|e| {
-        Error::msg(format!(
-            "Subtitle search failed ({e}). Check that a subtitle provider such as OpenSubtitles is installed and signed in under Jellyfin's Dashboard → Plugins."
-        ))
+        let t = e.to_string();
+        Error::msg(if t.contains("status 500") || t.to_lowercase().contains("error processing") {
+            "Searching for subtitles failed inside Jellyfin (it only says “Error processing request”). Most often a subtitle plugin isn't signed in or is over its daily limit: check Jellyfin → Dashboard → Plugins (OpenSubtitles needs a login). Installing a second source such as SubBuzz helps.".to_string()
+        } else {
+            format!("Subtitle search failed ({t}). Check that a subtitle provider such as OpenSubtitles is installed and signed in under Jellyfin's Dashboard → Plugins.")
+        })
     })?;
     Ok(Options { results: subs::rank(&file, found), current: streams(&item), file })
 }
@@ -231,6 +234,9 @@ pub fn provider_error(e: &str) -> String {
     let l = e.to_lowercase();
     if l.contains("limit") || l.contains("quota") || l.contains("429") || l.contains("too many") || l.contains("406") || l.contains("remaining") {
         format!("The subtitle site's download limit is reached for today ({e}). Media Hub stopped; try again tomorrow or sign in with an account that has more downloads (Jellyfin → Plugins → OpenSubtitles).")
+    } else if l.contains("status 500") || l.contains("error processing") {
+        // Jellyfin's generic "Error processing request": its subtitle plugin threw.
+        "Jellyfin's subtitle plugin failed on this one (Jellyfin only says “Error processing request”). Usually the OpenSubtitles login in Jellyfin → Dashboard → Plugins → OpenSubtitles is missing or wrong, the daily download limit is used up, or this subtitle was removed from the site. Try another subtitle, or check the plugin's settings.".to_string()
     } else if l.contains("401") || l.contains("unauthor") || l.contains("login") || l.contains("credentials") {
         format!("The subtitle site refused the download ({e}). Check the OpenSubtitles login in Jellyfin → Plugins.")
     } else {
@@ -445,6 +451,7 @@ mod tests {
     #[test]
     fn limits_are_named() {
         assert!(provider_error("The server answered with status 500: DownloadLimitReached").contains("limit"));
+        assert!(provider_error("The server answered with status 500: Error processing request.").contains("plugin"));
         assert!(provider_error("status 429").contains("limit"));
         assert!(provider_error("status 401").contains("login"));
         assert!(provider_error("boom").contains("couldn't be downloaded"));

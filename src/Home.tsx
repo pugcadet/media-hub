@@ -90,7 +90,7 @@ export function Billboard({ pick, onPlay, full, children }: { pick: Pick; onPlay
   );
 }
 
-const homeCache: { feed: HomeFeed | null; picks: Pick[]; movies: Card[]; shows: Card[]; top: Card[] } = { feed: null, picks: [], movies: [], shows: [], top: [] };
+const homeCache: { feed: HomeFeed | null; picks: Pick[]; movies: Card[]; shows: Card[]; top: Card[]; because: { title: string; cards: Card[] } | null; genres: { title: string; cards: Card[] }[] } = { feed: null, picks: [], movies: [], shows: [], top: [], because: null, genres: [] };
 onDataReload(() => { overviews.clear(); });
 
 /** Overviews already fetched for the big picture (so going back doesn't wait again). */
@@ -146,6 +146,9 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
   const [movies, setMoviesS] = useState<Card[]>(homeCache.movies);
   const [shows, setShowsS] = useState<Card[]>(homeCache.shows);
   const [top, setTopS] = useState<Card[]>(homeCache.top);
+  // Extra rows on the Player home (like Jellyfin's Home Screen Sections): because you watched, genres.
+  const [because, setBecause] = useState<{ title: string; cards: Card[] } | null>(homeCache.because);
+  const [genreRows, setGenreRows] = useState<{ title: string; cards: Card[] }[]>(homeCache.genres);
   const [error, setError] = useState<string | null>(null);
   const setFeed = (v: HomeFeed) => { homeCache.feed = v; setFeedS(v); };
   const setPicks = (v: Pick[]) => { homeCache.picks = v; setPicksS(v); };
@@ -159,7 +162,31 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
     api.list("movie", "", "added", 0, 30).then((r) => setMovies(r.map(itemToCard))).catch(() => setMovies([]));
     api.list("series", "", "added", 0, 30).then((r) => setShows(r.map(itemToCard))).catch(() => setShows([]));
     api.list(null, "", "rating", 0, 30).then((r) => setTop(r.map(itemToCard))).catch(() => setTop([]));
+    if (variant === "watch") {
+      // Three genres you have most of, each a row of what's rated best in it.
+      api.list(null, "", "rating", 0, 400).then((all) => {
+        const count = new Map<string, number>();
+        all.forEach((i) => i.genres.forEach((g) => count.set(g, (count.get(g) ?? 0) + 1)));
+        const top3 = [...count.entries()].filter(([, n]) => n >= 6).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([g]) => g);
+        const rows = top3.map((g) => ({ title: g, cards: all.filter((i) => i.genres.includes(g)).slice(0, 20).map(itemToCard) }));
+        homeCache.genres = rows;
+        setGenreRows(rows);
+      }).catch(() => undefined);
+    }
   }, [epoch, status.lastSync]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // "Because you watched …": titles like the last one you watched.
+  useEffect(() => {
+    if (variant !== "watch" || !feed) return;
+    const last = feed.resume[0] ?? feed.nextUp[0];
+    const id = last ? last.seriesId ?? last.id : null;
+    if (!id) return;
+    api.similar(id).then((cards) => {
+      const v = cards.length ? { title: `Because you watched ${last!.title}`, cards } : null;
+      homeCache.because = v;
+      setBecause(v);
+    }).catch(() => undefined);
+  }, [feed, variant]);
 
   const { hiddenNextUp } = usePrefs();
   const [cleared, setCleared] = useState<Set<string>>(new Set());
@@ -222,10 +249,12 @@ export default function Home({ status, canEdit, variant = "manage" }: { status: 
         </section>
       )}
 
+      {variant === "watch" && because && <Row title={because.title} cards={because.cards} canEdit={canEdit} />}
       <Row title="Recently added" cards={feed?.recent ?? []} wide canEdit={canEdit} />
       <Row title="New movies" cards={movies} canEdit={canEdit} />
       <Row title="New shows" cards={shows} canEdit={canEdit} />
       <Row title="Top 10 in your library" cards={top} canEdit={canEdit} ranked={variant === "watch"} />
+      {variant === "watch" && genreRows.map((g) => <Row key={g.title} title={g.title} cards={g.cards} canEdit={canEdit} />)}
       {(feed?.collections.length ?? 0) > 0 && (
         <section className="hrow">
           <div className="section-head">

@@ -45,6 +45,8 @@ struct Index {
     tracks: Vec<Track>,
     /// album key -> cover file
     covers: HashMap<String, PathBuf>,
+    /// artist key -> picture file
+    artists: HashMap<String, PathBuf>,
     /// Read from the files' tags (not only from folder names).
     tagged: bool,
 }
@@ -71,6 +73,57 @@ struct Entry {
 struct LibFile {
     version: u32,
     entries: Vec<Entry>,
+    /// The finished list (what the app shows), so the next start needs no walk over the NAS.
+    #[serde(default)]
+    tracks: Vec<SavedTrack>,
+    /// album key -> cover file, relative to the music folder
+    #[serde(default)]
+    covers: HashMap<String, String>,
+    /// artist key -> picture file, relative to the music folder
+    #[serde(default)]
+    artists: HashMap<String, String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct SavedTrack {
+    rel: String,
+    title: String,
+    artist: String,
+    album: String,
+    album_key: String,
+    year: Option<i64>,
+    index: Option<i64>,
+    disc: Option<i64>,
+    duration: f64,
+    added: u64,
+}
+
+/// The index straight from the library file (instant; the folder is read again in the background).
+fn from_lib(root: &Path) -> Option<Index> {
+    let lib = load_lib(root);
+    if lib.tracks.is_empty() {
+        return None;
+    }
+    let tracks = lib
+        .tracks
+        .iter()
+        .map(|t| Track {
+            key: key_of(&t.rel),
+            path: root.join(&t.rel),
+            title: t.title.clone(),
+            artist: t.artist.clone(),
+            album: t.album.clone(),
+            album_key: t.album_key.clone(),
+            year: t.year,
+            index: t.index,
+            disc: t.disc,
+            duration: t.duration,
+            added: t.added,
+        })
+        .collect();
+    let covers = lib.covers.iter().map(|(k, v)| (k.clone(), root.join(v))).collect();
+    let artists = lib.artists.iter().map(|(k, v)| (k.clone(), root.join(v))).collect();
+    Some(Index { root: root.to_path_buf(), at: Instant::now(), tracks, covers, artists, tagged: false })
 }
 
 fn index() -> &'static Mutex<Option<Index>> {
@@ -302,12 +355,28 @@ fn scan(root: &Path, tags: bool) -> Index {
             break;
         }
     }
-    if tags && (changed || entries.len() != old.entries.len()) {
-        entries.sort_by(|a, b| a.rel.cmp(&b.rel));
-        save_lib(root, &LibFile { version: 1, entries });
-    }
     tracks.sort_by(|a, b| (a.artist.to_lowercase(), a.year, a.album.to_lowercase(), a.disc, a.index, a.title.to_lowercase()).cmp(&(b.artist.to_lowercase(), b.year, b.album.to_lowercase(), b.disc, b.index, b.title.to_lowercase())));
-    Index { root: root.to_path_buf(), at: Instant::now(), tracks, covers, tagged: tags }
+    // Artist pictures found online earlier.
+    let artist_dir = lib_dir(root).join("artists");
+    let mut artists = HashMap::new();
+    for e in std::fs::read_dir(&artist_dir).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if let Some(k) = name.split('.').next().filter(|k| k.len() == 16) {
+            artists.insert(k.to_string(), e.path());
+        }
+    }
+    if tags {
+        entries.sort_by(|a, b| a.rel.cmp(&b.rel));
+        let saved: Vec<SavedTrack> = tracks
+            .iter()
+            .map(|t| SavedTrack { rel: rel_of(root, &t.path), title: t.title.clone(), artist: t.artist.clone(), album: t.album.clone(), album_key: t.album_key.clone(), year: t.year, index: t.index, disc: t.disc, duration: t.duration, added: t.added })
+            .collect();
+        let covers_rel = covers.iter().map(|(k, v): (&String, &PathBuf)| (k.clone(), rel_of(root, v))).collect();
+        let artists_rel = artists.iter().map(|(k, v): (&String, &PathBuf)| (k.clone(), rel_of(root, v))).collect();
+        let _ = changed;
+        save_lib(root, &LibFile { version: 2, entries, tracks: saved, covers: covers_rel, artists: artists_rel });
+    }
+    Index { root: root.to_path_buf(), at: Instant::now(), tracks, covers, artists, tagged: tags }
 }
 
 /// Reads tags in the background and swaps the result in; the window is told to reload.
@@ -335,7 +404,8 @@ fn with_index<T>(root: &Path, app: Option<&AppHandle>, f: impl FnOnce(&Index) ->
     let mut g = index().lock().map_err(|_| Error::msg("internal error"))?;
     let missing = g.as_ref().map(|i| i.root != root).unwrap_or(true);
     if missing {
-        *g = Some(scan(root, false));
+        // From the library file when there is one (no walk over the NAS), else folder names.
+        *g = Some(from_lib(root).unwrap_or_else(|| scan(root, false)));
     }
     let ix = g.as_ref().expect("just set");
     if !ix.tagged || ix.at.elapsed() > Duration::from_secs(600) {
@@ -432,7 +502,11 @@ pub fn list(app: &AppHandle, state: &AppState, view: &str, parent: Option<&str>,
                     .into_iter()
                     .map(|n| {
                         let first = ix.tracks.iter().find(|t| t.artist == n);
-                        let cover = first.filter(|t| ix.covers.contains_key(&t.album_key)).map(|t| format!("{}/lc/{}", base(), t.album_key));
+                        let cover = if ix.artists.contains_key(&key_of(n)) {
+                            Some(format!("{}/la/{}", base(), key_of(n)))
+                        } else {
+                            first.filter(|t| ix.covers.contains_key(&t.album_key)).map(|t| format!("{}/lc/{}", base(), t.album_key))
+                        };
                         let albums = ix.tracks.iter().filter(|t| t.artist == n).map(|t| &t.album_key).collect::<std::collections::HashSet<_>>().len() as i64;
                         MusicItem::local(format!("R{}", key_of(n)), "artist", n.to_string(), n.to_string(), String::new(), None, None, None, None, cover, Some(albums))
                     })
@@ -471,6 +545,7 @@ pub fn serve(app: &AppHandle, path: &str) -> Option<(Vec<u8>, String)> {
     let file = with_index(&root, Some(app), |ix| match kind {
         "lf" => ix.tracks.iter().find(|t| t.key == key).map(|t| t.path.clone()),
         "lc" => ix.covers.get(key).cloned(),
+        "la" => ix.artists.get(key).cloned(),
         _ => None,
     })
     .ok()??;
@@ -584,4 +659,176 @@ mod tests {
         assert_eq!(ix.covers.len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+/* ------------------------------------------------ covers and artist pictures online */
+
+fn web() -> &'static reqwest::Client {
+    static C: OnceLock<reqwest::Client> = OnceLock::new();
+    C.get_or_init(|| {
+        reqwest::Client::builder()
+            // MusicBrainz asks every app to say who it is.
+            .user_agent(concat!("MediaHub/", env!("CARGO_PKG_VERSION"), " ( https://github.com/pugcadet/media-hub )"))
+            .timeout(Duration::from_secs(20))
+            .build()
+            .expect("http client")
+    })
+}
+
+async fn get_json(url: &str) -> Option<serde_json::Value> {
+    let r = web().get(url).send().await.ok()?;
+    if !r.status().is_success() {
+        return None;
+    }
+    r.json().await.ok()
+}
+
+async fn get_image(url: &str) -> Option<(Vec<u8>, &'static str)> {
+    let r = web().get(url).send().await.ok()?;
+    if !r.status().is_success() {
+        return None;
+    }
+    let b = r.bytes().await.ok()?.to_vec();
+    let ext = if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "jpg"
+    } else if b.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "png"
+    } else {
+        return None;
+    };
+    (b.len() > 1000 && b.len() < 15_000_000).then_some((b, ext))
+}
+
+fn enc(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+/// Lucene-safe text for a MusicBrainz query.
+fn lucene(s: &str) -> String {
+    s.chars().filter(|c| !"+-&|!(){}[]^\"~*?:\\/".contains(*c)).collect()
+}
+
+/// An album cover: MusicBrainz (Cover Art Archive) first, then Deezer.
+async fn find_cover(artist: &str, album: &str) -> Option<(Vec<u8>, &'static str)> {
+    let q = format!("releasegroup:\"{}\" AND artist:\"{}\"", lucene(album), lucene(artist));
+    let url = format!("https://musicbrainz.org/ws/2/release-group/?query={}&fmt=json&limit=3", enc(&q));
+    if let Some(v) = get_json(&url).await {
+        for rg in v.get("release-groups").and_then(|x| x.as_array()).into_iter().flatten() {
+            let score = rg.get("score").and_then(|x| x.as_i64()).unwrap_or(0);
+            let Some(id) = rg.get("id").and_then(|x| x.as_str()) else { continue };
+            if score < 85 {
+                continue;
+            }
+            if let Some(img) = get_image(&format!("https://coverartarchive.org/release-group/{id}/front-500")).await {
+                return Some(img);
+            }
+        }
+    }
+    let url = format!("https://api.deezer.com/search/album?q={}&limit=3", enc(&format!("artist:\"{artist}\" album:\"{album}\"")));
+    let v = get_json(&url).await?;
+    let first = v.get("data")?.as_array()?.iter().find(|a| {
+        let t = a.get("title").and_then(|x| x.as_str()).unwrap_or("");
+        crate::sources::similarity(t, album) >= 0.7
+    })?;
+    get_image(first.get("cover_xl").and_then(|x| x.as_str())?).await
+}
+
+/// An artist picture from Deezer (MusicBrainz has no pictures itself).
+async fn find_artist(artist: &str) -> Option<(Vec<u8>, &'static str)> {
+    let url = format!("https://api.deezer.com/search/artist?q={}&limit=3", enc(artist));
+    let v = get_json(&url).await?;
+    let a = v.get("data")?.as_array()?.iter().find(|a| {
+        let n = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
+        crate::sources::similarity(n, artist) >= 0.85
+    })?;
+    let pic = a.get("picture_xl").and_then(|x| x.as_str())?;
+    // Deezer's placeholder for artists without a picture.
+    if pic.contains("/artist//") {
+        return None;
+    }
+    get_image(pic).await
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtResult {
+    covers: usize,
+    artists: usize,
+    missing_covers: usize,
+}
+
+/// Looks online for album covers and artist pictures the music folder doesn't have, saves
+/// them in `.mediahub/` (never touches your music files). One request a second, as
+/// MusicBrainz asks. Progress as "music-art-progress"; Stop with the "musicart" job.
+#[tauri::command]
+pub async fn music_fetch_art(app: AppHandle, state: State<'_, AppState>) -> Result<ArtResult> {
+    let root = root_of(&state)?;
+    let (albums, artists): (Vec<(String, String, String)>, Vec<String>) = {
+        let g = index().lock().map_err(|_| Error::msg("internal error"))?;
+        let ix = g.as_ref().filter(|i| i.root == root).ok_or_else(|| Error::msg("Open Music first so the folder is read."))?;
+        let mut seen = std::collections::HashSet::new();
+        let albums = ix
+            .tracks
+            .iter()
+            .filter(|t| !ix.covers.contains_key(&t.album_key) && seen.insert(t.album_key.clone()))
+            .map(|t| (t.album_key.clone(), t.artist.clone(), t.album.clone()))
+            .collect();
+        let mut names: Vec<String> = ix.tracks.iter().map(|t| t.artist.clone()).filter(|a| !ix.artists.contains_key(&key_of(a)) && a != "Unknown artist").collect();
+        names.sort();
+        names.dedup();
+        (albums, names)
+    };
+    crate::cancel::begin("musicart");
+    let total = albums.len() + artists.len();
+    let covers_dir = lib_dir(&root).join("covers");
+    let artists_dir = lib_dir(&root).join("artists");
+    let _ = std::fs::create_dir_all(&covers_dir);
+    let _ = std::fs::create_dir_all(&artists_dir);
+    let mut res = ArtResult { covers: 0, artists: 0, missing_covers: 0 };
+    let pause = || tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(1100)));
+    for (i, (key, artist, album)) in albums.iter().enumerate() {
+        crate::cancel::check("musicart")?;
+        let _ = app.emit("music-art-progress", serde_json::json!({ "done": i, "total": total, "label": format!("{artist} · {album}") }));
+        match find_cover(artist, album).await {
+            Some((bytes, ext)) => {
+                let f = covers_dir.join(format!("{key}.{ext}"));
+                if std::fs::write(&f, bytes).is_ok() {
+                    res.covers += 1;
+                    if let Ok(mut g) = index().lock() {
+                        if let Some(ix) = g.as_mut() {
+                            ix.covers.insert(key.clone(), f);
+                        }
+                    }
+                }
+            }
+            None => res.missing_covers += 1,
+        }
+        let _ = pause().await;
+    }
+    for (i, name) in artists.iter().enumerate() {
+        crate::cancel::check("musicart")?;
+        let _ = app.emit("music-art-progress", serde_json::json!({ "done": albums.len() + i, "total": total, "label": name }));
+        if let Some((bytes, ext)) = find_artist(name).await {
+            let f = artists_dir.join(format!("{}.{ext}", key_of(name)));
+            if std::fs::write(&f, bytes).is_ok() {
+                res.artists += 1;
+                if let Ok(mut g) = index().lock() {
+                    if let Some(ix) = g.as_mut() {
+                        ix.artists.insert(key_of(name), f);
+                    }
+                }
+            }
+        }
+        let _ = pause().await;
+    }
+    // Next start shows them straight from the library file.
+    let r2 = root.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let ix = scan(&r2, true);
+        if let Ok(mut g) = index().lock() {
+            *g = Some(ix);
+        }
+    })
+    .await;
+    Ok(res)
 }

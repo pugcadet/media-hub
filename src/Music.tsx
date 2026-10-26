@@ -6,7 +6,7 @@ import { api, errorText, imageUrl, MusicItem, Status } from "./api";
 import { HubSwitcher } from "./Sidebar";
 import { fmt } from "./Intros";
 import { Icon, openMenu, type MenuItem } from "./ui";
-import { logProblem, track } from "./activity";
+import { followEvent, logProblem, track } from "./activity";
 import { listen } from "@tauri-apps/api/event";
 
 type Tab = "recent" | "albums" | "artists" | "favorites";
@@ -349,6 +349,36 @@ export default function Music({ status }: { status: Status }) {
     const un = listen("music-updated", () => setQuiet((n) => n + 1));
     return () => void un.then((f) => f());
   }, []);
+  /** Album covers and artist pictures: online for a music folder, through Jellyfin's own sources otherwise. */
+  function findArt() {
+    if (source?.source === "folder") {
+      void track("Finding album covers and artist pictures", async (job) => {
+        const un = await followEvent(job, "music-art-progress");
+        try {
+          const r = await api.musicFetchArt();
+          job.update(`${r.covers} covers, ${r.artists} artist pictures found${r.missingCovers ? ` · ${r.missingCovers} albums have none online` : ""}`, 1);
+        } finally {
+          un();
+        }
+        setSrcN((x) => x + 1);
+      }, { reload: false, stop: "musicart" }).catch((e) => setError(errorText(e)));
+      return;
+    }
+    void track("Finding missing album and artist art in Jellyfin", async (job) => {
+      const albums = (await api.musicList("albums", null, null, 0, 5000)).filter((a) => !a.hasArt);
+      const artists = (await api.musicList("artists", null, null, 0, 5000)).filter((a) => !a.hasArt);
+      const all = [...albums, ...artists];
+      let n = 0;
+      for (const [i, m] of all.entries()) {
+        if (job.cancelled) break;
+        job.update(m.name, i / Math.max(1, all.length));
+        n += (await api.fillMissingArt(m.id, ["Primary"]).catch(() => [])).length;
+      }
+      job.update(`${n} pictures added (Jellyfin uses MusicBrainz and TheAudioDB)`, 1);
+      setSrcN((x) => x + 1);
+    }, { reload: false, cancellable: true }).catch((e) => setError(errorText(e)));
+  }
+
   function refresh() {
     if (source?.source === "folder") {
       void track("Reading the music folder", async (job) => {
@@ -420,6 +450,7 @@ export default function Music({ status }: { status: Status }) {
           <button className={source?.source === "folder" ? "on" : ""} onClick={() => void useFolder(false)}>Music folder</button>
         </div>
         {source?.source === "folder" && <button className="icon-btn" title={`Music folder: ${source.folder}. Click to choose another.`} aria-label="Choose music folder" onClick={() => void useFolder(true)}><Icon name="folder" /></button>}
+        <button className="icon-btn" title="Find missing album covers and artist pictures online (MusicBrainz, Deezer)" aria-label="Find covers" onClick={findArt}><Icon name="image" /></button>
         <button className="icon-btn" title={source?.source === "folder" ? "Read the music folder again (new songs, tags, covers)" : "Reload"} aria-label="Refresh music" onClick={refresh}><Icon name="reload" /></button>
         <label className="searchbox w-search"><Icon name="search" /><input placeholder="Search music" value={query} onChange={(e) => { setQuery(e.target.value); setOpen(null); }} /></label>
       </header>

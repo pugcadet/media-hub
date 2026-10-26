@@ -391,7 +391,17 @@ pub async fn fill_missing_art(state: State<'_, AppState>, id: String, kinds: Vec
             continue;
         }
         let options = w.reader().remote_images(&id, kind).await.unwrap_or_default();
-        let Some(url) = best_image(&options, kind, &lang) else { continue };
+        let Some(url) = best_image(&options, kind, &lang) else {
+            // No thumbnail anywhere online: the background picture is the same shape, use it.
+            if kind == "Thumb" {
+                match thumb_from_backdrop(&state, &w, &id).await {
+                    Ok(true) => added.push(kind.to_string()),
+                    Ok(false) => {}
+                    Err(e) => failed.push(e.to_string()),
+                }
+            }
+            continue;
+        };
         if crate::images::allowed_remote(&url).is_none() {
             continue;
         }
@@ -416,6 +426,30 @@ pub async fn fill_missing_art(state: State<'_, AppState>, id: String, kinds: Vec
         crate::images::forget(&state.dir, &id);
     }
     Ok(added)
+}
+
+/// Makes the thumbnail (landscape picture) from the main background. False when there's no background.
+async fn thumb_from_backdrop(state: &AppState, w: &crate::jellyfin::Writer, id: &str) -> Result<bool> {
+    let Some((bytes, ct)) = w.reader().image_original(id, "Backdrop", 0).await? else { return Ok(false) };
+    let entry = state.store()?.journal_add("image", &format!("{id}|Thumb|0"), "", "from-backdrop")?;
+    if let Err(e) = w.upload_image(id, "Thumb", 0, &bytes, &ct).await {
+        state.store()?.journal_delete(entry)?;
+        return Err(Error::msg(save_hint(&e.to_string())));
+    }
+    Ok(true)
+}
+
+/// "Use the background picture" for a missing thumbnail.
+#[tauri::command]
+pub async fn make_thumb(state: State<'_, AppState>, id: String) -> Result<bool> {
+    check_id(&id)?;
+    let w = state.writer().await?;
+    let done = thumb_from_backdrop(&state, &w, &id).await?;
+    if done {
+        lock_after_edit(&state, &w, &id).await;
+        resync(&state, &id).await;
+    }
+    Ok(done)
 }
 
 /// Jellyfin failing to save a picture is nearly always about where it saves it.

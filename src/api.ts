@@ -772,6 +772,11 @@ export const api = {
   fillMissingArt: (id: string, kinds: ImageKind[], lang: string | null = null) => artChange(id, invoke<string[]>("fill_missing_art", { id, kinds, lang })),
   imagesRevalidate: () => invoke<void>("images_revalidate"),
   /** A title whose id changed (folder renamed): its new id, found by name and year. */
+  makeThumb: (id: string) => artChange(id, invoke<boolean>("make_thumb", { id })),
+  structureScan: () => invoke<import("./Structure").TopFolder[]>("structure_scan"),
+  structurePlan: (actions: { kind: string; path: string }[]) => invoke<{ planId: string; ops: PlanOp[] }>("structure_plan", { actions }),
+  pluginsInstalled: () => invoke<{ name: string; version: string; status: string }[]>("plugins_installed"),
+  runIntroSkipper: () => invoke<string>("run_intro_skipper"),
   findMoved: (id: string) => invoke<string | null>("find_moved", { id }),
   collectionFolderPlan: (id: string, name: string | null) => invoke<{ planId: string; folder: string; ops: PlanOp[]; skipped: string[] }>("collection_folder_plan", { id, name }),
   collectionRelink: (id: string, movies: [string, number | null][]) => invoke<void>("collection_relink", { id, movies }),
@@ -820,6 +825,7 @@ export const api = {
   subtitleSync: (id: string, index: number, apply: boolean) =>
     invoke<{ fit: SyncFit; sure: boolean; applied: boolean; file: string }>("subtitle_sync", { id, index, apply }),
   musicRescan: () => invoke<number>("music_rescan"),
+  musicFetchArt: () => invoke<{ covers: number; artists: number; missingCovers: number }>("music_fetch_art"),
   musicList: (view: string, parent: string | null, query: string | null, start: number, limit: number) =>
     invoke<MusicItem[]>("music_list", { view, parent, query, start, limit }),
   musicPlay: (id: string) => invoke<string>("music_play", { id }),
