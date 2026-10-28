@@ -547,7 +547,7 @@ export interface ImportSource {
   isFolder: boolean;
   files: { rel: string; size: number; video: boolean }[];
   totalBytes: number;
-  kind: "tv" | "movie";
+  kind: "tv" | "movie" | "music";
   title: string;
   year: number | null;
 }
@@ -797,6 +797,8 @@ export const api = {
   episodeRenumber: (id: string, season: number, episode: number) =>
     invoke<{ batch: string; done: number; failed: string[]; stopped: boolean }>("episode_renumber", { id, season, episode }),
   artSearch: (query: string, kind: ImageKind) => invoke<RemoteImage[]>("art_search", { query, kind }),
+  introSkipperLibraries: () => invoke<{ installed: boolean; available: string[]; selected: string[]; all: boolean }>("intro_skipper_libraries"),
+  setIntroSkipperLibraries: (names: string[]) => invoke<void>("set_intro_skipper_libraries", { names }),
   missingLanguage: (lang: string, codes: string[]) =>
     invoke<{ Items: JfChild[]; TotalRecordCount: number }>("missing_language", { lang, codes }),
   missingSubtitles: (start: number, limit: number) =>

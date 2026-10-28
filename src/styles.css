@@ -2001,3 +2001,28 @@ label.check > span { white-space: nowrap; }
 .player button.p-ic { opacity: 1 !important; visibility: visible !important; color: #fff; }
 .player button.p-ic:hover:not(:disabled) { background: rgba(255,255,255,.16) !important; transform: scale(1.12); color: #fff; }
 .player button.p-ic.on { color: var(--accent-on); }
+.order-list { display: flex; flex-direction: column; gap: 4px; max-width: 460px; }
+.order-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.rot-up { display: inline-flex; transform: rotate(-90deg); }
+.rot-down { display: inline-flex; transform: rotate(90deg); }
+/* Pages use the whole width (no empty strip on the right of big screens). */
+.pg { max-width: none; }
+.settings-page { max-width: 1200px; }
+
+/* Processes (click the top bar) */
+.topbar { position: relative; }
+button.jobs-btn { all: unset; flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-radius: 10px; cursor: pointer; overflow: hidden; }
+button.jobs-btn:hover, button.jobs-btn.on { background: rgba(255,255,255,.05); }
+.proc { position: absolute; top: calc(100% + 6px); left: 12px; right: 12px; max-width: 980px; height: min(520px, 70vh); z-index: 250; display: grid; grid-template-columns: 320px 1fr; background: var(--panel2); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.5); overflow: hidden; }
+.proc-list { border-right: 1px solid var(--line); overflow: auto; padding: 6px; }
+.proc-head { padding: 8px 10px; }
+button.proc-row { all: unset; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; width: 100%; box-sizing: border-box; }
+button.proc-row:hover { background: rgba(255,255,255,.05); }
+button.proc-row.on { background: var(--accent-soft); }
+.proc-dot { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 18px; }
+.proc-dot.done { background: rgba(52,199,123,.2); color: #4ade80; }
+.proc-dot.failed { background: rgba(238,123,110,.2); color: var(--red); }
+.proc-dot.stopped { background: rgba(240,180,76,.2); color: var(--amber); }
+.proc-detail { padding: 14px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+.proc-steps { overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.proc-step { display: flex; gap: 10px; }

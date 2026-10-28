@@ -187,6 +187,8 @@ pub fn run() {
             sub_cmds::subtitle_auto,
             sub_cmds::missing_language,
             renumber::episode_renumber,
+            backend::intro_skipper_libraries,
+            backend::set_intro_skipper_libraries,
             sub_cmds::local_subtitles,
             sub_cmds::adopt_subtitles,
             seg_cmds::segments_overview,

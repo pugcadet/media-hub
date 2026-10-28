@@ -67,6 +67,17 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
         .map_err(|e| Error::msg(format!("Background task failed: {e}")))?
 }
 
+/// Music files (albums are added as they are).
+pub fn is_audio(name: &str) -> bool {
+    let e = split_ext(name).1.to_lowercase();
+    matches!(e.as_str(), "mp3" | "flac" | "m4a" | "aac" | "ogg" | "opus" | "wav" | "alac" | "aiff" | "aif" | "wma")
+}
+
+fn is_cover(name: &str) -> bool {
+    let e = split_ext(name).1.to_lowercase();
+    matches!(e.as_str(), "jpg" | "jpeg" | "png" | "webp") || e == "cue" || e == "lrc"
+}
+
 fn walk(base: &Path, dir: &Path, out: &mut Vec<ImportFile>, depth: usize) {
     if depth > 6 {
         return;
@@ -86,7 +97,7 @@ fn walk(base: &Path, dir: &Path, out: &mut Vec<ImportFile>, depth: usize) {
         }
         if ft.is_dir() {
             walk(base, &p, out, depth + 1);
-        } else if ft.is_file() && (is_video(&name) || is_sidecar(&name)) {
+        } else if ft.is_file() && (is_video(&name) || is_sidecar(&name) || is_audio(&name) || is_cover(&name)) {
             let rel = p.strip_prefix(base).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or(name.clone());
             let size = e.metadata().map(|m| m.len()).unwrap_or(0);
             out.push(ImportFile { rel, size, video: is_video(&name) });
@@ -115,9 +126,19 @@ pub(crate) fn describe(path: &Path) -> Result<ImportSource> {
         }
         files.sort_by(|a, b| a.rel.cmp(&b.rel));
     }
-    if !files.iter().any(|f| f.video) {
-        return Err(Error::msg("No videos found there."));
+    let audio = files.iter().filter(|f| is_audio(&f.rel)).count();
+    if !files.iter().any(|f| f.video) && audio == 0 {
+        return Err(Error::msg("No videos or music found there."));
     }
+    if audio > 0 && !files.iter().any(|f| f.video) {
+        // Music: the folder is added as it is ("Artist - Album").
+        let source_name = if is_folder { name.clone() } else { split_ext(&name).0.to_string() };
+        let parsed = parse_name(&source_name);
+        let total_bytes = files.iter().map(|f| f.size).sum();
+        return Ok(ImportSource { name, is_folder, files, total_bytes, kind: "music", title: parsed.title, year: parsed.year });
+    }
+    // Pictures in a video folder are left where they are (they're not posters Jellyfin uses).
+    files.retain(|f| f.video || is_sidecar(&f.rel));
     let episodes = files
         .iter()
         .filter(|f| f.video)
@@ -136,7 +157,7 @@ pub(crate) fn describe(path: &Path) -> Result<ImportSource> {
 pub async fn import_pick(app: AppHandle, folder: bool) -> Result<Option<ImportSource>> {
     let picked = blocking(move || {
         let d = app.dialog().file();
-        Ok(if folder { d.blocking_pick_folder() } else { d.add_filter("Video", &["mkv", "mp4", "m4v", "avi", "mov", "ts", "wmv", "webm"]).blocking_pick_file() })
+        Ok(if folder { d.blocking_pick_folder() } else { d.add_filter("Video or music", &["mkv", "mp4", "m4v", "avi", "mov", "ts", "wmv", "webm", "mp3", "flac", "m4a", "ogg", "opus", "wav"]).blocking_pick_file() })
     })
     .await?;
     let Some(fp) = picked else { return Ok(None) };

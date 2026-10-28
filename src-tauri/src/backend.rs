@@ -477,3 +477,48 @@ pub async fn run_intro_skipper(state: State<'_, AppState>) -> Result<String> {
     w.run_task(&id).await?;
     Ok(s(task, "Name").to_string())
 }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkipperLibs {
+    installed: bool,
+    available: Vec<String>,
+    selected: Vec<String>,
+    all: bool,
+}
+
+/// Which libraries Jellyfin's Intro Skipper looks at (its "Limit analysis to libraries" option).
+#[tauri::command]
+pub async fn intro_skipper_libraries(state: State<'_, AppState>) -> Result<SkipperLibs> {
+    let c = state.reader().await?;
+    let available: Vec<String> = c.views().await?.into_iter().filter(|v| v.2 != "movies").map(|v| v.1).collect();
+    let Some(id) = c.plugin_id("intro skipper").await? else {
+        return Ok(SkipperLibs { installed: false, available, selected: vec![], all: true });
+    };
+    let cfg = c.plugin_config(&id).await?;
+    let selected: Vec<String> = cfg
+        .get("SelectedLibraries")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .split(',')
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect();
+    let all = cfg.get("SelectAllLibraries").and_then(Value::as_bool).unwrap_or(selected.is_empty());
+    Ok(SkipperLibs { installed: true, available, selected, all })
+}
+
+/// Sets those libraries (empty = all of them). Only these two options are changed.
+#[tauri::command]
+pub async fn set_intro_skipper_libraries(state: State<'_, AppState>, names: Vec<String>) -> Result<()> {
+    let w = state.writer().await?;
+    let id = w.reader().plugin_id("intro skipper").await?.ok_or_else(|| Error::msg("The Intro Skipper plugin isn't installed in Jellyfin."))?;
+    let mut cfg = w.reader().plugin_config(&id).await?;
+    let clean: Vec<String> = names.into_iter().map(|n| n.replace(',', " ").trim().to_string()).filter(|n| !n.is_empty()).take(50).collect();
+    let obj = cfg.as_object_mut().ok_or_else(|| Error::msg("Intro Skipper's settings look different than expected."))?;
+    obj.insert("SelectedLibraries".into(), Value::String(clean.join(", ")));
+    if obj.contains_key("SelectAllLibraries") || clean.is_empty() {
+        obj.insert("SelectAllLibraries".into(), Value::Bool(clean.is_empty()));
+    }
+    w.set_plugin_config(&id, &cfg).await
+}

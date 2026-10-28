@@ -111,7 +111,7 @@ export default function Sidebar({ status, attention, route, onRoute }: Props) {
       {MENU.map((t) => item(t.view, t.label, t.icon, route.view === t.view || !!t.also?.includes(route.view), badge(t.view)))}
       <div className="spacer" />
       {!sidebarSmall && <UpdateBadge />}
-      {item("add", "Add show or movie", "plus", route.view === "add", badge("add"))}
+      {item("add", "Add", "plus", route.view === "add", badge("add"))}
       {item("settings", "Settings", "settings", route.view === "settings", status.readOnly ? "read-only" : "")}
       {!sidebarSmall && (
         <button className="sb-conn" onClick={() => onRoute({ view: "settings" })}>

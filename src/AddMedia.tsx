@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { SettingsLink } from "./ui";
+import { Icon, SettingsLink } from "./ui";
+import { PageHead, Seg } from "./kit";
 import { listen } from "@tauri-apps/api/event";
 import { api, errorText, ImportSource, InboxEntry, remoteImageUrl, SearchResult, Status } from "./api";
 import { track, useEpoch } from "./activity";
@@ -35,7 +36,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export default function AddMedia({ status, onChanged }: { status: Status; onChanged: () => void }) {
   const [src, setSrc] = useState<ImportSource | null>(null);
-  const [kind, setKind] = useState<"tv" | "movie">("tv");
+  const [kind, setKind] = useState<"tv" | "movie" | "music">("tv");
+  const [review, setReview] = useState<{ folder: string; n: number } | null>(null);
   const [title, setTitle] = useState("");
   const [year, setYear] = useState("");
   const [results, setResults] = useState<SearchResult[] | null>(null);
@@ -62,7 +64,9 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
     setYear(s.year ? String(s.year) : "");
     setChosen(null);
     setDone(null);
-    void search(s.kind, s.title, s.year ? String(s.year) : "");
+    setReview(null);
+    if (s.kind !== "music") void search(s.kind, s.title, s.year ? String(s.year) : "");
+    else setResults([]);
   }
 
   useEffect(() => {
@@ -72,7 +76,7 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
     const saved = loadDest()[kind];
     if (saved && folders.some((f) => f.name === saved)) setDest(saved);
     else {
-      const guess = folders.find((f) => (kind === "tv" ? /tv|show|serie/i : /movie|film/i).test(f.name));
+      const guess = folders.find((f) => (kind === "tv" ? /tv|show|serie/i : kind === "music" ? /music|muziek|audio/i : /movie|film/i).test(f.name));
       setDest(guess?.name ?? folders[0]?.name ?? "");
     }
   }, [kind, folders]);
@@ -90,7 +94,7 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
   }
 
   async function search(k = kind, t = title, y = year) {
-    if (!t.trim()) return;
+    if (!t.trim() || k === "music") return;
     setResults(null);
     try {
       const r = await api.identifySearch(k === "tv" ? "series" : "movie", t.trim(), y ? Number(y) : null, {});
@@ -134,14 +138,24 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
         } finally {
           un();
         }
-        // Name the files inside, like the renamer would.
+        if (kind === "music") {
+          job.update("Asking Jellyfin to scan", null);
+          await api.scanFolders([folder]).catch(() => undefined);
+          setDone(`Added to ${folder}. Jellyfin adds it to your music after its scan.`);
+          return;
+        }
+        // Name the files inside, like the renamer would. Only names it's sure about are
+        // done right away; the rest you check one by one in the Renamer.
         job.update("Naming the files", null);
         const plan = await api.plan({
           mode: kind, folder, template: kind === "tv" ? withShowYear(STYLE.tv) : STYLE.movie, show: kind === "tv" ? name : null, year: y, yearOptional: yearOptional(),
           findReplace: [], recursive: true, source: "auto", matchId: null, renameFolder: false, seasonFolders: true,
         });
-        const ok = plan.ops.filter((o) => o.status === "ok").map((o) => o.from);
+        const sure = (o: (typeof plan.ops)[number]) => o.kind !== "video" || (o.verified && (o.score == null || o.score >= 100));
+        const ok = plan.ops.filter((o) => o.status === "ok" && sure(o)).map((o) => o.from);
+        const unsure = plan.ops.filter((o) => (o.status === "ok" && !sure(o)) || o.status === "unparsed").length;
         if (ok.length) await api.apply(plan.planId, true, ok);
+        if (unsure) setReview({ folder, n: unsure });
         // Tell Jellyfin, then wait for it to show up.
         job.update("Asking Jellyfin to scan", null);
         await api.scanFolders([folder]).catch(() => undefined);
@@ -179,7 +193,7 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
   if (!status.libraryRoot) {
     return (
       <div className="pg">
-        <div className="pg-head"><h1>Add a show or movie</h1></div>
+        <PageHead title="Add" sub="Shows, movies and music, put in the right place with the right names." />
         <div className="card form narrow-card">
           <p className="muted">First choose your library folder (the NAS share as this computer sees it).</p>
           <button className="primary" onClick={() => void api.pickRoot().then(onChanged)}>Choose library folder</button>
@@ -190,14 +204,16 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
 
   return (
     <div className="pg">
-      <div className="pg-head">
-        <div>
-          <h1>Add a show or movie</h1>
-          <div className="muted small">Lands in the right folder with the right name, gets linked and gets its artwork, so it shows up properly in Jellyfin and Infuse.</div>
-        </div>
-      </div>
+      <PageHead title="Add" sub="Shows, movies and music: put in the right folder with the right names, linked and with artwork, so Jellyfin and Infuse show them properly." />
       {error && <p className="error">{error}</p>}
       {done && <p className="note">{done}</p>}
+      {review && (
+        <div className="note-bar">
+          <Icon name="rename" />
+          <span className="grow small">{review.n} file name{review.n === 1 ? "" : "s"} weren't certain, so they were left as they are. Check them one by one:</span>
+          <button className="primary" onClick={() => nav.route({ view: "renamer", folder: review.folder })}>Review names</button>
+        </div>
+      )}
 
       <section className="card form">
         <div className="section-head">
@@ -215,7 +231,7 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
             <div className="names">
               <div className="strong ellipsis">{e.name}</div>
               <div className="muted small">
-                Looks like {e.source.kind === "tv" ? "a show" : "a movie"}: {e.source.title}{e.source.year ? ` (${e.source.year})` : ""} · {e.source.files.filter((f) => f.video).length} video{e.source.files.filter((f) => f.video).length === 1 ? "" : "s"} · {size(e.source.totalBytes)}
+                Looks like {e.source.kind === "tv" ? "a show" : e.source.kind === "music" ? "music" : "a movie"}: {e.source.title}{e.source.year ? ` (${e.source.year})` : ""} · {e.source.files.filter((f) => f.video).length} video{e.source.files.filter((f) => f.video).length === 1 ? "" : "s"} · {size(e.source.totalBytes)}
               </div>
             </div>
             <button className={fromInbox === e.name ? "primary" : ""} onClick={() => void api.inboxSelect(e.name).then((s) => chooseSource(s, e.name)).catch((err) => setError(errorText(err)))}>{fromInbox === e.name ? "Selected" : "Add…"}</button>
@@ -245,11 +261,8 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
         <section className="card form">
           <div className="picker-head">
             <span className="step-dot">2</span>
-            <div className="strong grow">Which {kind === "tv" ? "show" : "movie"} is it?</div>
-            <div className="seg">
-              <button className={kind === "tv" ? "on" : ""} onClick={() => { setKind("tv"); void search("tv"); }}>Show</button>
-              <button className={kind === "movie" ? "on" : ""} onClick={() => { setKind("movie"); void search("movie"); }}>Movie</button>
-            </div>
+            <div className="strong grow">{kind === "music" ? "Which album or artist is it?" : `Which ${kind === "tv" ? "show" : "movie"} is it?`} <span className="muted small thin">(detected automatically, change it if it's wrong)</span></div>
+            <Seg value={kind} onChange={(k) => { setKind(k); void search(k); }} options={[{ id: "tv", label: "Show" }, { id: "movie", label: "Movie" }, { id: "music", label: "Music" }]} />
           </div>
           <div className="row">
             <label>Title<input value={title} onChange={(e) => { setTitle(e.target.value); setChosen(null); }} onKeyDown={(e) => e.key === "Enter" && void search()} /></label>
@@ -293,14 +306,14 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
           <div className="add-preview mono small">
             <div className="muted">{status.libraryRoot}/{dest}/</div>
             <div className="ok">{title.trim() || "…"}{year ? ` (${year})` : ""}/</div>
-            <div className="muted">{kind === "tv" ? "  Season 01/  …  S01E01 - Episode title.mkv" : `  ${title.trim() || "…"}${year ? ` (${year})` : ""}.mkv`}</div>
+            <div className="muted">{kind === "music" ? "  (the files as they are)" : kind === "tv" ? "  Season 01/  …  S01E01 - Episode title.mkv" : `  ${title.trim() || "…"}${year ? ` (${year})` : ""}.mkv`}</div>
           </div>
           <div className="applybar">
             <div className="grow muted small">
               Nothing is overwritten; files that are already there are skipped.
               {status.readOnly ? <> Linking and artwork need changes switched on (<SettingsLink section="changes">turn them on</SettingsLink>); the files are still put in place.</> : " After Jellyfin finds it, the match is linked and missing artwork is filled in."}
             </div>
-            <button className="primary" disabled={!!busy || !title.trim() || !dest} onClick={() => void run()}>{busy ?? `Add ${kind === "tv" ? "show" : "movie"}`}</button>
+            <button className="primary" disabled={!!busy || !title.trim() || !dest} onClick={() => void run()}>{busy ?? `Add ${kind === "tv" ? "show" : kind === "music" ? "music" : "movie"}`}</button>
           </div>
         </section>
       )}

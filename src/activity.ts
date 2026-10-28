@@ -117,9 +117,11 @@ export async function track<T>(label: string, work: (job: JobHandle) => Promise<
       : undefined,
   };
   jobs = [...jobs, job];
+  logStart(id, label);
   notify();
   function patch(p: Partial<Job>) {
     jobs = jobs.map((j) => (j.id === id ? { ...j, ...p } : j));
+    logPatch(id, p);
     notify();
   }
   const handle: JobHandle = {
@@ -157,6 +159,50 @@ export async function track<T>(label: string, work: (job: JobHandle) => Promise<
       notify();
     }, failed ? 9000 : 2500);
   }
+}
+
+/* ------------------------------------------------------------ processes */
+
+/** What every job did (newest first), for the processes view behind the top bar. */
+export interface JobRecord {
+  id: number;
+  label: string;
+  started: number;
+  ended: number | null;
+  state: "running" | "done" | "failed" | "stopped";
+  detail: string;
+  progress: number | null;
+  /** The steps it went through (its last 60 messages). */
+  steps: { at: number; text: string }[];
+  error: string | null;
+}
+let jobLog: JobRecord[] = [];
+const jobLogSubs = new Set<() => void>();
+function logStart(id: number, label: string) {
+  jobLog = [{ id, label, started: Date.now(), ended: null, state: "running" as const, detail: "", progress: null, steps: [], error: null }, ...jobLog].slice(0, 100);
+  jobLogSubs.forEach((f) => f());
+}
+function logPatch(id: number, p: Partial<Job>) {
+  jobLog = jobLog.map((r) => {
+    if (r.id !== id) return r;
+    const steps = p.detail && p.detail !== r.detail ? [...r.steps, { at: Date.now(), text: p.detail }].slice(-60) : r.steps;
+    const state: JobRecord["state"] = p.error ? "failed" : p.done ? (/^Stopped/.test(p.detail ?? "") ? "stopped" : "done") : r.state;
+    return { ...r, detail: p.detail ?? r.detail, progress: p.progress ?? r.progress, error: p.error ?? r.error, steps, state, ended: p.done ? Date.now() : r.ended };
+  });
+  jobLogSubs.forEach((f) => f());
+}
+export function useJobLog(): JobRecord[] {
+  return useSyncExternalStore(
+    (f) => {
+      jobLogSubs.add(f);
+      return () => jobLogSubs.delete(f);
+    },
+    () => jobLog,
+  );
+}
+/** The Stop button of a running job, if it has one. */
+export function stopJob(id: number): void {
+  jobs.find((j) => j.id === id)?.cancel?.();
 }
 
 export function dismiss(id: number): void {

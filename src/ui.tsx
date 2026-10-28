@@ -2,7 +2,7 @@
 // and the activity bar at the top of the window.
 import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Alert, api, bumpArt, Card, errorText, imageUrl } from "./api";
-import { clearDataCaches, dismiss, followEvent, isStopped, track, useEpoch, useJobs } from "./activity";
+import { clearDataCaches, followEvent, isStopped, stopJob, track, useEpoch, useJobLog, useJobs, type JobRecord } from "./activity";
 import { nav } from "./nav";
 import { prefs as usePrefsLiteSnapshot, setPrefs as setPrefsLite, usePrefs as usePrefsLite } from "./prefs";
 
@@ -587,26 +587,25 @@ function Alerts() {
 export function ActivityBar({ left }: { left?: ReactNode } = {}) {
   const jobs = useJobs();
   const [spin, setSpin] = useState(false);
+  const [open, setOpen] = useState(false);
   const running = jobs.filter((j) => !j.done);
   return (
     <div className="topbar">
       {left}
-      <div className="jobs">
-        {jobs.length === 0 && <span className="muted small">Ready</span>}
+      <button className={`jobs jobs-btn ${open ? "on" : ""}`} onClick={() => setOpen(!open)} title="What Media Hub is doing (click for details)">
+        {jobs.length === 0 && <span className="muted small">Ready · click to see what ran</span>}
         {jobs.slice(-3).map((j) => (
-          <div key={j.id} className={`job ${j.done ? (j.error ? "failed" : "done") : ""}`} title={j.error ?? j.detail}>
+          <span key={j.id} className={`job ${j.done ? (j.error ? "failed" : "done") : ""}`} title={j.error ?? j.detail}>
             {!j.done && <span className="spinner" />}
             {j.done && !j.error && <span className="ok"><Icon name="check" size={14} /></span>}
             <span className="strong small">{j.label}</span>
             <span className={`small ellipsis ${j.error ? "bad" : "muted"}`}>{j.error ?? j.detail}</span>
             {!j.done && j.progress != null && <span className="job-pct mono small">{Math.round(j.progress * 100)}%</span>}
             {!j.done && <span className={`job-bar ${j.progress == null ? "busy" : ""}`}><span style={{ width: j.progress == null ? undefined : `${Math.round(j.progress * 100)}%` }} /></span>}
-            {j.cancel && !j.done && <button className="job-stop" onClick={j.cancel} title="Stop" aria-label="Stop"><Icon name="stop" size={10} /> Stop</button>}
-            {j.error && <button className="link-plain small" onClick={() => dismiss(j.id)} aria-label="Dismiss"><Icon name="x" size={12} /></button>}
-          </div>
+          </span>
         ))}
         {running.length > 3 && <span className="muted small">+{running.length - 3} more</span>}
-      </div>
+      </button>
       <Alerts />
       <button
         className={`icon-btn ${spin ? "spinning" : ""}`}
@@ -619,6 +618,60 @@ export function ActivityBar({ left }: { left?: ReactNode } = {}) {
       >
         <Icon name="reload" />
       </button>
+      {open && <Processes onClose={() => setOpen(false)} />}
+    </div>
+  );
+}
+
+/** Every job of this session: what it's doing now, each step it took, and why it failed. */
+function Processes({ onClose }: { onClose: () => void }) {
+  const log = useJobLog();
+  const [sel, setSel] = useState<number | null>(log[0]?.id ?? null);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node) && !(e.target as HTMLElement).closest?.(".jobs-btn")) onClose(); };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", esc);
+    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", esc); };
+  }, [onClose]);
+  const r = log.find((x) => x.id === sel) ?? null;
+  const time = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const took = (x: JobRecord) => { const s = Math.round(((x.ended ?? Date.now()) - x.started) / 1000); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`; };
+  return (
+    <div className="proc" ref={ref}>
+      <div className="proc-list">
+        <div className="proc-head strong small">This session</div>
+        {log.length === 0 && <p className="muted small pad">Nothing has run yet.</p>}
+        {log.map((x) => (
+          <button key={x.id} className={`proc-row ${sel === x.id ? "on" : ""}`} onClick={() => setSel(x.id)}>
+            <span className={`proc-dot ${x.state}`}>{x.state === "running" ? <span className="spinner small-spin" /> : <Icon name={x.state === "failed" ? "x" : x.state === "stopped" ? "stop" : "check"} size={11} />}</span>
+            <span className="grow ellipsis">{x.label}</span>
+            <span className="muted small mono">{time(x.started)}</span>
+          </button>
+        ))}
+      </div>
+      <div className="proc-detail">
+        {!r ? <p className="muted small">Pick a job on the left.</p> : (
+          <>
+            <div className="row between">
+              <div>
+                <div className="strong">{r.label}</div>
+                <div className="muted small">{r.state === "running" ? "Running" : r.state === "failed" ? "Failed" : r.state === "stopped" ? "Stopped" : "Finished"} · started {time(r.started)} · {took(r)}</div>
+              </div>
+              {r.state === "running" && <button onClick={() => stopJob(r.id)}><Icon name="stop" size={12} /> Stop</button>}
+            </div>
+            {r.progress != null && r.state === "running" && <div className="progress"><div style={{ width: `${Math.round(r.progress * 100)}%` }} /></div>}
+            {r.error && <p className="error small">{r.error}</p>}
+            <div className="proc-steps">
+              {r.steps.length === 0 && <p className="muted small">No steps reported.</p>}
+              {[...r.steps].reverse().map((s, i) => (
+                <div key={i} className="proc-step"><span className="mono small muted">{time(s.at)}</span><span className="small">{s.text}</span></div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

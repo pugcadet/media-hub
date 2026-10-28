@@ -1004,6 +1004,14 @@ impl Writer {
         self.post(&format!("/Items/{id}/Images/{kind}/{index}/Index"), &[("newIndex", new_index.to_string())], None).await
     }
 
+    /// Saves a plugin's whole configuration (read it first with `plugin_config`).
+    pub async fn set_plugin_config(&self, id: &str, config: &serde_json::Value) -> Result<()> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        self.post(&format!("/Plugins/{id}/Configuration"), &[], Some(config)).await
+    }
+
     /// Makes a new collection and returns its id.
     pub async fn collection_create(&self, name: &str, ids: &[String]) -> Result<String> {
         let name = name.trim();
@@ -1356,6 +1364,22 @@ impl Client {
                 (s("Name"), s("Version"), s("Status"))
             })
             .collect())
+    }
+
+    /// Id of the first installed plugin whose name matches.
+    pub async fn plugin_id(&self, name_has: &str) -> Result<Option<String>> {
+        let v: serde_json::Value = self.get_json("/Plugins", &[]).await?;
+        Ok(v.as_array().into_iter().flatten().find_map(|p| {
+            let n = p.get("Name")?.as_str()?.to_lowercase();
+            n.contains(name_has).then(|| p.get("Id")?.as_str().map(|x| x.replace('-', "")))?
+        }))
+    }
+
+    pub async fn plugin_config(&self, id: &str) -> Result<serde_json::Value> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        self.get_json(&format!("/Plugins/{id}/Configuration"), &[]).await
     }
 
     /// Playlists of the chosen user.

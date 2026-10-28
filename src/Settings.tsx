@@ -10,6 +10,7 @@ import { FolderPicker } from "./Picks";
 import { runDaily, syncPicks } from "./scheduler";
 import { clearProblems, followEvent, track, useEpoch, useProblems } from "./activity";
 import { Icon, TriCheck, type IconName, type TriState } from "./ui";
+import { foldersOf, useFolderMap } from "./folders";
 
 const TITLE_LANGS: [string, string][] = [["en-US", "English"], ["nl-NL", "Nederlands"], ["de-DE", "Deutsch"], ["fr-FR", "Français"], ["es-ES", "Español"], ["it-IT", "Italiano"]];
 const META_LANGS: [string, string, string][] = [["", "", "Server default"], ["en", "US", "English"], ["nl", "NL", "Nederlands"], ["de", "DE", "Deutsch"], ["fr", "FR", "Français"], ["es", "ES", "Español"], ["it", "IT", "Italiano"]];
@@ -20,6 +21,8 @@ const SECTIONS: { id: string; label: string; icon: IconName }[] = [
   { id: "look", label: "Look", icon: "image" },
   { id: "backend", label: "Jellyfin & Infuse", icon: "server" },
   { id: "folder", label: "Library folder", icon: "folder" },
+  { id: "folderorder", label: "Folder order", icon: "sort" },
+  { id: "intros", label: "Intros", icon: "skip" },
   { id: "player", label: "Player", icon: "play" },
   { id: "subtitles", label: "Subtitles", icon: "subtitles" },
   { id: "metadata", label: "Titles and art", icon: "image" },
@@ -165,6 +168,8 @@ export default function Settings({ status, onChanged, section }: { status: Statu
             <div className="row"><button onClick={() => void run(async () => { await api.pickRoot(); })}><Icon name="folder" /> {status.libraryRoot ? "Change folder" : "Choose folder"}</button></div>
           </Section>
 
+          <FolderOrderSettings />
+          <IntroSettings status={status} />
           <PlayerSettings status={status} />
           <SubtitleSettings status={status} onChanged={onChanged} />
 
@@ -195,6 +200,81 @@ export default function Settings({ status, onChanged, section }: { status: Statu
         </div>
       </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------- folder order */
+
+/** The order of your library folders, used by every tab row and list in the app. */
+function FolderOrderSettings() {
+  usePrefs();
+  const map = useFolderMap();
+  const names = foldersOf(map);
+  const move = (n: string, d: number) => {
+    const i = names.indexOf(n);
+    const j = i + d;
+    if (j < 0 || j >= names.length) return;
+    const next = [...names];
+    [next[i], next[j]] = [next[j], next[i]];
+    setPrefs({ folderOrder: next });
+  };
+  return (
+    <Section id="folderorder" title="Folder order" icon="sort" hint="The order your library folders appear in, everywhere in the app. You can also drag the folder tabs on any screen.">
+      {names.length === 0 && <p className="muted small">Folders appear here after the library check.</p>}
+      <div className="order-list">
+        {names.map((n, i) => (
+          <div key={n} className="order-row">
+            <span className="muted mono small">{i + 1}</span>
+            <Icon name="folder" />
+            <span className="grow">{n}</span>
+            <button className="icon-btn" disabled={i === 0} onClick={() => move(n, -1)} aria-label="Up" title="Move up"><span className="rot-up"><Icon name="chevron" size={14} /></span></button>
+            <button className="icon-btn" disabled={i === names.length - 1} onClick={() => move(n, 1)} aria-label="Down" title="Move down"><span className="rot-down"><Icon name="chevron" size={14} /></span></button>
+          </div>
+        ))}
+      </div>
+      {names.length > 1 && <div className="row"><button className="link small" onClick={() => setPrefs({ folderOrder: [] })}>A to Z again</button></div>}
+    </Section>
+  );
+}
+
+/* ------------------------------------------------------------- intros */
+
+/** Which libraries Jellyfin's Intro Skipper plugin looks at. */
+function IntroSettings({ status }: { status: Status }) {
+  const [info, setInfo] = useState<{ installed: boolean; available: string[]; selected: string[]; all: boolean } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => void api.introSkipperLibraries().then(setInfo).catch((e) => setError(errorText(e)));
+  useEffect(load, []);
+  async function save(names: string[]) {
+    setError(null);
+    try {
+      await track("Saving Intro Skipper's folders", () => api.setIntroSkipperLibraries(names));
+      load();
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  const on = (n: string) => !!info && (info.all || info.selected.includes(n));
+  return (
+    <Section id="intros" title="Intros" icon="skip" hint="Which libraries Jellyfin's Intro Skipper scans for intros and credits. Media Hub's own detection works on any show you open.">
+      {error && <p className="error">{error}</p>}
+      {!info && !error && <p className="muted small">Reading Intro Skipper's settings…</p>}
+      {info && !info.installed && <p className="muted small">The Intro Skipper plugin isn't installed in Jellyfin. Media Hub can still find intros itself (Intros and credits).</p>}
+      {info?.installed && (
+        <>
+          <div className="stack-s">
+            {info.available.map((n) => (
+              <Switch key={n} disabled={status.readOnly} checked={on(n)} onChange={(v) => {
+                const cur = info.all ? info.available : info.selected;
+                const next = v ? [...new Set([...cur, n])] : cur.filter((x) => x !== n);
+                void save(next.length === info.available.length ? [] : next);
+              }}>{n}</Switch>
+            ))}
+          </div>
+          <p className="muted small">{info.all ? "All libraries are scanned." : `Only ${info.selected.join(", ") || "none"}.`}{status.readOnly ? " Turn on changes to choose." : ""}</p>
+        </>
+      )}
+    </Section>
   );
 }
 
