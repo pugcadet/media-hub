@@ -665,10 +665,10 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
         onContextMenu={(e) => openMenu(e, [
           { label: playing ? "Pause" : "Play", run: toggle },
           { sep: true },
-          ...(info?.about ? [
-            { label: "Details (open in the Library)", run: () => { onClose(); setPrefs({ mode: "manage" }); nav.open(info.about.itemId); } },
-            ...(info.about.artId !== info.about.itemId ? [{ label: "Go to the show", run: () => { onClose(); setPrefs({ mode: "manage" }); nav.open(info.about.artId); } }] : []),
-          ] : []),
+          ...(info?.about ? ((a) => [
+            { label: "Details (open in the Library)", run: () => { onClose(); setPrefs({ mode: "manage" }); nav.open(a.itemId); } },
+            ...(a.artId !== a.itemId ? [{ label: "Go to the show", run: () => { onClose(); setPrefs({ mode: "manage" }); nav.open(a.artId); } }] : []),
+          ])(info.about) : []),
           { sep: true },
           { label: "Subtitles…", run: () => setPanel("subs") },
           { label: "Audio…", run: () => setPanel("audio") },

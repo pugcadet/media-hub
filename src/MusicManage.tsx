@@ -42,7 +42,7 @@ export default function MusicManage({ onChanged }: { onChanged: () => void }) {
     api.musicList("albums", null, null, 0, 5000).then(setAlbums).catch((e) => { setAlbums([]); setError(errorText(e)); });
     api.musicList("artists", null, null, 0, 5000).then(setArtists).catch(() => setArtists([]));
   }, [n]);
-  const todo = (albums ?? []).filter((a) => CHECKS.some((c) => !ok(a, c))).length;
+  const todo = (albums ?? []).filter((a) => CHECKS.some((c) => !ok(a, c.id))).length;
   return (
     <div className="pg studio-page m-manage">
       <div className="pg-head">
@@ -78,12 +78,12 @@ function AlbumsPane({ albums, changed }: { albums: MusicItem[] | null; changed: 
     const q = query.trim().toLowerCase();
     return list.filter((a) => (!q || a.name.toLowerCase().includes(q) || a.artist.toLowerCase().includes(q))
       && (!only || !ok(a, only))
-      && (filter === "all" || CHECKS.some((c) => !ok(a, c))));
+      && (filter === "all" || CHECKS.some((c) => !ok(a, c.id))));
   }, [list, query, only, filter]);
   const gaps = (c: Check) => list.filter((a) => !ok(a, c)).length;
   const status = (a: MusicItem): StatusIcon[] => CHECKS.map((c) => ({
-    icon: c.icon, label: c.label, ok: ok(a, c),
-    onClick: () => void (c === "cover" ? chooseMusicArt(a) : editMusicInfo(a)).then((done) => done && changed()),
+    icon: c.icon, label: c.label, ok: ok(a, c.id),
+    onClick: () => void (c.id === "cover" ? chooseMusicArt(a) : editMusicInfo(a)).then((done) => done && changed()),
   }));
   const items: StudioItem[] = shown.map((a) => ({
     id: a.id,

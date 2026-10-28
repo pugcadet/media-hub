@@ -2104,3 +2104,6 @@ button.proc-row.on { background: var(--accent-soft); }
 .has-mini .page, .has-mini .w-page { padding-bottom: 84px; }
 .studio-pic { display: inline-flex; flex: 0 0 auto; }
 .studio-pic.warn .m-art { border-color: var(--warn, #e0a83a); }
+.m-bar.empty { display: none; }
+.music .w-top .w-search { flex: 0 1 260px; min-width: 140px; }
+@media (max-width: 1250px) { .m-tabs button svg { display: none; } .m-tabs button { padding: 0 8px; } .music .w-top { gap: 10px; } }
