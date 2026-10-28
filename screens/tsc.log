@@ -1,0 +1,2 @@
+src/Player.tsx(666,118): error TS18048: 'info.about' is possibly 'undefined'.
+src/Player.tsx(667,149): error TS18048: 'info.about' is possibly 'undefined'.
