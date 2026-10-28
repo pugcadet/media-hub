@@ -3,7 +3,8 @@ import { api, Batch, errorText, JournalRow, Status } from "./api";
 import { track, useEpoch } from "./activity";
 import { askConfirm } from "./confirm";
 import { nav } from "./nav";
-import { Icon, SettingsLink } from "./ui";
+import { SettingsLink } from "./ui";
+import { KTabs, PageHead, SearchBox, Toolbar } from "./kit";
 
 export const KIND: Record<string, string> = {
   item_update: "Details", identify: "Identified", image: "Picture", image_removed: "Picture removed", collection: "Collection",
@@ -56,21 +57,15 @@ export default function History({ status }: { status: Status }) {
 
   return (
     <div className="pg">
-      <div className="pg-head">
-        <div>
-          <h1>History and undo</h1>
-          <div className="muted small">Every change Media Hub made: details, pictures, subtitles, markers, collections, renames, files moved to the trash folder.</div>
-        </div>
-      </div>
+      <PageHead title="History and undo" sub="Every change Media Hub made: details, pictures, subtitles, markers, collections, renames, files moved to the trash folder." />
       {status.readOnly && <p className="note">Undoing changes in Jellyfin needs changes switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
       {error && <p className="error">{error}</p>}
-      <div className="toolbar">
-        <div className="chips">
-          <button className={`chip ${!filter ? "on" : ""}`} onClick={() => setFilter("")}>Everything</button>
-          {kinds.map((k) => <button key={k} className={`chip ${filter === k ? "on" : ""}`} onClick={() => setFilter(k)}>{KIND[k] ?? k}</button>)}
-        </div>
-        <label className="searchbox"><Icon name="search" /><input placeholder="Filter" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
-      </div>
+      <KTabs
+        tabs={[{ id: "@all", label: "Everything", icon: "history", count: entries?.length ?? null }, ...kinds.map((k) => ({ id: k, label: KIND[k] ?? k, count: (entries ?? []).filter((e) => e.kind === k).length }))]}
+        active={filter || "@all"}
+        onChange={(id) => setFilter(id === "@all" ? "" : id)}
+      />
+      <Toolbar><SearchBox value={query} onChange={setQuery} placeholder="Find a title or file" /></Toolbar>
       {!entries && !error && <p className="muted">Loading…</p>}
       {entries && entries.length === 0 && <p className="muted">Nothing changed yet.</p>}
       <div className="card list-card">
