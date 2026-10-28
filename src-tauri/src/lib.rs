@@ -28,6 +28,7 @@ mod picks;
 mod planner;
 mod player;
 mod rename_cmds;
+mod renumber;
 mod secrets;
 mod seg_cmds;
 mod sources;
@@ -183,6 +184,8 @@ pub fn run() {
             sub_cmds::subtitle_options,
             sub_cmds::subtitle_download,
             sub_cmds::subtitle_auto,
+            sub_cmds::missing_language,
+            renumber::episode_renumber,
             sub_cmds::local_subtitles,
             sub_cmds::adopt_subtitles,
             seg_cmds::segments_overview,

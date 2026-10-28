@@ -73,7 +73,7 @@ fn tidy(s: &str) -> String {
     t
 }
 
-/// "Movie.Name.2019.1080p.WEB-DL.x264-GRP" → "Movie Name 2019".
+/// "Movie.Name.2019.1080p.WEB-DL.x264-GRP" → "Movie Name (2019)".
 pub fn drop_tags(stem: &str) -> String {
     let mut s = stem.to_string();
     // A release group in front: "[Erai-raws] Show - 01".
@@ -93,7 +93,29 @@ pub fn drop_tags(stem: &str) -> String {
     if !s.contains(' ') && (s.matches('.').count() >= 2 || s.contains('_')) {
         s = s.replace(['.', '_'], " ");
     }
-    tidy(&s)
+    paren_year(&tidy(&s))
+}
+
+/// "Movie Name 2019" → "Movie Name (2019)": the year goes between brackets, the way Jellyfin
+/// and Infuse expect it. Episode names and titles that are a number ("1917") are left alone.
+pub fn paren_year(s: &str) -> String {
+    static R: OnceLock<Regex> = OnceLock::new();
+    let re = R.get_or_init(|| Regex::new(r"^(.*\S)[\s.\-]+[\(\[]?((?:19|20)\d{2})[\)\]]?$").expect("year pattern"));
+    if has_episode_tag(s) {
+        return s.to_string();
+    }
+    match re.captures(s) {
+        Some(c) => {
+            let year: u32 = c[2].parse().unwrap_or(0);
+            let title = c[1].trim_end_matches(|ch: char| ch == '-' || ch == '(' || ch == '[' || ch.is_whitespace());
+            if (1900..=2035).contains(&year) && !title.is_empty() {
+                format!("{title} ({year})")
+            } else {
+                s.to_string()
+            }
+        }
+        None => s.to_string(),
+    }
 }
 
 /// "Show - S01E02 - Title" → "Show - Title".
@@ -340,14 +362,17 @@ mod tests {
 
     #[test]
     fn drops_release_tags() {
-        assert_eq!(drop_tags("Movie.Name.2019.1080p.WEB-DL.x264-GRP"), "Movie Name 2019");
+        assert_eq!(drop_tags("Movie.Name.2019.1080p.WEB-DL.x264-GRP"), "Movie Name (2019)");
         assert_eq!(drop_tags("Dune (2021) [2160p] [4K] [WEB] [5.1] [YTS.MX]"), "Dune (2021)");
         assert_eq!(drop_tags("Show - S01E02 - Title.1080p.BluRay.x265.HEVC"), "Show - S01E02 - Title");
         assert_eq!(drop_tags("[Erai-raws] Some Anime - 01 [1080p]"), "Some Anime - 01");
         assert_eq!(drop_tags("The.Office.S02E03.720p.HDTV.AAC2.0"), "The Office S02E03");
         assert_eq!(drop_tags("Charlotte's Web (1973)"), "Charlotte's Web (1973)", "plain names stay");
         assert_eq!(drop_tags("Show - S01E01 - Pilot"), "Show - S01E01 - Pilot");
-        assert_eq!(drop_tags("Film 2020 DDP5.1 Atmos"), "Film 2020");
+        assert_eq!(drop_tags("Film 2020 DDP5.1 Atmos"), "Film (2020)");
+        assert_eq!(drop_tags("Blade Runner 2049 1080p"), "Blade Runner 2049", "not a year");
+        assert_eq!(drop_tags("1917"), "1917");
+        assert_eq!(paren_year("Dune [2021]"), "Dune (2021)");
     }
 
     #[test]

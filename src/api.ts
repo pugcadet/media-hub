@@ -1,4 +1,42 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as rawInvoke } from "@tauri-apps/api/core";
+
+/*
+ * Reads are remembered for a few minutes, so going back to a screen shows it straight away
+ * instead of loading it again. Anything that changes something (and the reload button)
+ * forgets them, so what you see is never older than your last change.
+ */
+const CACHED = new Set([
+  "library_health", "naming_check_last", "segment_coverage", "collections_list", "home_feed", "libraries",
+  "attention", "list_items", "missing_language", "item_details", "item_children", "todays_picks", "missing_subtitles",
+  "library_languages", "tag_stats", "journal_all", "rename_history", "music_list", "plugins_installed",
+  "backend_tuning", "segment_summary", "collection_items", "similar_items", "person_items", "languages",
+  "list_users", "health_alerts", "segments_overview", "remote_images", "collections_of", "inbox_list",
+  "list_folders", "local_subtitles", "storage_overview", "trash_list", "health_row", "music_source",
+]);
+/** Reads that don't change anything and don't need remembering. */
+const HARMLESS = /^(play_|music_play|music_stop|status$|check_update|ffmpeg_info|ytdlp_info|cancel_job|naming_check_cancel|subtitle_options|identify_search|dl_probe|find_|scan_folders|watch_sync_test|images_revalidate)/;
+const TTL = 5 * 60_000;
+const cache = new Map<string, { at: number; value: Promise<unknown> }>();
+
+/** Forget every remembered read (after a change or the reload button). */
+export function clearCache(): void {
+  cache.clear();
+}
+
+function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const fresh = args && Object.entries(args).some(([k, v]) => /^(fresh|fill|force|refresh)$/.test(k) && v === true);
+  if (CACHED.has(cmd) && !fresh) {
+    const key = `${cmd}|${JSON.stringify(args ?? {})}`;
+    const hit = cache.get(key);
+    if (hit && Date.now() - hit.at < TTL) return hit.value as Promise<T>;
+    const value = rawInvoke<T>(cmd, args);
+    cache.set(key, { at: Date.now(), value });
+    value.catch(() => cache.delete(key));
+    return value;
+  }
+  if (!HARMLESS.test(cmd)) cache.clear();
+  return rawInvoke<T>(cmd, args);
+}
 
 export interface Status {
   connected: boolean;
@@ -754,6 +792,12 @@ export const api = {
   picks: (date: string, only?: string[] | null) => invoke<Pick[]>("todays_picks", { date, only: only ?? null }),
   libraries: () => invoke<Library[]>("libraries"),
   attention: () => invoke<Attention>("attention"),
+  /** Movies and episodes without a subtitle in this language (built-in ones count). */
+  /** Renames one episode's file to another season/episode number (undoable in History). */
+  episodeRenumber: (id: string, season: number, episode: number) =>
+    invoke<{ batch: string; done: number; failed: string[]; stopped: boolean }>("episode_renumber", { id, season, episode }),
+  missingLanguage: (lang: string, codes: string[]) =>
+    invoke<{ Items: JfChild[]; TotalRecordCount: number }>("missing_language", { lang, codes }),
   missingSubtitles: (start: number, limit: number) =>
     invoke<{ Items: JfChild[]; TotalRecordCount: number }>("missing_subtitles", { start, limit }),
   setTmdbKey: (key: string) => invoke<void>("set_tmdb_key", { key }),

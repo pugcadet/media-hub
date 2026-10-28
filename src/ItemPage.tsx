@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, isTitleGone, Card, CheckRow, cleanTitle, HealthRow, SegSummary, codesFor, cultures, Culture, Details, errorText, imageUrl, ImageKind, ItemEdits, JfChild, JfImage, JfItem,
-  languageName, remoteImageUrl, RemoteImage, Status,
+  languageName, MissingReport, remoteImageUrl, RemoteImage, Status,
 } from "./api";
 import { SubtitlesTab, EpisodesTab } from "./Subtitles";
 import { IntrosTab, ShowIntros } from "./Intros";
@@ -16,6 +16,8 @@ import { applyArt, askArt, fillOptional, rankImages } from "./ArtPicker";
 import { askIdentify } from "./IdentifyDialog";
 import { askCrop, readPaste, showPreview, type CropSource } from "./ArtTools";
 import { numberYouTube } from "./youtube";
+import { readSaved } from "./saved";
+import { askRenumber } from "./Renumber";
 
 export const ART_KINDS: { kind: ImageKind; label: string; wide: boolean; hint: string }[] = [
   { kind: "Primary", label: "Poster", wide: false, hint: "The main picture in every app." },
@@ -258,10 +260,9 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
             </span>
           )}
           <div className="spacer" />
-          {!isBoxSet && <button className="cine-ghost" title="Show in Finder" onClick={() => void api.revealItem(id).catch((e) => setMessage({ text: errorText(e), error: true }))}><Icon name="folder" /> Finder</button>}
-          {d.canEdit && (
-            <button className="cine-ghost" disabled={!!busy} title="Fetch details and pictures again (unlocks the title)" onClick={() => void run("Refreshing…", () => api.refreshItem(id, false), "Jellyfin is refreshing this item from the internet; this page updates by itself.")}><Icon name="reload" /> Refresh</button>
-          )}
+          {!isBoxSet && <button className="cine-ghost icon-only" title="Open folder" aria-label="Open folder" onClick={() => void api.revealItem(id).catch((e) => setMessage({ text: errorText(e), error: true }))}><Icon name="folder" /></button>}
+          {!isEpisode && <button className="cine-ghost icon-only" title="Preview: how Infuse shows it" aria-label="Preview" onClick={() => previewOf(d, title)}><Icon name="eye" /></button>}
+          {embedded && <button className="cine-ghost icon-only" title="Open full page" aria-label="Open full page" onClick={() => nav.open(id)}><Icon name="expand" /></button>}
           <button className="cine-ghost icon-only" aria-label="More" onClick={(e) => openMenu(e, menu())}><Icon name="more" /></button>
         </div>
         <div className="cine-body">
@@ -387,6 +388,16 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
   );
 }
 
+/** The Infuse-style preview of a title's pictures and text. */
+function previewOf(d: Details, title: string) {
+  const urls: Partial<Record<ImageKind, string>> = {};
+  for (const k of ["Primary", "Backdrop", "Logo", "Thumb", "Banner", "Art"] as ImageKind[]) {
+    if (d.images.some((i) => i.ImageType === k)) urls[k] = artSrc(d.item.Id, k, 1280, d.images);
+  }
+  const it = d.item;
+  showPreview({ title, overview: it.Overview, meta: [it.ProductionYear, it.OfficialRating, (it.Genres ?? []).slice(0, 2).join(", ")].filter(Boolean).join(" · "), urls });
+}
+
 /* --------------------------------------------------------- title health */
 
 interface Chip {
@@ -491,8 +502,10 @@ function StatusCards({ d, kind, onTab, onIdentify }: { d: Details; kind: "series
   const artKinds: ImageKind[] = ["Primary", "Backdrop", "Logo", "Thumb"];
   const artHave = artKinds.filter((k) => has(k)).length;
   const names = check ? check.toRename + check.folders : null;
-  const card = (key: string, icon: IconName, title: string, ok: boolean | null, line: React.ReactNode, action: React.ReactNode) => (
-    <div key={key} className={`stat-card ${ok === null ? "" : ok ? "ok" : "warn"}`}>
+  const card = (key: string, icon: IconName, title: string, ok: boolean | null, line: React.ReactNode, action: React.ReactElement<{ onClick?: () => void }>) => (
+    <div key={key} className={`stat-card clickable ${ok === null ? "" : ok ? "ok" : "warn"}`} role="button" tabIndex={0}
+      onClick={(e) => { if (!(e.target as HTMLElement).closest("button")) action.props.onClick?.(); }}
+      onKeyDown={(e) => e.key === "Enter" && action.props.onClick?.()}>
       <div className="stat-card-head"><span className="stat-ico"><Icon name={icon} size={16} /></span><span className="strong">{title}</span>{ok !== null && <Icon name={ok ? "check" : "warn"} size={14} />}</div>
       <div className="small muted stat-line">{line}</div>
       <div className="stat-act">{action}</div>
@@ -649,11 +662,6 @@ function ArtworkTab({ d, title }: { d: Details; title: string }) {
     if (data) void act(`New ${ART_KINDS.find((a) => a.kind === k)?.label.toLowerCase()}`, () => api.uploadImageBytes(id, k, data, "cropped"));
   }
 
-  function preview() {
-    const urls: Partial<Record<ImageKind, string>> = {};
-    for (const k of ART_KINDS) if (have(k.kind).length) urls[k.kind] = artSrc(id, k.kind, 1280, images);
-    showPreview({ title, overview: item.Overview, meta: [item.ProductionYear, item.OfficialRating, (item.Genres ?? []).slice(0, 2).join(", ")].filter(Boolean).join(" · "), urls });
-  }
 
   const opts = (options ?? []).filter((o) => o.Url);
   const shown = opts.slice(0, showAll ? 80 : 12);
@@ -662,7 +670,6 @@ function ArtworkTab({ d, title }: { d: Details; title: string }) {
       <div className="row between art-bar">
         <div className="muted small">{missing.length ? `Missing: ${missing.map((k) => k.label).join(", ")}` : "Every picture Infuse uses is there."} Optional pictures are added by themselves when they can be found.</div>
         <div className="row end">
-          {!isEpisode && <button onClick={preview}><Icon name="eye" /> Preview</button>}
           <button className="primary" disabled={!canEdit || !!saving || !missing.length} onClick={() => void askArt(id, title, missing.map((k) => k.kind)).then((c) => c && act(`Artwork for ${title}`, () => applyArt(id, c)))}><Icon name="wand" /> Fill in missing…</button>
         </div>
       </div>
@@ -919,6 +926,17 @@ function SeasonPanel({ season, canEdit, subLangs }: { season: JfItem; canEdit: b
     cultures().then(setLangs).catch(() => setLangs([]));
   }, [season.Id, epoch, itemEpoch]);
   const want = useMemo(() => subLangs.map((l) => codesFor(l, langs)), [subLangs, langs]);
+  // Episodes the missing-episodes check found missing in this season (shown in their place).
+  const missing = useMemo(() => {
+    const sid = (season.SeriesId ?? "").replace(/-/g, "");
+    const r = readSaved<Record<string, MissingReport | string>>("missing")?.data?.[sid];
+    return typeof r === "object" && r ? r.missing.filter((m) => m.season === (season.IndexNumber ?? -1)) : [];
+  }, [season.SeriesId, season.IndexNumber, epoch]); // eslint-disable-line react-hooks/exhaustive-deps
+  type Row = { kind: "ep"; e: JfChild; n: number } | { kind: "missing"; m: MissingReport["missing"][number]; n: number };
+  const rows: Row[] = [
+    ...(eps ?? []).map((e) => ({ kind: "ep" as const, e, n: e.IndexNumber ?? 9999 })),
+    ...missing.filter((m) => !(eps ?? []).some((e) => e.IndexNumber === m.episode)).map((m) => ({ kind: "missing" as const, m, n: m.episode })),
+  ].sort((a, b) => a.n - b.n);
 
   const subsCell = (e: JfChild) => {
     const streams = (e.MediaStreams ?? []).filter((s) => s.Type === "Subtitle" && !s.IsForced);
@@ -938,7 +956,21 @@ function SeasonPanel({ season, canEdit, subLangs }: { season: JfItem; canEdit: b
       </div>
       <div className="ep-list">
         {eps === null && <div className="ep-skeleton">{[0, 1, 2].map((i) => <div key={i} className="skeleton ep" />)}</div>}
-        {eps?.map((e) => {
+        {eps && rows.map((row) => {
+          if (row.kind === "missing") {
+            const m = row.m;
+            return (
+              <div key={`missing-${m.episode}`} className="ep-card missing">
+                <div className="ep-thumb art wide cover"><div className="noart small">Missing</div></div>
+                <div className="ep-text">
+                  <div className="ep-title"><span className="muted">{m.episode}.</span> {m.title} <span className="pill warn">Missing</span></div>
+                  <div className="muted small">{m.airDate ? new Date(m.airDate).toLocaleDateString() : ""} · not in your files</div>
+                  {canEdit && season.SeriesId && <div><button className="link small" onClick={() => void askRenumber(season.SeriesId!, m.season, m.episode, m.title)}>It's there under another number (like a special)…</button></div>}
+                </div>
+              </div>
+            );
+          }
+          const e = row.e;
           const pos = e.UserData?.PlaybackPositionTicks ?? 0;
           return (
             <div
@@ -956,7 +988,7 @@ function SeasonPanel({ season, canEdit, subLangs }: { season: JfItem; canEdit: b
                 {pos > 0 && e.RunTimeTicks ? <span className="tile-progress"><span style={{ width: `${Math.min(100, (pos / e.RunTimeTicks) * 100)}%` }} /></span> : null}
               </div>
               <div className="ep-text">
-                <div className="ep-title"><span className="muted">{e.IndexNumber ?? ""}.</span> {e.Name}</div>
+                <div className="ep-title">{e.IndexNumber != null && <span className="muted">{e.IndexNumber}.</span>} {e.Name}</div>
                 <div className="muted small">
                   {[e.PremiereDate ? new Date(e.PremiereDate).toLocaleDateString() : "", runtime(e.RunTimeTicks), e.UserData?.Played ? "Watched" : ""].filter(Boolean).join(" · ")}
                 </div>

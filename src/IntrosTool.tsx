@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { usePageState } from "./saved";
-import { api, cleanTitle, errorText, imageUrl, Item, Library, SegSummary, Status } from "./api";
+import { api, cleanTitle, errorText, imageUrl, Item, SegSummary, Status } from "./api";
 import { ShowIntros } from "./Intros";
 import { track, useEpoch } from "./activity";
 import type { View } from "./nav";
-import { Icon, Tabs } from "./ui";
+import { Icon } from "./ui";
+import { folderTabs, KTabs, PageHead, SearchBox, Seg, Toolbar } from "./kit";
 import { usePrefs } from "./prefs";
 import { foldersOf, tabFolder, useFolderMap } from "./folders";
 
@@ -70,7 +71,6 @@ function ShowRow({ s, onPick }: { s: Item; onPick: () => void }) {
 export default function IntrosTool({ status }: { status: Status; onNav?: (v: View) => void }) {
   const epoch = useEpoch();
   const [query, setQuery] = usePageState("intros.query", "");
-  const [libs, setLibs] = useState<Library[]>([]);
   const [lib, setLib] = useState<string | null>(null);
   const [shows, setShows] = useState<Item[]>([]);
   const [show, setShow] = useState<Item | null>(null);
@@ -80,13 +80,6 @@ export default function IntrosTool({ status }: { status: Status; onNav?: (v: Vie
   const [skipper, setSkipper] = useState(false);
   useEffect(() => void api.pluginsInstalled().then((l) => setSkipper(l.some((p) => /intro ?skipper/i.test(p.name)))).catch(() => undefined), []);
   const folderMap = useFolderMap();
-
-  useEffect(() => {
-    api.libraries().then((l) => {
-      const tv = l.filter((x) => x.kind === "tvshows" || x.kind === "mixed" || x.kind === "");
-      setLibs(tv);
-    }).catch(() => setLibs([]));
-  }, []);
 
   const hidden = usePrefs().hiddenTabs.intros ?? [];
   useEffect(() => {
@@ -109,31 +102,25 @@ export default function IntrosTool({ status }: { status: Status; onNav?: (v: Vie
 
   return (
     <div className="pg">
-      <div className="pg-head">
-        <div>
-          <h1>{show ? cleanTitle(show.name, show.year) : "Intros and credits"}</h1>
-          {!show && <div className="muted small">Media Hub listens to the start and end of each episode, finds the parts that repeat, and saves them to Jellyfin as “Skip intro” and “Skip credits” markers. The counts below are read the same way Infuse reads them (Jellyfin 10.10+, Infuse 8.0.4+), so a marker shown here is a skip button in Infuse.</div>}
-        </div>
-        {show && <div className="pg-actions"><button onClick={() => setShow(null)}>← All shows</button></div>}
-      </div>
+      <PageHead
+        title={show ? cleanTitle(show.name, show.year) : "Intros and credits"}
+        sub={show ? "Skip intro and skip credits markers, season by season." : "Finds the intro and credits of every episode and saves them as skip markers in Jellyfin. Infuse shows them as Skip buttons."}
+        actions={show ? <button onClick={() => setShow(null)}><span className="flip"><Icon name="chevron" size={14} /></span> All shows</button>
+          : skipper ? (
+            <button onClick={() => void track("Starting Intro Skipper in Jellyfin", async (job) => { const n = await api.runIntroSkipper(); job.update(`“${n}” runs in Jellyfin now; markers appear as it goes`, 1); }, { reload: false }).catch(() => undefined)} title="Jellyfin's Intro Skipper plugin finds intros and credits on the server (for the folders chosen in Settings → Intros)">
+              <Icon name="skip" /> Run Intro Skipper in Jellyfin
+            </button>
+          ) : undefined}
+      />
       {error && <p className="error">{error}</p>}
-
       {!show && (
         <>
-          {libs.length > 0 && (
-            <Tabs screen="intros" fixed={["all"]} active={tab} onChange={(id) => { setTab(id); setLib(id === "all" || id.startsWith("folder:") ? null : id); }}
-              tabs={[{ id: "all", label: "All shown" }, ...libs.map((l) => ({ id: l.id, label: l.name, count: l.count }))]}
-              folders={foldersOf(folderMap).map((f) => ({ name: f, count: shows.filter((s) => folderMap.get(s.id) === f).length || undefined }))} />
-          )}
-          <div className="toolbar">
-            <label className="check small"><input type="checkbox" checked={onlyGaps} onChange={(e) => setOnlyGaps(e.target.checked)} />Only shows with missing markers</label>
-            {skipper && (
-              <button className="mini-btn" onClick={() => void track("Starting Intro Skipper in Jellyfin", async (job) => { const n = await api.runIntroSkipper(); job.update(`“${n}” runs in Jellyfin now; markers appear as it goes`, 1); }, { reload: false }).catch(() => undefined)} title="Jellyfin's Intro Skipper plugin finds intros and credits on the server">
-                Let Intro Skipper scan everything
-              </button>
-            )}
-            <label className="searchbox wide"><Icon name="search" /><input placeholder="Search shows" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
-          </div>
+          <KTabs folders active={inFolder ?? "@all"} onChange={(id) => { setTab(id === "@all" ? "all" : `folder:${id}`); setLib(null); }}
+            tabs={folderTabs(foldersOf(folderMap).filter((f) => shows.some((x) => folderMap.get(x.id) === f)), (f) => (f === null ? shows.length : shows.filter((x) => folderMap.get(x.id) === f).length))} />
+          <Toolbar right={<span className="muted small">{visible.length} show{visible.length === 1 ? "" : "s"}</span>}>
+            <SearchBox value={query} onChange={setQuery} placeholder="Search shows" />
+            <Seg value={onlyGaps ? "gaps" : "all"} onChange={(v) => setOnlyGaps(v === "gaps")} options={[{ id: "all", label: "All" }, { id: "gaps", label: "Missing markers" }]} />
+          </Toolbar>
           <div className="card list-card">
             {visible.map((s) => <ShowRow key={s.id} s={s} onPick={() => setShow(s)} />)}
             {visible.length === 0 && <p className="muted pad">No shows.</p>}

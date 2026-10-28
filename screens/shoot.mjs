@@ -12,8 +12,21 @@ const views = ["home", "library", "renamer", "subtitles", "intros", "cleanup", "
 const log = [];
 const browser = await chromium.launch();
 for (const [w, h] of [[1440, 900], [1100, 760]]) {
-  const page = await browser.newPage({ viewport: { width: w, height: h }, deviceScaleFactor: 1 });
-  page.on("console", (m) => (m.type() === "error" || m.type() === "warning") && log.push(`[${w}] console ${m.type()}: ${m.text()}`));
+  // A Windows user agent makes the app use http://hubimg.localhost for pictures, which can be
+  // answered here with simple placeholder pictures.
+  const page = await browser.newPage({ viewport: { width: w, height: h }, deviceScaleFactor: 1, userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36" });
+  await page.route(/hub(img|media)\.localhost/, (route) => {
+    const u = route.request().url();
+    const id = (u.match(/localhost\/([0-9a-f]{6,})/) || [])[1] || "0";
+    const kind = (u.match(/\/(Primary|Backdrop|Logo|Thumb|Banner|Art)/) || [])[1] || "Primary";
+    const hue = parseInt(id.slice(-4), 16) % 360;
+    const [vw, vh] = kind === "Primary" ? [300, 450] : kind === "Logo" ? [400, 150] : kind === "Banner" ? [1000, 185] : [640, 360];
+    const svg = kind === "Logo"
+      ? `<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}"><text x="50%" y="60%" font-size="64" font-family="sans-serif" font-weight="800" fill="white" text-anchor="middle">LOGO</text></svg>`
+      : `<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${hue},55%,45%)"/><stop offset="1" stop-color="hsl(${(hue + 60) % 360},55%,22%)"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/><text x="50%" y="52%" font-size="${vw / 8}" font-family="sans-serif" fill="rgba(255,255,255,.55)" text-anchor="middle">${kind}</text></svg>`;
+    route.fulfill({ status: 200, contentType: "image/svg+xml", body: svg });
+  });
+  page.on("console", (m) => (m.type() === "error" || m.type() === "warning") && !/ERR_UNKNOWN_URL_SCHEME/.test(m.text()) && log.push(`[${w}] console ${m.type()}: ${m.text()}`));
   page.on("pageerror", (e) => log.push(`[${w}] pageerror: ${e.message}`));
   await page.addInitScript(`window.__KINDS__ = ${kinds};`);
   await page.addInitScript(mock);

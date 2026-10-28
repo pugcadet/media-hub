@@ -52,21 +52,31 @@ pub fn rel_to_root(root: &Path, p: &Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// A folder opens with its contents shown; a file opens its folder with the file selected.
 pub fn show_in_file_manager(p: &Path) {
+    let is_dir = p.is_dir();
     #[cfg(target_os = "macos")]
     {
-        let _ = Command::new("open").arg("-R").arg(p).spawn();
+        let mut c = Command::new("open");
+        if !is_dir {
+            c.arg("-R");
+        }
+        let _ = c.arg(p).spawn();
     }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         let s = p.to_string_lossy();
         let s = s.strip_prefix(r"\\?\").unwrap_or(&*s).to_string();
-        let _ = Command::new("explorer").raw_arg(format!("/select,\"{s}\"")).spawn();
+        let _ = if is_dir {
+            Command::new("explorer").raw_arg(format!("\"{s}\"")).spawn()
+        } else {
+            Command::new("explorer").raw_arg(format!("/select,\"{s}\"")).spawn()
+        };
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let _ = Command::new("xdg-open").arg(p.parent().unwrap_or(p)).spawn();
+        let _ = Command::new("xdg-open").arg(if is_dir { p } else { p.parent().unwrap_or(p) }).spawn();
     }
 }
 

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, AutoResult, codesFor, cultures, Culture, errorText, ExtraSub, imageUrl, Item, JfChild, languageName, Status } from "./api";
 import type { Route } from "./App";
+import { folderTabs, IconBtn, KTabs, PageHead, SearchBox, Toolbar } from "./kit";
 import { followEvent, track, useEpoch } from "./activity";
 import { askConfirm } from "./confirm";
 import { prefs, setPrefs, subSkipped, usePrefs } from "./prefs";
-import { BulkSelect, Icon, itemMenu, openMenu, SettingsLink, Tabs, TriCheck, useUndoableSet } from "./ui";
+import { BulkSelect, Icon, itemMenu, openMenu, SettingsLink, TriCheck, useUndoableSet } from "./ui";
 import { foldersOf, tabFolder, useFolderMap } from "./folders";
 import { agoText, usePageState, useSaved } from "./saved";
 
@@ -149,19 +150,21 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
   const [progress, setProgress] = useState<{ key: string; done: number; total: number } | null>(null);
   const folderMap = useFolderMap();
   const folderOf = (e: JfChild) => folderMap.get(e.SeriesId ?? e.Id) ?? "Other";
+  const codes = useMemo(() => codesFor(lang, list), [lang, list]);
   const load = () =>
-    api.missingSubtitles(0, 3000).then((r) => {
+    api.missingLanguage(lang, codes).then((r) => {
       const all = r.Items ?? [];
       const keep = all.filter((e) => !subSkipped(e.Path));
       setItems(keep);
       setSkipped(all.length - keep.length);
       setTotal(r.TotalRecordCount ?? 0);
     }).catch((e) => setError(errorText(e)));
+  useEffect(() => void cultures().then(setList).catch(() => setList([])), []);
   useEffect(() => {
+    setItems([]);
+    setResults({});
     void load();
-    cultures().then(setList).catch(() => setList([]));
-  }, [subSkipFolders.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
-  const codes = useMemo(() => codesFor(lang, list), [lang, list]);
+  }, [subSkipFolders.join("|"), codes.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
   const inFolder = tabFolder(tab);
   const shownItems = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -229,9 +232,10 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
 
   return (
     <div className="pg">
-      <div className="pg-head">
-        <h1>Subtitles</h1>
-        <div className="pg-actions">
+      <PageHead
+        title="Subtitles"
+        sub={<>{total} video{total === 1 ? "" : "s"} without {languageName(lang, list)} subtitles (subtitles inside the video file count){skipped > 0 ? ` · ${skipped} in folders you switched off are left out` : ""}. <SettingsLink section="subtitles">Subtitle settings</SettingsLink></>}
+        actions={<>
           <label className="sort">Language
             <select value={lang} onChange={(e) => setLang(e.target.value)}>
               {status.subLangs.map((l) => <option key={l} value={l}>{languageName(l, list)}</option>)}
@@ -243,24 +247,18 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
           {running ? <button onClick={() => (stop.current = true)}>Stop</button> : (
             <button className="primary" disabled={!shownItems.length || status.readOnly} onClick={() => void fill()}>Get the best match for {shownItems.length === items.length ? "all" : `these ${shownItems.length}`}</button>
           )}
-        </div>
-      </div>
-      <p className="muted">{total} videos have no subtitles at all{total > items.length ? ` (showing the first ${items.length})` : ""}. Only matches scoring at least {minScore} are downloaded; 100 means made for exactly that file. Subtitle sites limit downloads per day.{skipped > 0 ? ` ${skipped} in folders you switched off are left out.` : ""} <SettingsLink section="subtitles">Subtitle settings (languages, folders, score)</SettingsLink></p>
+        </>}
+      />
       {status.readOnly && <p className="note">Downloading needs changes to Jellyfin switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
       {error && <p className="error">{error}</p>}
-      <Tabs screen="subtitles" fixed={["all"]} active={tab} onChange={setTab} tabs={[{ id: "all", label: "Everything", count: items.length }]}
-        folders={foldersOf(folderMap).map((f) => ({ name: f, count: items.filter((e) => folderOf(e) === f).length || undefined }))} />
-      <div className="toolbar">
-        <label className="searchbox wide"><Icon name="search" /><input placeholder="Search shows, movies and episodes" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
-        <span className="spacer" />
-        <label className="sort">Sort
-          <select value={sort} onChange={(e) => setSort(e.target.value as "folder" | "name")}>
-            <option value="folder">By folder</option>
-            <option value="name">By name</option>
-          </select>
-        </label>
-        <span className="muted small">{shownItems.length} videos</span>
-      </div>
+      <KTabs folders active={inFolder ?? "@all"} onChange={(id) => setTab(id === "@all" ? "all" : `folder:${id}`)}
+        tabs={folderTabs(foldersOf(folderMap), (f) => (f === null ? items.length : items.filter((e) => folderOf(e) === f).length))} />
+      <Toolbar right={<>
+        <span className="muted small">{shownItems.length} videos · only matches scoring {minScore}+ are taken (100 = made for exactly that file)</span>
+        <IconBtn icon="sort" on={sort === "name"} title={sort === "name" ? "Sorted by name (click: by folder)" : "Grouped by folder (click: by name)"} onClick={() => setSort(sort === "name" ? "folder" : "name")} />
+      </>}>
+        <SearchBox wide value={query} onChange={setQuery} placeholder="Search shows, movies and episodes" />
+      </Toolbar>
       {stopReason && <p className="error">{stopReason}</p>}
       {progress && (
         <div className="sub-progress" role="progressbar" aria-valuenow={progress.done} aria-valuemax={progress.total}>

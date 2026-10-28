@@ -144,9 +144,48 @@ export default function App() {
     };
     // The mouse's own back/forward buttons.
     const onMouse = (e: MouseEvent) => { if (e.button === 3) travel(-1); else if (e.button === 4) travel(1); };
+    // Two-finger swipe left/right on a trackpad goes back/forward, like in a web browser
+    // (not inside rows that scroll sideways).
+    let swipe = 0;
+    let swipeAt = 0;
+    let cooldown = 0;
+    const sideways = (el: HTMLElement | null): boolean => {
+      for (let n = el; n && n !== document.body; n = n.parentElement) {
+        const ox = getComputedStyle(n).overflowX;
+        if ((ox === "auto" || ox === "scroll") && n.scrollWidth > n.clientWidth + 2) return true;
+        if (n.tagName === "INPUT" && (n as HTMLInputElement).type === "range") return true;
+      }
+      return false;
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (document.querySelector(".player") || Math.abs(e.deltaX) <= Math.abs(e.deltaY) * 1.5 || e.ctrlKey) return;
+      const now = Date.now();
+      if (now < cooldown || sideways(e.target as HTMLElement)) return;
+      if (now - swipeAt > 300) swipe = 0;
+      swipeAt = now;
+      swipe += e.deltaX;
+      if (Math.abs(swipe) > 160) {
+        travel(swipe < 0 ? -1 : 1);
+        swipe = 0;
+        cooldown = now + 900;
+      }
+    };
+    // Only Media Hub's own right-click menus: no "Look Up / Translate / Share…" from the
+    // system (text fields keep theirs, for copy and paste).
+    const onCtx = (e: MouseEvent) => {
+      if ((e.target as HTMLElement)?.closest?.("input, textarea, [contenteditable='true']")) return;
+      e.preventDefault();
+    };
     window.addEventListener("keydown", onKey);
     window.addEventListener("mouseup", onMouse);
-    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("mouseup", onMouse); };
+    window.addEventListener("wheel", onWheel, { passive: true });
+    window.addEventListener("contextmenu", onCtx);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mouseup", onMouse);
+      window.removeEventListener("wheel", onWheel);
+      window.removeEventListener("contextmenu", onCtx);
+    };
   }, [travel]);
   const arrows = (
     <div className="nav-arrows">

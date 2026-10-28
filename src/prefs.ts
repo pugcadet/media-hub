@@ -109,6 +109,14 @@ export interface Prefs {
   detectCredits: boolean;
   /** Screens' own settings (filters, sorts, tabs), so they open the way you left them. */
   pageState: Record<string, unknown>;
+  /** Your order of the library folders, used in every folder tab row and list. */
+  folderOrder: string[];
+  /** Checks that don't apply to a title ("id" → ["subtitles", "intros"]): they count as fine. */
+  checksOff: Record<string, string[]>;
+  /** Order of the buttons at the top of the player. */
+  playerMenu: string[];
+  /** Order of the music tabs. */
+  musicTabs: string[];
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -150,6 +158,10 @@ export const DEFAULT_PREFS: Prefs = {
   detectIntro: true,
   detectCredits: true,
   pageState: {},
+  folderOrder: [],
+  checksOff: {},
+  playerMenu: [],
+  musicTabs: [],
 };
 
 /** Ready-made highlight colours for Settings → Look. */
@@ -209,6 +221,10 @@ function load(): Prefs {
       picksFolders: p.picksFolders ?? [],
       folderTabs: p.folderTabs ?? {},
       pageState: p.pageState ?? {},
+      folderOrder: p.folderOrder ?? [],
+      checksOff: p.checksOff ?? {},
+      playerMenu: p.playerMenu ?? [],
+      musicTabs: p.musicTabs ?? [],
     };
   } catch {
     return DEFAULT_PREFS;
@@ -336,4 +352,23 @@ export function subPlan(subLangs: string[]): { lang: string; minScore: number; n
     const needed = p.subRequired.includes(l);
     return { lang: l, minScore: needed ? p.minSubScore : 100, needed };
   });
+}
+
+/** Sorts folder names the way you ordered them (Settings or by dragging a tab); new ones go last, A to Z. */
+export function orderFolders<T>(list: T[], name: (t: T) => string = (t) => String(t)): T[] {
+  const order = current.folderOrder;
+  const rank = (n: string) => {
+    const i = order.findIndex((o) => o.toLowerCase() === n.toLowerCase());
+    return i < 0 ? 10_000 : i;
+  };
+  return [...list].sort((a, b) => rank(name(a)) - rank(name(b)) || name(a).localeCompare(name(b)));
+}
+
+/** Moves `name` to just before `before` (or to the end) in your folder order. */
+export function moveFolder(all: string[], name: string, before: string | null): void {
+  const cur = orderFolders(all).filter((n) => n !== name);
+  const i = before ? cur.indexOf(before) : -1;
+  if (i < 0) cur.push(name);
+  else cur.splice(i, 0, name);
+  setPrefs({ folderOrder: cur });
 }

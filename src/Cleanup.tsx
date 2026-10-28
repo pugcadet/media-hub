@@ -9,7 +9,8 @@ import Duplicates from "./Duplicates";
 import Missing from "./Missing";
 import Storage from "./Storage";
 import Structure from "./Structure";
-import { BlockRow, cleanupBlocks } from "./Dashboard";
+import { cleanupBlocks } from "./Dashboard";
+import { KTabs, PageHead } from "./kit";
 import { savePart, scanEverything, useScanSummary } from "./scan";
 import { rankImages } from "./ArtPicker";
 import { usePageState } from "./saved";
@@ -20,40 +21,35 @@ const asTab = (t?: string): CleanupTab | "" => (TABS.includes(t as CleanupTab) ?
 
 export default function Cleanup({ status, tab, onNav }: { status: Status; tab?: string; onNav: (v: View) => void }) {
   const [saved, setSaved] = usePageState<CleanupTab | "">("cleanup.open", "");
-  const [t, setT] = useState<CleanupTab | "">(asTab(tab) || saved);
+  const [t, setT] = useState<CleanupTab>(asTab(tab) || saved || "duplicates");
   useEffect(() => {
-    if (asTab(tab)) setT(asTab(tab));
+    if (asTab(tab)) setT(asTab(tab) as CleanupTab);
   }, [tab]);
   const pick = (k: string) => {
-    const next = t === k ? "" : (k as CleanupTab);
-    setT(next);
-    setSaved(next);
+    setT(k as CleanupTab);
+    setSaved(k as CleanupTab);
   };
   const sum = useScanSummary();
   const [scanning, setScanning] = useState(false);
   return (
     <div className="pg cleanup">
-      <div className="pg-head">
-        <div>
-          <h1>Clean-up</h1>
-          <div className="muted small">What the last scan found. Click a block to see it and fix it.</div>
-        </div>
-        <div className="pg-actions">
-          <button className="primary" disabled={scanning} onClick={() => { setScanning(true); void scanEverything(status).catch(() => undefined).finally(() => setScanning(false)); }}>
-            {scanning ? <span className="spinner" /> : <Icon name="reload" />} {scanning ? "Scanning…" : "Scan everything"}
+      <PageHead
+        title="Clean-up"
+        sub="Duplicates, missing episodes, untidy folders, big files and episodes without a picture. The numbers come from the last scan."
+        actions={
+          <button className="primary" disabled={scanning} title="Runs every check on this page (and the library check) in one go" onClick={() => { setScanning(true); void scanEverything(status).catch(() => undefined).finally(() => setScanning(false)); }}>
+            {scanning ? <span className="spinner" /> : <Icon name="search" />} {scanning ? "Scanning…" : "Run all checks"}
           </button>
-        </div>
+        }
+      />
+      <KTabs active={t} onChange={pick} tabs={cleanupBlocks(sum, status.series).map((b) => ({ id: b.key, label: b.title, icon: b.icon, count: b.count === null ? "–" : b.count === 0 ? "✓" : b.count.toLocaleString(), warn: !!b.count }))} />
+      <div className="cleanup-body" key={t}>
+        {t === "duplicates" && <Duplicates status={status} />}
+        {t === "missing" && <Missing status={status} />}
+        {t === "folders" && <Structure status={status} />}
+        {t === "storage" && <Storage status={status} onNav={onNav} />}
+        {t === "pictures" && <EpisodePictures status={status} />}
       </div>
-      <BlockRow blocks={cleanupBlocks(sum, status.series)} active={t} onPick={pick} compact={!!t} />
-      {t && (
-        <div className="cleanup-body" key={t}>
-          {t === "duplicates" && <Duplicates status={status} />}
-          {t === "missing" && <Missing status={status} />}
-          {t === "folders" && <Structure status={status} />}
-          {t === "storage" && <Storage status={status} onNav={onNav} />}
-          {t === "pictures" && <EpisodePictures status={status} />}
-        </div>
-      )}
     </div>
   );
 }

@@ -42,6 +42,8 @@
     trash_info: { files: 0, bytes: 0 },
     plugins_installed: [{ name: "Intro Skipper", version: "1.0", status: "Active" }, { name: "subbuzz", version: "1.0", status: "Active" }],
     scan_folders: "all",
+    missing_language: { TotalRecordCount: 8, Items: episodes.map((e) => ({ ...e, SeriesName: "Nijntje" })) },
+    missing_subtitles: { TotalRecordCount: 8, Items: episodes },
   };
   const kinds = window.__KINDS__ || {};
   const fallback = (cmd) => {

@@ -120,6 +120,88 @@ pub async fn item_children(state: State<'_, AppState>, id: String) -> Result<Vec
     reader(&state).await?.children(&id).await
 }
 
+/// Other spellings Jellyfin uses for the same language ("dut" and "nld" are both Dutch).
+pub fn lang_aliases(code: &str) -> Vec<String> {
+    const PAIRS: &[(&str, &str)] = &[
+        ("dut", "nld"), ("ger", "deu"), ("fre", "fra"), ("chi", "zho"), ("cze", "ces"), ("gre", "ell"),
+        ("per", "fas"), ("rum", "ron"), ("slo", "slk"), ("alb", "sqi"), ("arm", "hye"), ("baq", "eus"),
+        ("bur", "mya"), ("geo", "kat"), ("ice", "isl"), ("mac", "mkd"), ("mao", "mri"), ("may", "msa"),
+        ("tib", "bod"), ("wel", "cym"),
+    ];
+    let c = code.to_lowercase();
+    let mut out = vec![c.clone()];
+    for (a, b) in PAIRS {
+        if c == *a {
+            out.push(b.to_string());
+        } else if c == *b {
+            out.push(a.to_string());
+        }
+    }
+    out
+}
+
+/// Does a movie/episode (with its MediaStreams) have a subtitle in one of these languages?
+/// Built-in subtitles count; forced ones don't; a subtitle without a language tag counts
+/// (it is usually the film's own language), so nothing is downloaded twice.
+pub fn has_language(item: &Value, codes: &[String]) -> bool {
+    item.get("MediaStreams")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter().any(|st| {
+                st.get("Type").and_then(Value::as_str) == Some("Subtitle")
+                    && !st.get("IsForced").and_then(Value::as_bool).unwrap_or(false)
+                    && match st.get("Language").and_then(Value::as_str).filter(|l| !l.is_empty() && *l != "und") {
+                        None => true,
+                        Some(l) => codes.iter().any(|c| c.eq_ignore_ascii_case(l)),
+                    }
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Every movie and episode without a subtitle in this language (built-in ones count).
+/// Same shape as `missing_subtitles` so the Subtitles screen can use either.
+#[tauri::command]
+pub async fn missing_language(state: State<'_, AppState>, lang: String, codes: Vec<String>) -> Result<Value> {
+    let mut all = check_codes(&lang, &codes)?;
+    for c in all.clone() {
+        for a in lang_aliases(&c) {
+            if !all.contains(&a) {
+                all.push(a);
+            }
+        }
+    }
+    let c = reader(&state).await?;
+    let items = c
+        .items_query(
+            vec![
+                ("IncludeItemTypes", "Movie,Episode".into()),
+                ("Recursive", "true".into()),
+                ("Fields", "Path,MediaStreams,SeriesId".into()),
+                ("SortBy", "SeriesSortName,ParentIndexNumber,IndexNumber,SortName".into()),
+                ("EnableImages", "false".into()),
+                ("EnableUserData", "false".into()),
+            ],
+            60_000,
+        )
+        .await?;
+    let keep = ["Id", "Name", "Type", "SeriesName", "SeriesId", "ParentIndexNumber", "IndexNumber", "Path", "ProductionYear"];
+    let list: Vec<Value> = items
+        .iter()
+        .filter(|v| !has_language(v, &all))
+        .map(|v| {
+            let mut o = serde_json::Map::new();
+            for k in keep {
+                if let Some(x) = v.get(k) {
+                    o.insert(k.to_string(), x.clone());
+                }
+            }
+            Value::Object(o)
+        })
+        .collect();
+    Ok(serde_json::json!({ "TotalRecordCount": list.len(), "Items": list }))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Options {
@@ -674,6 +756,19 @@ mod tests {
         assert_eq!(sniff_format("[Script Info]\nTitle: x", "srt"), "ass");
         assert_eq!(sniff_format("1\n00:00:01,000 --> 00:00:02,000\nHi", ""), "srt");
         assert!(undo_saved_file("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn built_in_and_untagged_subtitles_count() {
+        let eng = vec!["eng".to_string()];
+        let dutch_only = serde_json::json!({"MediaStreams": [{"Type": "Subtitle", "Language": "dut"}]});
+        assert!(!has_language(&dutch_only, &eng));
+        assert!(has_language(&dutch_only, &lang_aliases("nld")));
+        let untagged = serde_json::json!({"MediaStreams": [{"Type": "Subtitle"}]});
+        assert!(has_language(&untagged, &eng));
+        let forced = serde_json::json!({"MediaStreams": [{"Type": "Subtitle", "Language": "eng", "IsForced": true}]});
+        assert!(!has_language(&forced, &eng));
+        assert!(!has_language(&serde_json::json!({}), &eng));
     }
 
     #[test]

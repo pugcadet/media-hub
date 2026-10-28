@@ -101,7 +101,7 @@ export default function Duplicates({ status }: { status: Status }) {
                 {g.items.map((d) => <div key={d.id} className="mono small ellipsis muted" title={d.path}>{d.name} · {fileName(d.path)}</div>)}
               </div>
               <div className="row end">
-                <button className="icon-btn" title="Show in Finder" onClick={() => void api.revealItem(g.items[0].id).catch(() => undefined)}><Icon name="folder" /></button>
+                <button className="icon-btn" title="Open folder" onClick={() => void api.revealItem(g.items[0].id).catch(() => undefined)}><Icon name="folder" /></button>
                 <button onClick={() => nav.open(g.items[0].id)}>Open</button>
               </div>
             </div>
@@ -131,7 +131,7 @@ export default function Duplicates({ status }: { status: Status }) {
                 </div>
               </div>
               <div className="row end">
-                <button className="icon-btn" title="Show in Finder" onClick={() => void api.revealItem(d.id).catch(() => undefined)}><Icon name="folder" /></button>
+                <button className="icon-btn" title="Open folder" onClick={() => void api.revealItem(d.id).catch(() => undefined)}><Icon name="folder" /></button>
                 <button onClick={() => nav.play(d.id)}>Play</button>
                 <button className="danger-outline" disabled={!canEdit} onClick={() => void trash([d], "Moving to trash")}>Trash</button>
               </div>

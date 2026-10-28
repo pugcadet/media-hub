@@ -7,6 +7,8 @@
 "todays_picks": "array",
 "libraries": "array",
 "attention": "object",
+"episode_renumber": "object",
+"missing_language": "object",
 "missing_subtitles": "object",
 "set_tmdb_key": "null",
 "set_title_lang": "null",

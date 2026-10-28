@@ -4,8 +4,10 @@ import { api, applyPlan, scanAround, Batch, Candidate, CheckResult, CheckRow, er
 import { askConfirm } from "./confirm";
 import type { View } from "./nav";
 import { nav } from "./nav";
-import { track, useEpoch } from "./activity";
+import { track, useEpoch, useRenameSteps, type StepState } from "./activity";
 import { BulkSelect, Icon, itemMenu, openMenu, TriCheck, useUndoableSet } from "./ui";
+import { folderTabs, IconBtn, KTabs, PageHead, SearchBox, Seg } from "./kit";
+import { usePageState } from "./saved";
 import { Studio, StudioItem } from "./Studio";
 import { setPrefs, usePrefs, withShowYear, yearOptional, minimalNames, type Prefs } from "./prefs";
 
@@ -53,6 +55,13 @@ const last = (p: string) => p.split("/").pop() ?? p;
 const dirOf = (p: string) => p.split("/").slice(0, -1).join("/");
 const stripExt = (n: string) => n.replace(/\.[^.]+$/, "");
 
+/** A file's rename while it happens: spinner, then green check or red cross. */
+function StepMark({ s }: { s: StepState | undefined }) {
+  if (!s) return null;
+  if (s === "working") return <span className="spinner small-spin" title="Renaming…" />;
+  return <span className={`step-mark ${s}`} title={s === "done" ? "Renamed" : "Not renamed"}><Icon name={s === "done" ? "check" : "x"} size={12} /></span>;
+}
+
 function stateOf(o: PlanOp): { label: string; cls: string } {
   if (o.status === "conflict") return { label: "Clash", cls: "bad" };
   if (o.status === "unparsed") return { label: "Not understood", cls: "bad" };
@@ -64,7 +73,7 @@ function stateOf(o: PlanOp): { label: string; cls: string } {
 /** Right-click on a file or folder in a rename list. */
 function fileMenu(o: PlanOp) {
   return [
-    { label: navigator.userAgent.includes("Windows") ? "Show in Explorer" : "Show in Finder", run: () => void api.revealRel(o.from).catch(() => undefined) },
+    { label: "Open folder", run: () => void api.revealRel(o.from).catch(() => undefined) },
     { label: "Copy the current name", run: () => void navigator.clipboard?.writeText(last(o.from)).catch(() => undefined) },
     ...(o.from !== o.to ? [{ label: "Copy the new name", run: () => void navigator.clipboard?.writeText(last(o.to)).catch(() => undefined) }] : []),
   ];
@@ -176,6 +185,7 @@ function FolderFix({ status, onChanged, preset, embedded, onDone }: { status: St
   const [style, setStyle] = useState<Record<"tv" | "movie", string>>({ tv: STYLES.tv[0].value, movie: STYLES.movie[0].value });
   const [custom, setCustom] = useState(false);
   const [source, setSource] = useState<Source>("auto");
+  const live = useRenameSteps();
   const [matchId, setMatchId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [year, setYear] = useState("");
@@ -417,7 +427,7 @@ function FolderFix({ status, onChanged, preset, embedded, onDone }: { status: St
           <span className="step-dot done">✓</span>
           <span className="ico">📁</span>
           <span className="mono grow">{preset?.label ?? (target || last(root))}{onlyFile ? <span className="muted"> · {last(onlyFile)}</span> : null}</span>
-          <button className="icon-btn" title="Show in Finder" onClick={() => void api.revealRel(target ?? "").catch((e) => setMessage({ text: errorText(e), error: true }))}><Icon name="folder" /></button>
+          <button className="icon-btn" title="Open folder" onClick={() => void api.revealRel(target ?? "").catch((e) => setMessage({ text: errorText(e), error: true }))}><Icon name="folder" /></button>
           <div className="seg">
             {(["auto", "tv", "movie"] as Kind[]).map((k) => (
               <button key={k} className={kind === k ? "on" : ""} onClick={() => { setKind(k); void preview({ kind: k, matchId: null, template: k === "auto" ? undefined : tpl(k as "tv" | "movie") }); }}>
@@ -537,8 +547,9 @@ function FolderFix({ status, onChanged, preset, embedded, onDone }: { status: St
                     const st = stateOf(o);
                     const can = o.status === "ok";
                     return (
-                      <div className={`file-row ${o.kind}`} key={o.from} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
+                      <div className={`file-row ${o.kind} ${live.get(o.from) ?? ""}`} key={o.from} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
                         <input type="checkbox" disabled={!can} checked={picked.has(o.from)} onChange={() => sel.toggle(o.from)} aria-label="Include" />
+                        <StepMark s={live.get(o.from)} />
                         <div className="names">
                           <div className="mono">{last(o.from)}</div>
                           {o.from !== o.to && <div className="mono to">→ {o.kind === "folder" ? last(o.to) : last(o.to)}</div>}
@@ -694,6 +705,7 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [showRight, setShowRight] = useState(false);
   const { tidy, showYear } = usePrefs();
+  const live = useRenameSteps();
   const [renameTop, setRenameTop] = useState(true);
   const [seasonDirs, setSeasonDirs] = useState(false);
 
@@ -824,8 +836,9 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
             {isOpen(g) && ops.map((o) => {
               const can = o.status === "ok";
               return (
-                <label key={o.from} className={`change ${can ? "" : "off"}`} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
+                <label key={o.from} className={`change ${can ? "" : "off"} ${live.get(o.from) ?? ""}`} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
                   <input type="checkbox" disabled={!can} checked={picked.has(o.from)} onChange={() => toggle(o.from)} />
+                  <StepMark s={live.get(o.from)} />
                   <div className="names">
                     <div className="mono small"><span className="muted">{last(o.from)}</span></div>
                     {o.from !== o.to && <div className="mono small accent">→ {o.kind === "video" && dirOf(o.from) !== dirOf(o.to) ? `${last(dirOf(o.to))}/` : ""}{last(o.to)}</div>}
@@ -843,67 +856,6 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
   );
 }
 
-/** Which folders (and titles in them) the list shows: a compact menu with tri-state boxes. */
-function FolderScope({ rows, top, sel }: { rows: CheckRow[]; top: (r: CheckRow) => string; sel: ReturnType<typeof useUndoableSet<string>> }) {
-  const [open, setOpen] = useState(false);
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", esc);
-    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", esc); };
-  }, [open]);
-  const byTop = new Map<string, CheckRow[]>();
-  for (const r of rows) byTop.set(top(r), [...(byTop.get(top(r)) ?? []), r]);
-  const tops = [...byTop.keys()].sort();
-  const allIds = rows.map((r) => r.id);
-  const full = tops.filter((t) => sel.state(byTop.get(t)!.map((r) => r.id)) === "all");
-  const part = tops.filter((t) => sel.state(byTop.get(t)!.map((r) => r.id)) === "some");
-  const summary = sel.state(allIds) === "all" ? "All folders" : sel.size === 0 ? "No folders" : [...full, ...part.map((p) => `${p} (part)`)].slice(0, 3).join(", ") + (full.length + part.length > 3 ? ` +${full.length + part.length - 3}` : "");
-  return (
-    <div className="scope" ref={ref}>
-      <button className={`scope-btn ${open ? "on" : ""}`} onClick={() => setOpen(!open)}>
-        <TriCheck state={sel.state(allIds)} onChange={(on) => sel.setMany(allIds, on)} />
-        <span className="ellipsis">{summary}</span>
-        <span className={`chev ${open ? "open down" : "down"}`}><Icon name="chevron" size={12} /></span>
-      </button>
-      {open && (
-        <div className="scope-pop">
-          <div className="scope-head"><BulkSelect sel={sel} keys={allIds} noun="titles" /></div>
-          <div className="scope-list">
-            {tops.map((t) => {
-              const ids = byTop.get(t)!.map((r) => r.id);
-              const isOpen = expanded === t;
-              return (
-                <div key={t}>
-                  <div className="scope-row">
-                    <TriCheck state={sel.state(ids)} onChange={(on) => sel.setMany(ids, on)} />
-                    <button className="link-plain grow scope-name" onClick={() => setExpanded(isOpen ? null : t)}>
-                      <span className={`chev ${isOpen ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
-                      <Icon name="folder" size={13} /> <span className="ellipsis">{t}</span>
-                    </button>
-                    <span className="muted small">{ids.filter((i) => sel.has(i)).length}/{ids.length}</span>
-                  </div>
-                  {isOpen && byTop.get(t)!.slice().sort((a, b) => a.name.localeCompare(b.name)).map((r) => (
-                    <label key={r.id} className="scope-row sub">
-                      <input type="checkbox" checked={sel.has(r.id)} onChange={() => sel.toggle(r.id)} />
-                      <span className="ellipsis grow">{r.name}</span>
-                      {r.sure && <span className="small ok">100%</span>}
-                    </label>
-                  ))}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function CheckList({ status, focus }: { status: Status; focus?: string }) {
   const epoch = useEpoch();
   const [res, setRes] = useState<CheckResult | null>(null);
@@ -914,22 +866,14 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
   const picked = pickedSel.set;
   const [show, setShow] = useState<"todo" | "right" | "errors">("todo");
   const [open, setOpen] = useState<string | null>(null);
-  // Titles in view (all of them until you narrow it down by folder).
-  const scope = useUndoableSet<string>();
-  const known = useRef<Set<string>>(new Set());
+  // The folder tab (like the Library's): "@all" or a top folder.
+  const [folderTab, setFolderTab] = usePageState<string>("renamer.folder", "@all");
+  // How each title's rename went during "Rename all" (turns green when done).
+  const [titleState, setTitleState] = useState<Record<string, StepState>>({});
 
   useEffect(() => {
     api.namingCheckLast().then((r) => setRes(r)).catch(() => setRes(null));
   }, [epoch]);
-  // New titles from a check come into view; your folder choice for the others stays.
-  useEffect(() => {
-    if (!res) return;
-    const fresh = res.rows.map((r) => r.id).filter((id) => !known.current.has(id));
-    if (known.current.size === 0) scope.reset(fresh);
-    else if (fresh.length) scope.reset([...scope.set, ...fresh]);
-    fresh.forEach((id) => known.current.add(id));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [res]);
 
   const { tidy } = usePrefs();
   const [checkedTidy, setCheckedTidy] = useState(tidy);
@@ -957,8 +901,8 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
   const rows = res?.rows ?? [];
   const top = (r: CheckRow) => r.folder.split("/")[0] || "(library folder)";
   const q = filter.toLowerCase();
-  const match = (r: CheckRow) => scope.has(r.id) && (!q || r.name.toLowerCase().includes(q) || r.folder.toLowerCase().includes(q));
-  const narrowed = rows.length > 0 && scope.size < rows.length;
+  const match = (r: CheckRow) => (folderTab === "@all" || top(r) === folderTab) && (!q || r.name.toLowerCase().includes(q) || r.folder.toLowerCase().includes(q));
+  const tops = [...new Set(rows.map(top))];
   const todo = rows.filter((r) => !r.error && (r.toRename + r.folders + r.problems > 0 || r.reasons.length > 0));
   const sure = todo.filter((r) => r.sure);
   const look = todo.filter((r) => !r.sure);
@@ -974,13 +918,16 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
       await track(`Renaming ${list.length} titles`, async (job) => {
         let n = 0;
         const failed: string[] = [];
+        setTitleState(Object.fromEntries(list.map((r) => [r.id, "working" as StepState])));
         for (const [i, r] of list.entries()) {
           if (job.cancelled) break;
           job.update(r.name, i / list.length);
           try {
             n += await renameRow(r);
+            setTitleState((t) => ({ ...t, [r.id]: "done" }));
           } catch (e) {
             failed.push(`${r.name}: ${errorText(e)}`);
+            setTitleState((t) => ({ ...t, [r.id]: "failed" }));
           }
         }
         job.update("Asking Jellyfin to look at the renamed folders", null);
@@ -997,7 +944,7 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
 
   const menuFor = (r: CheckRow) => [
     { label: "Open title", run: () => nav.open(r.id) },
-    { label: "Show folder in Finder", run: () => void api.revealRel(r.folder).catch(() => undefined) },
+    { label: "Open folder", run: () => void api.revealRel(r.folder).catch(() => undefined) },
     { label: "Check again", run: () => void check([r.id]) },
     { sep: true },
     ...itemMenu({ id: r.id, kind: r.kind, title: r.name }).filter((m) => m.label === "Identify…" || m.label === "Fill in missing artwork"),
@@ -1012,7 +959,7 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
     thumb: imageUrl(r.id, "Primary", 80),
     group: show === "todo" ? (r.sure ? `Sure matches · rename in one go` : "Needs a look") : undefined,
     lead: show === "todo" && r.sure ? <input type="checkbox" checked={picked.has(r.id)} onChange={() => pickedSel.toggle(r.id)} aria-label="Select" /> : undefined,
-    tail: r.sure && show === "todo" ? <span className="chip static on">100%</span> : undefined,
+    tail: titleState[r.id] ? <StepMark s={titleState[r.id]} /> : r.sure && show === "todo" ? <span className="chip static on">100%</span> : undefined,
   }));
   const openRow = listed.find((r) => r.id === open) ?? null;
   // Opened for one title ("Rename…" on a title): select it, checking it first when it isn't listed.
@@ -1030,7 +977,7 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
     }
     focused.current = focus;
     setFilter("");
-    if (!scope.has(focus)) scope.reset([...scope.set, focus]);
+    if (folderTab !== "@all" && top(row) !== folderTab) setFolderTab("@all");
     setShow(row.error ? "errors" : todo.includes(row) ? "todo" : "right");
     setOpen(focus);
   }, [focus, res]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1043,18 +990,21 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
   if (!status.libraryRoot) return null;
   return (
     <div className="stack grow-col">
-      <div className="ren-bar">
-        {rows.length > 0 && <FolderScope rows={rows} top={top} sel={scope} />}
-        {scope.canUndo && <button className="link small" onClick={scope.undo}><Icon name="undo" size={12} /> Undo</button>}
-        <span className="spacer" />
-        <span className="muted small">{checking ? `Checking ${checking}…` : res ? `${rows.length} titles · checked ${new Date(res.at * 1000).toLocaleString()}` : "Not checked yet. Checking renames nothing."}</span>
-        {checking ? <button onClick={() => void api.namingCheckCancel()}>Stop</button> : (
-          <>
-            {narrowed && scope.size > 0 && <button onClick={() => void check(rows.filter((r) => scope.has(r.id)).map((r) => r.id))}>Check these {scope.size}</button>}
-            <button className="primary" onClick={() => void check()}>{res ? (checkedTidy !== tidy ? "Check again with the new setting" : "Check again") : "Check my library"}</button>
-          </>
-        )}
-      </div>
+      <KTabs
+        folders
+        active={folderTab}
+        onChange={setFolderTab}
+        tabs={folderTabs(tops, (f) => (f === null ? todo.length : todo.filter((r) => top(r) === f).length))}
+        after={<>
+          <span className="spacer" />
+          <span className="muted small">{checking ? `Checking ${checking}…` : res ? `Checked ${new Date(res.at * 1000).toLocaleString()} · numbers are titles to fix` : "Not checked yet. Checking renames nothing."}</span>
+          {checking ? <button onClick={() => void api.namingCheckCancel()}><Icon name="stop" size={12} /> Stop</button> : (
+            <button className="primary" title="Reads every show and movie folder on the NAS and compares the names (renames nothing)" onClick={() => void check(folderTab === "@all" ? null : rows.filter((r) => top(r) === folderTab).map((r) => r.id))}>
+              <Icon name="search" /> {res ? (checkedTidy !== tidy ? "Check names with the new setting" : folderTab === "@all" ? "Check all names" : `Check names in ${folderTab}`) : "Check my library"}
+            </button>
+          )}
+        </>}
+      />
       {error && <p className="error">{error}</p>}
 
       {res && (
@@ -1065,12 +1015,12 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
           empty={show === "todo" ? "Everything here is named right." : "Nothing here."}
           head={
             <>
-              <label className="searchbox"><Icon name="search" /><input placeholder="Find a title" value={filter} onChange={(e) => setFilter(e.target.value)} /></label>
-              <div className="chips">
-                <button className={`chip ${show === "todo" ? "on" : ""}`} onClick={() => setShow("todo")}>To fix ({todo.filter(match).length})</button>
-                <button className={`chip ${show === "right" ? "on" : ""}`} onClick={() => setShow("right")}>Right ({right.filter(match).length})</button>
-                {errors.length > 0 && <button className={`chip ${show === "errors" ? "on" : ""}`} onClick={() => setShow("errors")}>Couldn't check ({errors.filter(match).length})</button>}
-              </div>
+              <SearchBox value={filter} onChange={setFilter} placeholder="Find a title" />
+              <Seg value={show} onChange={setShow} options={[
+                { id: "todo", label: `To fix ${todo.filter(match).length}` },
+                { id: "right", label: `Right ${right.filter(match).length}` },
+                ...(errors.length > 0 ? [{ id: "errors" as const, label: `Couldn't check ${errors.filter(match).length}` }] : []),
+              ]} />
               {show === "todo" && sureKeys.length > 0 && (
                 <div className="row between studio-bulk">
                   <BulkSelect sel={pickedSel} keys={sureKeys} noun="sure" />
@@ -1093,8 +1043,8 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
                   </div>
                 </div>
                 <div className="row end">
-                  <button className="icon-btn" title="Show in Finder" onClick={() => void api.revealRel(openRow.folder).catch(() => undefined)}><Icon name="folder" /></button>
-                  <button className="icon-btn" title="Check again" onClick={() => void check([openRow.id])}><Icon name="reload" /></button>
+                  <IconBtn icon="folder" title="Open folder" onClick={() => void api.revealRel(openRow.folder).catch(() => undefined)} />
+                  <IconBtn icon="expand" title="Open the title's page" onClick={() => nav.open(openRow.id)} />
                   <button className="icon-btn" aria-label="More" onClick={(e) => openMenu(e, menuFor(openRow))}><Icon name="more" /></button>
                 </div>
               </div>
@@ -1121,7 +1071,8 @@ function BulkEdit({ status, onCheck }: { status: Status; onCheck: () => void }) 
   const titles = useUndoableSet<string>();
   const picked = useUndoableSet<string>();
   const [q, setQ] = useState("");
-  const [openTops, setOpenTops] = useState<Set<string>>(new Set());
+  const [folderTab, setFolderTab] = usePageState<string>("renamer.folder", "@all");
+  const live = useRenameSteps();
   const [rules, setRules] = useState<FindReplace[]>([{ find: "", replace: "", regex: false }]);
   const [dropTags, setDropTags] = useState(true);
   const [epTag, setEpTag] = useState<"keep" | "add" | "remove">("keep");
@@ -1135,9 +1086,10 @@ function BulkEdit({ status, onCheck }: { status: Status; onCheck: () => void }) 
   const rows = (res?.rows ?? []).filter((r) => r.folder && !r.error);
   const top = (r: CheckRow) => r.folder.split("/")[0] || "(library folder)";
   const ql = q.toLowerCase();
-  const shown = rows.filter((r) => !ql || r.name.toLowerCase().includes(ql) || r.folder.toLowerCase().includes(ql)).sort((a, b) => top(a).localeCompare(top(b)) || a.name.localeCompare(b.name));
-  const byTop = new Map<string, CheckRow[]>();
-  for (const r of shown) byTop.set(top(r), [...(byTop.get(top(r)) ?? []), r]);
+  const tops = [...new Set(rows.map(top))];
+  const shown = rows
+    .filter((r) => (folderTab === "@all" || top(r) === folderTab) && (!ql || r.name.toLowerCase().includes(ql) || r.folder.toLowerCase().includes(ql)))
+    .sort((a, b) => a.name.localeCompare(b.name));
   const chosen = rows.filter((r) => titles.has(r.id));
   const ruleKey = JSON.stringify([rules, dropTags, epTag, incFolder, [...titles.set].sort()]);
   // Any change to the edits or the titles makes the preview old.
@@ -1149,7 +1101,9 @@ function BulkEdit({ status, onCheck }: { status: Status; onCheck: () => void }) 
     setError(null);
     setNote(null);
     try {
-      const targets = chosen.map((r) => ({ folder: r.folder, file: r.kind === "movie" ? r.file : null }));
+      // A movie in its own folder is planned from that folder, so the folder gets the same
+      // clean-up as the file (release tags out, year in brackets).
+      const targets = chosen.map((r) => (r.kind === "movie" && r.file ? { folder: dirOf(r.file) || r.folder, file: r.file } : { folder: r.folder, file: null }));
       const p = await api.bulkPlan(targets, { rules: rules.filter((r) => r.find), dropTags, episodeTag: epTag, includeFolder: incFolder });
       setPlan(p);
       picked.reset(p.ops.filter((o) => o.status === "ok").map((o) => o.from));
@@ -1203,34 +1157,22 @@ function BulkEdit({ status, onCheck }: { status: Status; onCheck: () => void }) 
   const okKeys = (list: PlanOp[]) => list.filter((o) => o.status === "ok").map((o) => o.from);
 
   return (
+    <div className="stack">
+    <KTabs folders active={folderTab} onChange={setFolderTab} tabs={folderTabs(tops, (f) => (f === null ? rows.length : rows.filter((r) => top(r) === f).length))} />
     <div className="bulk-grid">
       <div className="card bulk-titles">
-        <div className="strong">Titles</div>
-        <label className="searchbox"><Icon name="search" /><input placeholder="Find a title or folder" value={q} onChange={(e) => setQ(e.target.value)} /></label>
+        <div className="row between"><span className="strong">Titles</span><span className="muted small">{chosen.length} chosen</span></div>
+        <SearchBox value={q} onChange={setQ} placeholder="Find a title or folder" />
         <BulkSelect sel={titles} keys={shown.map((r) => r.id)} noun="titles" />
         <div className="bulk-list">
-          {[...byTop.entries()].map(([t, list]) => {
-            const ids = list.map((r) => r.id);
-            const open = openTops.has(t) || !!ql;
-            return (
-              <div key={t}>
-                <div className="scope-row">
-                  <TriCheck state={titles.state(ids)} onChange={(on) => titles.setMany(ids, on)} />
-                  <button className="link-plain grow scope-name" onClick={() => setOpenTops((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n; })}>
-                    <span className={`chev ${open ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
-                    <Icon name="folder" size={13} /> <span className="ellipsis">{t}</span>
-                  </button>
-                  <span className="muted small">{ids.filter((i) => titles.has(i)).length}/{ids.length}</span>
-                </div>
-                {open && list.map((r) => (
-                  <label key={r.id} className="scope-row sub">
-                    <input type="checkbox" checked={titles.has(r.id)} onChange={() => titles.toggle(r.id)} />
-                    <span className="ellipsis grow" title={r.folder}>{r.name}{r.year ? <span className="muted"> ({r.year})</span> : null}</span>
-                  </label>
-                ))}
-              </div>
-            );
-          })}
+          {shown.map((r) => (
+            <label key={r.id} className="scope-row">
+              <input type="checkbox" checked={titles.has(r.id)} onChange={() => titles.toggle(r.id)} />
+              <span className="ellipsis grow" title={r.folder}>{r.name}{r.year ? <span className="muted"> ({r.year})</span> : null}</span>
+              {folderTab === "@all" && <span className="muted small ellipsis">{top(r)}</span>}
+            </label>
+          ))}
+          {shown.length === 0 && <p className="muted small pad">Nothing here.</p>}
         </div>
       </div>
 
@@ -1287,8 +1229,9 @@ function BulkEdit({ status, onCheck }: { status: Status; onCheck: () => void }) 
                     <span className="muted small">{okKeys(list).filter((k) => picked.has(k)).length} of {okKeys(list).length} selected</span>
                   </div>
                   {list.map((o) => (
-                    <label key={o.from} className={`change ${o.status === "ok" ? "" : "off"}`} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
+                    <label key={o.from} className={`change ${o.status === "ok" ? "" : "off"} ${live.get(o.from) ?? ""}`} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
                       <input type="checkbox" disabled={o.status !== "ok"} checked={picked.has(o.from)} onChange={() => picked.toggle(o.from)} />
+                      <StepMark s={live.get(o.from)} />
                       <div className="names">
                         <div className="mono small"><span className="muted">{o.kind === "folder" ? `${last(o.from)}/` : last(o.from)}</span></div>
                         {o.from !== o.to && <div className="mono small accent">→ {o.kind === "folder" ? `${last(o.to)}/` : last(o.to)}</div>}
@@ -1303,6 +1246,7 @@ function BulkEdit({ status, onCheck }: { status: Status; onCheck: () => void }) 
           </section>
         )}
       </div>
+    </div>
     </div>
   );
 }
@@ -1346,15 +1290,16 @@ export default function Renamer({ status, onChanged, start, embedded }: {
 
   return (
     <div className={`pg ${mode === "check" && status.libraryRoot ? "studio-page" : ""}`}>
-      <div className="pg-head compact-head">
-        <h1 title="Fixes file and folder names so Jellyfin and Infuse recognise every show, season and movie.">Renamer</h1>
-        {status.libraryRoot && (
-          <div className="seg">
-            <button className={mode === "check" ? "on" : ""} onClick={() => setMode("check")}><Icon name="check" size={13} /> Library check</button>
-            <button className={mode === "bulk" ? "on" : ""} onClick={() => setMode("bulk")}><Icon name="rename" size={13} /> Find &amp; replace</button>
-          </div>
-        )}
-      </div>
+      <PageHead
+        title="Renamer"
+        sub="Fixes file and folder names so Jellyfin and Infuse recognise every show, season and movie."
+        actions={status.libraryRoot ? (
+          <Seg value={mode === "folder" ? "check" : mode} onChange={(m) => setMode(m)} options={[
+            { id: "check", label: <><Icon name="check" size={13} /> Names to fix</> },
+            { id: "bulk", label: <><Icon name="rename" size={13} /> Find &amp; replace</> },
+          ]} />
+        ) : undefined}
+      />
       {error && <p className="error">{error}</p>}
       {!status.libraryRoot ? <FolderFix status={status} onChanged={onChanged} />
         : mode === "check" ? <CheckList status={status} focus={start?.item} />

@@ -22,6 +22,8 @@ export interface StudioItem {
   tail?: ReactNode;
   /** Missing artwork: an amber outline around the picture. */
   warn?: boolean;
+  /** Status icons (instead of dots). */
+  status?: ReactNode;
 }
 
 export function Dots({ dots }: { dots: Dot[] }) {
@@ -94,7 +96,7 @@ export function Studio({ items, selected, onSelect, onMenu, onOpen, head, empty,
                     {it.sub && <span className="muted small ellipsis">{it.sub}</span>}
                   </span>
                   {it.tail}
-                  {it.dots && <Dots dots={it.dots} />}
+                  {it.status ?? (it.dots && <Dots dots={it.dots} />)}
                 </div>
               </div>
             );

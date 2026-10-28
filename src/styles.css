@@ -1858,3 +1858,115 @@ button.chip-x:hover { background: rgba(240,122,110,.2); color: var(--red); }
 /* The Library list gets the full window height; the header scrolls away above it. */
 .pg.studio-page.lib-page { height: auto; }
 .lib-page .studio { flex: none; height: calc(100vh - 96px); min-height: 460px; }
+
+/* ===================================================================== */
+/* Shared screen kit (kit.tsx): one look for every screen.                */
+/* ===================================================================== */
+.page { scrollbar-gutter: stable; overscroll-behavior: contain; }
+.page::-webkit-scrollbar, .studio-items::-webkit-scrollbar, .studio-pane::-webkit-scrollbar { width: 10px; }
+.page::-webkit-scrollbar-thumb, .studio-items::-webkit-scrollbar-thumb, .studio-pane::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+.page::-webkit-scrollbar-track, .studio-items::-webkit-scrollbar-track, .studio-pane::-webkit-scrollbar-track { background: transparent; }
+
+/* Header: same height and place on every screen, so nothing jumps when you switch. */
+.k-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; min-height: 58px; flex-wrap: wrap; }
+.k-head-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.k-head h1 { font-size: 26px; line-height: 34px; margin: 0; }
+.k-sub { min-height: 18px; max-width: 760px; }
+.k-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* Tabs: the Library's look everywhere (folders, sections, item tabs). */
+.k-tabs-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lib-tabs button span { white-space: nowrap; }
+.lib-tabs button.drop { box-shadow: inset 3px 0 0 var(--accent); }
+.lib-tabs button[draggable="true"] { cursor: pointer; }
+.count.warn { background: rgba(240,180,76,.18); color: var(--amber); }
+.tabs, .ui-tabs {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; border-radius: 14px; align-self: flex-start; max-width: 100%;
+  background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.01)); border: 1px solid var(--line);
+}
+.tabs > button, .ui-tab > button:first-child, .tabs > span > button:first-child {
+  height: 34px; border: 0 !important; border-radius: 10px !important; margin: 0 !important; padding: 0 12px; color: var(--muted);
+  display: inline-flex; align-items: center; gap: 7px; box-shadow: none !important; background: transparent; font-weight: 600;
+}
+.tabs > button:hover:not(:disabled), .ui-tab > button:first-child:hover:not(:disabled) { color: var(--text); background: rgba(255,255,255,.05); }
+.tabs > button.on, .ui-tab.on > button:first-child {
+  color: #fff; background: linear-gradient(135deg, rgba(var(--accent-rgb),.32), rgba(var(--accent-rgb),.14)) !important;
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb),.45) !important;
+}
+.ui-tab .tab-x { margin-left: -6px; }
+.tab-count { margin-left: 2px; }
+
+/* Toolbar under the tabs. */
+.k-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.k-toolbar-left, .k-toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.k-toolbar .searchbox { height: 36px; min-width: 240px; }
+.seg-ctl.icons button { width: 38px; height: 30px; }
+
+/* Search with a clear button. */
+.k-search { position: relative; }
+.k-search input { padding-right: 26px !important; }
+button.k-clear { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: rgba(255,255,255,.1); color: var(--text); }
+button.k-clear:hover:not(:disabled) { background: rgba(255,255,255,.2); }
+
+/* Icon buttons. */
+button.k-icon { width: 36px; height: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; flex: 0 0 auto; }
+button.k-icon.on { color: var(--accent-on); border-color: rgba(var(--accent-rgb),.5); }
+
+/* Status icons in lists: the same icons, in the same order, as the filters above. */
+.k-status { display: inline-flex; gap: 3px; flex: 0 0 auto; }
+button.k-st { all: unset; width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; }
+button.k-st.ok { color: var(--accent-on); background: rgba(var(--accent-rgb),.12); }
+button.k-st.no { color: var(--amber); background: rgba(240,180,76,.16); cursor: pointer; }
+button.k-st.no:hover { background: rgba(240,180,76,.3); }
+button.k-st.unknown { color: rgba(255,255,255,.22); }
+
+/* Checkboxes: text never wraps under the box. */
+label.check { white-space: nowrap; }
+label.check > span { white-space: nowrap; }
+.k-check { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+
+/* No scrolling twice: list pages fill the window and only their columns scroll. */
+.page:has(> .studio-page) { overflow: hidden; }
+.pg.studio-page { height: 100%; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; }
+.pg.studio-page > .studio, .pg.studio-page .grow-col > .studio { flex: 1; min-height: 0; }
+.pg.studio-page .grow-col { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.studio-list { min-height: 0; }
+.studio-pane { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+@media (max-width: 1100px) { .page:has(> .studio-page) { overflow: auto; } .pg.studio-page { height: auto; } }
+
+/* The hub menu (top left) always shows on top, also with the small menu. */
+.sidebar { overflow: visible; position: relative; z-index: 40; }
+.hub-menu { z-index: 300; }
+.sidebar.small .hub-menu { left: 0; top: calc(100% + 4px); }
+.sidebar.small .sb-top { align-items: center; width: 100%; }
+.sidebar.small .hub { display: flex; justify-content: center; width: 100%; }
+.sidebar.small .hub-btn { display: flex; justify-content: center; width: 44px; height: 44px; box-sizing: border-box; padding: 0; }
+.sidebar.small .sb-item { margin: 0 auto; }
+.sidebar.small button.sb-collapse { margin: 0 auto; }
+
+/* Equal-width tabs don't change size when chosen (bold text made them jump). */
+.lib-tabs button, .lib-tabs button.on, .seg-ctl button, .seg-ctl button.on, .chip, .chip.on { font-weight: 600; }
+
+/* Rename progress, file by file. */
+.step-mark { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 18px; }
+.step-mark.done { background: rgba(52,199,123,.2); color: #4ade80; }
+.step-mark.failed { background: rgba(238,123,110,.2); color: var(--red); }
+.spinner.small-spin { width: 14px; height: 14px; flex: 0 0 14px; }
+.change.done, .file-row.done { background: rgba(52,199,123,.08); transition: background .3s; }
+.change.done .accent, .file-row.done .to { color: #4ade80; }
+.change.failed, .file-row.failed { background: rgba(238,123,110,.08); }
+.change.working, .file-row.working { background: rgba(var(--accent-rgb),.08); }
+.stat-card.clickable { cursor: pointer; transition: border-color .15s, transform .15s; }
+.stat-card.clickable:hover { border-color: var(--accent); transform: translateY(-1px); }
+.bulk-list .scope-row { padding: 6px 8px; }
+.renumber { max-width: 620px; }
+.renumber-list { max-height: 50vh; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.renumber-list .tool-row.likely { background: rgba(var(--accent-rgb),.1); }
+.miss-chev { width: 24px; display: inline-flex; justify-content: center; }
+.miss-ep { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.pill { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 700; background: rgba(255,255,255,.08); }
+.pill.ok { background: rgba(var(--accent-rgb),.18); color: var(--accent-on); }
+.pill.warn { background: rgba(240,180,76,.18); color: var(--amber); }
+.pill.bad { background: rgba(238,123,110,.18); color: var(--red); }
+.ep-card.missing { opacity: .8; border: 1px dashed rgba(240,180,76,.5); cursor: default; }
+.ep-card.missing .noart { color: var(--amber); }

@@ -227,7 +227,7 @@ export default function Downloads(_props: { onNav: (v: View) => void }) {
                 {j.state === "running" && <button onClick={() => void api.dlCancel(j.id)}>Cancel</button>}
                 {j.state === "done" && j.files.length > 0 && (
                   <button onClick={() => void api.dlReveal(j.files[j.files.length - 1]).catch((e) => setMessage({ text: errorText(e), error: true }))}>
-                    Show in {navigator.userAgent.includes("Mac") ? "Finder" : "Explorer"}
+                    Open folder
                   </button>
                 )}
               </div>

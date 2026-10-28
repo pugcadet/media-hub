@@ -1,3 +1,4 @@
+import { clearCache } from "./api";
 // What the app is busy with right now (shown in the bar at the top), and a global "reload"
 // counter: when a job finishes, every screen that reads data refreshes itself.
 import { useSyncExternalStore } from "react";
@@ -43,6 +44,7 @@ export function useEpoch(): number {
 }
 
 export function reloadAll(): void {
+  clearCache();
   epoch++;
   notify();
 }
@@ -54,6 +56,7 @@ const norm = (id: string) => id.replace(/-/g, "").toLowerCase();
 
 /** Reload only these titles (their pages, and their rows in lists). */
 export function reloadItems(ids: (string | null | undefined)[]): void {
+  clearCache();
   const list = [...new Set(ids.filter((x): x is string => !!x).map(norm))];
   if (!list.length) return;
   list.forEach((i) => itemEpochs.set(i, (itemEpochs.get(i) ?? 0) + 1));
@@ -226,4 +229,31 @@ export async function followEvent(job: JobHandle, event: string): Promise<() => 
     const frac = p.progress ?? (p.total ? (p.done ?? 0) / p.total : null);
     job.update(p.label ?? p.name ?? p.file ?? "", frac);
   });
+}
+
+/* Live progress of a rename batch, file by file ("rename-step" from the backend). */
+export type StepState = "working" | "done" | "failed";
+let steps = new Map<string, StepState>();
+const stepSubs = new Set<() => void>();
+let stepsListening = false;
+function listenSteps() {
+  if (stepsListening) return;
+  stepsListening = true;
+  void listen<{ index: number; from: string; state: StepState }>("rename-step", (e) => {
+    if (e.payload.index === 0 && e.payload.state === "working") steps = new Map();
+    steps = new Map(steps).set(e.payload.from, e.payload.state);
+    stepSubs.forEach((f) => f());
+  }).catch(() => { stepsListening = false; });
+}
+
+/** From-path → how its rename went, for the batch running now (or the last one). */
+export function useRenameSteps(): Map<string, StepState> {
+  listenSteps();
+  return useSyncExternalStore(
+    (f) => {
+      stepSubs.add(f);
+      return () => stepSubs.delete(f);
+    },
+    () => steps,
+  );
 }

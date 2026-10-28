@@ -8,7 +8,7 @@ import { prefs as usePrefsLiteSnapshot, setPrefs as setPrefsLite, usePrefs as us
 
 /* ------------------------------------------------------------------ store */
 
-function makeStore<T>(initial: T) {
+export function makeStore<T>(initial: T) {
   let value = initial;
   const subs = new Set<() => void>();
   return {
@@ -152,7 +152,7 @@ export function itemMenu(t: MenuTarget, canEdit = true): MenuItem[] {
     }
     if (k !== "collection" && k !== "person") {
       items.push({ sep: true });
-      items.push({ label: navigator.userAgent.includes("Windows") ? "Show in Explorer" : "Show in Finder", run: () => void api.revealItem(t.id).catch(() => undefined) });
+      items.push({ label: "Open folder", run: () => void api.revealItem(t.id).catch(() => undefined) });
     }
     return items;
   }
@@ -172,7 +172,7 @@ export function itemMenu(t: MenuTarget, canEdit = true): MenuItem[] {
   if (k !== "collection" && k !== "person") {
     items.push({ label: "Refresh from internet", disabled: !canEdit, run: () => void track("Refreshing metadata", () => api.refreshItem(t.id, false)) });
     items.push({ sep: true });
-    items.push({ label: navigator.userAgent.includes("Windows") ? "Show in Explorer" : "Show in Finder", run: () => void api.revealItem(t.id).catch((e) => void track("Show in Finder", () => Promise.reject(e))) });
+    items.push({ label: "Open folder", run: () => void api.revealItem(t.id).catch((e) => void track("Open folder", () => Promise.reject(e))) });
   }
   return items;
 }

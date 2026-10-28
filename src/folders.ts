@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { onDataReload, useEpoch } from "./activity";
+import { orderFolders } from "./prefs";
 
 let cache: { epoch: number; map: Map<string, string> } | null = null;
 let pending: Promise<Map<string, string>> | null = null;
@@ -30,9 +31,9 @@ export function useFolderMap(): Map<string, string> {
   return map;
 }
 
-/** Every folder name, sorted. */
+/** Every folder name, in your folder order. */
 export function foldersOf(map: Map<string, string>): string[] {
-  return [...new Set(map.values())].sort((a, b) => a.localeCompare(b));
+  return orderFolders([...new Set(map.values())]);
 }
 
 /** "folder:Kids" → "Kids" (the id a folder tab gets), otherwise null. */

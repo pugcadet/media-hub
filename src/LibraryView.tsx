@@ -9,11 +9,12 @@ import { followEvent, onItemsChanged, track, useEpoch } from "./activity";
 import { nav, type Route } from "./nav";
 import { artSkipped, fixTitles, FixKind, noSubsOf, targetOf } from "./fixers";
 import { askFixes } from "./FixDialog";
-import { Studio, StudioItem, Dots } from "./Studio";
+import { Studio, StudioItem } from "./Studio";
 import ItemPage from "./ItemPage";
-import { askChoice, CardTile, Icon, type IconName, Img, itemMenu, openMenu, SettingsLink } from "./ui";
+import { askChoice, Icon, type IconName, Img, itemMenu, openMenu, SettingsLink, type MenuItem } from "./ui";
 import { askIdentify } from "./IdentifyDialog";
-import { setPrefs, usePrefs } from "./prefs";
+import { prefs, setPrefs, usePrefs } from "./prefs";
+import { folderTabs, IconBtn, KTabs, PageHead, SearchBox, Seg, StatusIcons, Toolbar } from "./kit";
 
 type Check = "naming" | "identified" | "artwork" | "subtitles" | "intros";
 
@@ -36,6 +37,8 @@ interface Row extends HealthRow {
 }
 
 function state(r: Row, c: Check): boolean | null {
+  // Checks you switched off for this title (no subtitles or intros needed) count as fine.
+  if ((prefs().checksOff[clean(r.id)] ?? []).includes(c)) return null;
   switch (c) {
     case "naming": return r.check ? !r.check.error && r.check.toRename + r.check.folders + r.check.problems === 0 : null;
     case "identified": return r.identified;
@@ -56,7 +59,6 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
   const [filter, setFilter] = usePageState<"todo" | "all" | "ok">("library.filter", "all");
   const [only, setOnly] = usePageState<Check | "">("library.only", "");
   const [query, setQuery] = usePageState("library.query", "");
-  const [kind, setKind] = usePageState<"" | "series" | "movie">("library.kind", "");
   const [sort, setSort] = usePageState<"name" | "todo">("library.sort", "name");
   const [sel, setSel] = usePageState<string | null>("library.sel", null);
   const [checking, setChecking] = useState(false);
@@ -120,11 +122,14 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
     const s = CHECKS.map((c) => state(r, c.id)).filter((x) => x !== null) as boolean[];
     return s.length ? s.filter(Boolean).length / s.length : 1;
   };
-  const gaps = (c: Check) => inFolder.filter((r) => (!kind || r.kind === kind) && state(r, c) === false).length;
+  const gaps = (c: Check) => inFolder.filter((r) => state(r, c) === false).length;
+  // The title you are working on stays in the list until you pick another one, even when it
+  // no longer matches the filter (because you just fixed it).
+  const stick = (r: Row) => r.id === sel;
   const shown = inFolder
-    .filter((r) => (!kind || r.kind === kind) && (!query || r.name.toLowerCase().includes(query.toLowerCase())))
-    .filter((r) => !only || state(r, only) === false)
-    .filter((r) => (filter === "all" ? true : filter === "ok" ? score(r) === 1 : score(r) < 1))
+    .filter((r) => !query || r.name.toLowerCase().includes(query.toLowerCase()))
+    .filter((r) => !only || state(r, only) === false || stick(r))
+    .filter((r) => (filter === "all" ? true : filter === "ok" ? score(r) === 1 || stick(r) : score(r) < 1 || stick(r)))
     .sort((a, b) => (sort === "todo" ? score(a) - score(b) : 0) || a.name.localeCompare(b.name));
   const perfect = inFolder.filter((r) => score(r) === 1).length;
   const unknownSeg = (rows ?? []).filter((r) => r.kind === "series" && !r.seg).length;
@@ -179,43 +184,41 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
       : x)) ?? null);
   };
 
-  const dotsOf = (r: Row) => CHECKS.filter((c) => c.id !== "intros" || r.kind === "series").map((c) => ({ ok: state(r, c.id), label: c.label }));
+  // Same icons and order as the filter buttons above; movies keep an empty place for intros
+  // so the icons line up in columns.
+  const statusOf = (r: Row) => (
+    <StatusIcons items={CHECKS.map((c) => ({ icon: c.icon, label: c.label, ok: c.id === "intros" && r.kind !== "series" ? null : state(r, c.id), onClick: canEdit || c.id !== "artwork" ? () => fixDot(r, c.id) : undefined }))} />
+  );
   const sub = (r: Row) => `${r.kind === "series" ? `Show · ${r.videos} episodes` : "Movie"}${folder === "@all" && r.libraryFolder ? ` · ${r.libraryFolder}` : ""}`;
 
-  const folderTabs = (
-    <div className="lib-tabs" role="tablist">
-      <button role="tab" className={folder === "@all" ? "on" : ""} onClick={() => setFolder("@all")}><Icon name="stack" size={14} /> All <span className="count">{rows?.length ?? ""}</span></button>
-      {folders.map((f) => (
-        <button key={f} role="tab" className={folder === f ? "on" : ""} onClick={() => setFolder(f)}>
-          <Icon name={/youtube/i.test(f) ? "play" : /movie|film/i.test(f) ? "film" : /tv|show|serie/i.test(f) ? "tv" : "folder"} size={14} /> {f} <span className="count">{(rows ?? []).filter((r) => r.libraryFolder === f).length}</span>
-        </button>
-      ))}
-      <button role="tab" className={folder === "@collections" ? "on" : ""} onClick={() => setFolder("@collections")}><Icon name="heart" size={14} /> Collections</button>
-    </div>
+  const tabs = (
+    <KTabs
+      folders
+      active={folder}
+      onChange={setFolder}
+      tabs={[
+        ...folderTabs(folders, (f) => (f === null ? rows?.length ?? null : (rows ?? []).filter((r) => r.libraryFolder === f).length)),
+        { id: "@collections", label: "Collections", icon: "heart" },
+      ]}
+    />
   );
 
   const head = (
-    <div className="pg-head lib-head">
-      <div>
-        <h1>Library</h1>
-        <div className="muted small">
-          {rows ? `${perfect} of ${inFolder.length} titles complete.` : "Reading the library…"}
-          {folders.length === 0 && rows && <> Folder tabs appear once your library folder is set (<SettingsLink section="library">Settings</SettingsLink>).</>}
-        </div>
-      </div>
-      <div className="pg-actions">
-        {unknownSeg > 0 && <button onClick={() => void readIntros()} title="Reads which episodes have intro markers (needed for the Intros filter)"><Icon name="skip" /> Read intros ({unknownSeg})</button>}
-        <button disabled={checking} onClick={() => void load(true)}><Icon name="reload" /> {checking ? "Checking…" : "Check again"}</button>
-        <button className="primary" disabled={!canEdit || !rows} onClick={() => void fixAll()}><Icon name="wand" /> Fix what's safe ({shown.filter((r) => score(r) < 1).length})</button>
-      </div>
-    </div>
+    <PageHead
+      title="Library"
+      sub={<>
+        {checking ? "Checking the library…" : rows ? `${perfect} of ${inFolder.length} titles complete.` : "Reading the library…"}
+        {folders.length === 0 && rows && <> Folder tabs appear once your library folder is set (<SettingsLink section="library">Settings</SettingsLink>).</>}
+      </>}
+      actions={<button className="primary" disabled={!canEdit || !rows} onClick={() => void fixAll()}><Icon name="wand" /> Fix what's safe ({shown.filter((r) => score(r) < 1).length})</button>}
+    />
   );
 
   if (folder === "@collections") {
     return (
       <div className="pg lib-page">
         {head}
-        {folderTabs}
+        {tabs}
         <CollectionsGrid canEdit={canEdit} />
       </div>
     );
@@ -226,44 +229,52 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
       <div className="lib-checks">
         {CHECKS.map((c) => {
           const n = gaps(c.id);
+          const unread = c.id === "intros" && unknownSeg > 0;
           return (
-            <button key={c.id} className={`lib-check ${only === c.id ? "on" : ""} ${n ? "warn" : "ok"}`} title={`${c.hint}. Click to show only the titles missing this.`} onClick={() => setOnly(only === c.id ? "" : c.id)}>
-              <Icon name={c.icon} size={14} /> {c.label} <span className="count">{n ? n : <Icon name="check" size={12} />}</span>
+            <button key={c.id} className={`lib-check ${only === c.id ? "on" : ""} ${n ? "warn" : "ok"}`}
+              title={unread ? "Intro markers not read yet: click to read them, then filter" : `${c.hint}. Click to show only the titles missing this.`}
+              onClick={() => { if (unread) void readIntros().then(() => setOnly(c.id)); else setOnly(only === c.id ? "" : c.id); }}>
+              <Icon name={c.icon} size={14} /> {c.label} <span className="count">{unread ? "?" : n ? n : <Icon name="check" size={12} />}</span>
             </button>
           );
         })}
         {only && <button className="link small" onClick={() => setOnly("")}><Icon name="x" size={12} /> Show all</button>}
       </div>
-      <div className="lib-tools">
-        <label className="searchbox"><Icon name="search" /><input placeholder="Find a title" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
-        <div className="seg-ctl">
-          <button className={filter === "all" ? "on" : ""} onClick={() => setFilter("all")}>All</button>
-          <button className={filter === "todo" ? "on" : ""} onClick={() => setFilter("todo")}>Needs work</button>
-          <button className={filter === "ok" ? "on" : ""} onClick={() => setFilter("ok")}>Complete</button>
-        </div>
-        <select value={kind} onChange={(e) => setKind(e.target.value as "" | "series" | "movie")} className="chip-select" aria-label="Kind">
-          <option value="">Shows and movies</option><option value="series">Shows</option><option value="movie">Movies</option>
-        </select>
-        <select value={sort} onChange={(e) => setSort(e.target.value as "name" | "todo")} className="chip-select" aria-label="Sort">
-          <option value="name">A to Z</option><option value="todo">Most to fix first</option>
-        </select>
-        <div className="spacer" />
-        {libraryView === "tiles" && (
-          <label className="tile-size" title="Tile size"><Icon name="grid" size={13} /><input type="range" min={110} max={240} step={10} value={tileSize} onChange={(e) => setPrefs({ tileSize: Number(e.target.value) })} /></label>
-        )}
-        <div className="seg-ctl icons" role="group" aria-label="Layout">
-          <button className={libraryView === "list" ? "on" : ""} onClick={() => setPrefs({ libraryView: "list" })} title="List with the title next to it" aria-label="List"><Icon name="list" size={15} /></button>
-          <button className={libraryView === "tiles" ? "on" : ""} onClick={() => setPrefs({ libraryView: "tiles" })} title="Tiles" aria-label="Tiles"><Icon name="grid" size={15} /></button>
-        </div>
-      </div>
+      <Toolbar
+        right={<>
+          {libraryView === "tiles" && (
+            <label className="tile-size" title="Tile size"><Icon name="grid" size={13} /><input type="range" min={110} max={240} step={10} value={tileSize} onChange={(e) => setPrefs({ tileSize: Number(e.target.value) })} /></label>
+          )}
+          <IconBtn icon="sort" on={sort === "todo"} title={sort === "todo" ? "Sorted: most to fix first (click for A to Z)" : "Sorted A to Z (click for most to fix first)"} onClick={() => setSort(sort === "todo" ? "name" : "todo")} />
+        </>}
+      >
+        <Seg icons value={libraryView} onChange={(v) => setPrefs({ libraryView: v })} options={[{ id: "list", label: "List", title: "List with the title next to it", icon: "list" }, { id: "tiles", label: "Tiles", title: "Tiles", icon: "grid" }]} />
+        <SearchBox value={query} onChange={setQuery} placeholder="Find a title" />
+        <Seg value={filter} onChange={setFilter} options={[{ id: "all", label: "All" }, { id: "todo", label: "Needs work" }, { id: "ok", label: "Complete" }]} />
+      </Toolbar>
     </div>
   );
+
+  /** Right-click: the usual menu plus switching checks off for titles that don't need them. */
+  const rowMenu = (r: Row): MenuItem[] => {
+    const off = prefs().checksOff[clean(r.id)] ?? [];
+    const toggle = (c: Check) => setPrefs((p) => {
+      const cur = p.checksOff[clean(r.id)] ?? [];
+      return { checksOff: { ...p.checksOff, [clean(r.id)]: cur.includes(c) ? cur.filter((x) => x !== c) : [...cur, c] } };
+    });
+    return [
+      ...itemMenu({ id: r.id, kind: r.kind, title: r.name }, canEdit),
+      { sep: true },
+      { label: off.includes("subtitles") ? "Needs subtitles again" : "Doesn't need subtitles", run: () => toggle("subtitles") },
+      ...(r.kind === "series" ? [{ label: off.includes("intros") ? "Needs intro markers again" : "Doesn't need intro markers", run: () => toggle("intros") }] : []),
+    ];
+  };
 
   if (libraryView === "tiles") {
     return (
       <div className="pg lib-page">
         {head}
-        {folderTabs}
+        {tabs}
         {filters}
         {error && <p className="error">{error}</p>}
         {!rows && !error && <div className="lib-grid" style={{ ["--tile" as string]: `${tileSize}px` }}>{Array.from({ length: 12 }, (_, i) => <div key={i} className="skeleton tile" />)}</div>}
@@ -271,13 +282,13 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
           {shown.slice(0, 800).map((r) => {
             const warn = state(r, "artwork") === false;
             return (
-              <button key={r.id} className="lib-tile" onClick={() => nav.open(r.id)} onContextMenu={(e) => openMenu(e, itemMenu({ id: r.id, kind: r.kind, title: r.name }, canEdit))}>
+              <button key={r.id} className="lib-tile" onClick={() => nav.open(r.id)} onContextMenu={(e) => openMenu(e, rowMenu(r))}>
                 <span className={`lib-tile-art ${warn ? "warn" : ""}`}>
-                  <Img src={imageUrl(r.id, "Primary", Math.round(tileSize * 2))} alt="" />
+                  <Img src={imageUrl(r.id, "Primary", 480)} alt="" />
                   {!r.poster && <span className="lib-tile-name">{r.name}</span>}
                 </span>
                 <span className="lib-tile-title ellipsis">{r.name}{r.year ? <span className="muted"> {r.year}</span> : null}</span>
-                <Dots dots={dotsOf(r)} />
+                {statusOf(r)}
               </button>
             );
           })}
@@ -292,14 +303,14 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
     title: `${r.name}${r.year ? ` (${r.year})` : ""}`,
     sub: sub(r),
     thumb: imageUrl(r.id, "Primary", 80),
-    dots: dotsOf(r),
+    status: statusOf(r),
     warn: state(r, "artwork") === false,
   }));
   const selRow = shown.find((r) => r.id === sel) ?? null;
   return (
     <div className="pg studio-page lib-page">
       {head}
-      {folderTabs}
+      {tabs}
       {filters}
       {error && <p className="error">{error}</p>}
       <Studio
@@ -307,7 +318,7 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
         selected={sel}
         onSelect={setSel}
         onOpen={(id) => nav.open(id)}
-        onMenu={(id, e) => { const r = shown.find((x) => x.id === id); if (r) openMenu(e, itemMenu({ id: r.id, kind: r.kind, title: r.name }, canEdit)); }}
+        onMenu={(id, e) => { const r = shown.find((x) => x.id === id); if (r) openMenu(e, rowMenu(r)); }}
         empty={!rows ? <span><span className="spinner" /> Reading the library…</span> : only ? "Nothing missing here." : "Nothing here."}
       >
         {sel && (
@@ -317,8 +328,6 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
                 {CHECKS.filter((c) => state(selRow, c.id) === false).map((c) => (
                   <button key={c.id} className="hchip warn" onClick={() => fixDot(selRow, c.id)}><Icon name={c.icon} size={12} /> Fix {c.label.toLowerCase()}</button>
                 ))}
-                <div className="spacer" />
-                <button className="link small" onClick={() => nav.open(sel)}><Icon name="expand" size={12} /> Open full page</button>
               </div>
             )}
             <ItemPage key={sel} id={sel} embedded onBack={() => undefined} onOpen={(i) => nav.open(i)} onNav={(v) => nav.route({ view: v })}
@@ -345,16 +354,39 @@ function CollectionsGrid({ canEdit }: { canEdit: boolean }) {
       nav.open(id);
     }
   }
+  const noArt = (list ?? []).filter((c) => !c.hasPoster);
+  async function fillArt() {
+    await track(`Artwork for ${noArt.length} collection${noArt.length === 1 ? "" : "s"}`, async (job) => {
+      let n = 0;
+      for (const [i, c] of noArt.entries()) {
+        if (job.cancelled) break;
+        job.update(c.title, i / noArt.length);
+        n += (await api.fillMissingArt(c.id, ["Primary", "Backdrop", "Logo", "Thumb"]).catch(() => [])).length;
+      }
+      job.update(`${n} picture${n === 1 ? "" : "s"} added`, 1);
+    }, { cancellable: true, items: noArt.map((c) => c.id) }).catch(() => undefined);
+  }
   return (
     <div className="stack">
-      <div className="row between">
-        <span className="muted small">{list ? `${list.length} collection${list.length === 1 ? "" : "s"} · they show up in Infuse too` : "Loading…"}</span>
+      <Toolbar right={<>
+        {noArt.length > 0 && <button disabled={!canEdit} onClick={() => void fillArt()}><Icon name="image" /> Fill missing artwork ({noArt.length})</button>}
         <button className="primary" disabled={!canEdit} onClick={() => void create()}><Icon name="plus" /> New collection</button>
-      </div>
+      </>}>
+        <span className="muted small">{list ? `${list.length} collection${list.length === 1 ? "" : "s"} · they show up in Infuse too${noArt.length ? ` · ${noArt.length} without a poster` : ""}` : "Loading…"}</span>
+      </Toolbar>
       {error && <p className="error">{error}</p>}
       {list && list.length === 0 && <p className="muted">No collections yet. Make one here, or use the Collection tab of a movie or show.</p>}
-      <div className="grid">
-        {(list ?? []).map((c) => <CardTile key={c.id} c={c} canEdit={canEdit} onOpen={() => nav.open(c.id)} />)}
+      <div className="lib-grid" style={{ ["--tile" as string]: "160px" }}>
+        {(list ?? []).map((c) => (
+          <button key={c.id} className="lib-tile" onClick={() => nav.open(c.id)} onContextMenu={(e) => openMenu(e, itemMenu({ id: c.id, kind: "collection", title: c.title }, canEdit))}>
+            <span className={`lib-tile-art ${c.hasPoster ? "" : "warn"}`}>
+              {c.hasPoster && <Img src={imageUrl(c.id, "Primary", 480)} alt="" />}
+              {!c.hasPoster && <span className="lib-tile-name">{c.title}<br /><span className="small warn">No poster: click to add</span></span>}
+            </span>
+            <span className="lib-tile-title ellipsis">{c.title}</span>
+            <span className="muted small">{c.subtitle}</span>
+          </button>
+        ))}
       </div>
     </div>
   );

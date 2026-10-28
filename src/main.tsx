@@ -7,6 +7,7 @@ import { ArtPickerHost } from "./ArtPicker";
 import { ArtToolsHost } from "./ArtTools";
 import { IdentifyHost } from "./IdentifyDialog";
 import { Hosts } from "./ui";
+import { RenumberHost } from "./Renumber";
 import "@fontsource-variable/inter";
 import "@fontsource/manrope/400.css";
 import "@fontsource/manrope/500.css";
@@ -24,5 +25,6 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <ArtToolsHost />
     <IdentifyHost />
     <Hosts />
+    <RenumberHost />
   </React.StrictMode>,
 );
