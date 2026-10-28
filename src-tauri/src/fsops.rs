@@ -5,10 +5,72 @@
 
 use crate::error::{Error, Result};
 use crate::planner::PlanOp;
-use crate::store::Store;
+use crate::store::{JournalEntry, Store};
 use serde::Serialize;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
+
+/// How long one rename on the share may take before Media Hub gives up waiting. A rename
+/// is a single quick step on a healthy share; this only triggers when the NAS hangs.
+const STEP_TIMEOUT: Duration = Duration::from_secs(60);
+const NAS_STUCK: &str = "The library folder stopped answering (NAS asleep or network problem). Stopped here; everything done so far is kept and can be undone.";
+
+/// Where renames are written down. Implemented by the database directly (tests) and by
+/// the app state, which locks the database only for each single write, so the rest of the
+/// app keeps working while a long batch runs.
+pub trait Journal {
+    fn begin(&self, batch: &str, root: &str, from: &str, to: &str) -> Result<i64>;
+    fn set_state(&self, id: i64, state: &str) -> Result<()>;
+    fn delete(&self, id: i64) -> Result<()>;
+    fn entries(&self, batch: &str) -> Result<Vec<JournalEntry>>;
+    fn mark_undone(&self, id: i64) -> Result<()>;
+    fn pending(&self) -> Result<Vec<JournalEntry>>;
+}
+
+impl Journal for Store {
+    fn begin(&self, batch: &str, root: &str, from: &str, to: &str) -> Result<i64> {
+        self.journal_begin(batch, root, from, to)
+    }
+    fn set_state(&self, id: i64, state: &str) -> Result<()> {
+        self.journal_set_state(id, state)
+    }
+    fn delete(&self, id: i64) -> Result<()> {
+        self.journal_delete(id)
+    }
+    fn entries(&self, batch: &str) -> Result<Vec<JournalEntry>> {
+        self.journal_entries(batch)
+    }
+    fn mark_undone(&self, id: i64) -> Result<()> {
+        self.journal_mark_undone(id)
+    }
+    fn pending(&self) -> Result<Vec<JournalEntry>> {
+        self.journal_pending()
+    }
+}
+
+/// Runs a file-system step on its own thread and waits at most `limit` for it. A share
+/// that stops answering can block a call for minutes; this keeps the app responsive.
+pub fn with_timeout<T: Send + 'static>(limit: Duration, f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(limit).unwrap_or_else(|_| Err(Error::msg(NAS_STUCK)))
+}
+
+/// One finished step, for live progress ("renamed", turns green).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Step {
+    pub index: usize,
+    pub total: usize,
+    pub from: String,
+    pub to: String,
+    /// "working" | "done" | "failed"
+    pub state: &'static str,
+    pub error: Option<String>,
+}
 
 const MAX_FILES: usize = 100_000;
 const MAX_DEPTH: usize = 8;
@@ -171,32 +233,83 @@ pub struct ApplyReport {
     pub batch: String,
     pub done: usize,
     pub failed: Vec<String>,
+    /// The batch ended early (stopped, or the share stopped answering).
+    pub stopped: bool,
 }
 
-pub fn apply(root: &Path, ops: &[PlanOp], store: &Store, batch: &str, remove_empty: bool) -> Result<ApplyReport> {
-    let root_canon = root.canonicalize().map_err(|_| Error::msg("The library folder cannot be reached. Is the share mounted?"))?;
+fn reach_root(root: &Path) -> Result<PathBuf> {
+    let r = root.to_path_buf();
+    with_timeout(Duration::from_secs(15), move || {
+        r.canonicalize().map_err(|_| Error::msg("The library folder cannot be reached. Is the share mounted?"))
+    })
+}
+
+fn move_with_timeout(root: &Path, root_canon: &Path, from: &str, to: &str) -> Result<()> {
+    let (r, rc, f, t) = (root.to_path_buf(), root_canon.to_path_buf(), from.to_string(), to.to_string());
+    with_timeout(STEP_TIMEOUT, move || move_one(&r, &rc, &f, &t))
+}
+
+pub fn apply(root: &Path, ops: &[PlanOp], journal: &dyn Journal, batch: &str, remove_empty: bool) -> Result<ApplyReport> {
+    apply_with(root, ops, journal, batch, remove_empty, &|_| false, &|_| {})
+}
+
+/// Renames step by step. `stop` is asked before every step; `progress` hears about each one.
+pub fn apply_with(
+    root: &Path,
+    ops: &[PlanOp],
+    journal: &dyn Journal,
+    batch: &str,
+    remove_empty: bool,
+    stop: &dyn Fn(usize) -> bool,
+    progress: &dyn Fn(Step),
+) -> Result<ApplyReport> {
+    let root_canon = reach_root(root)?;
     let root_str = root.to_string_lossy().into_owned();
     let mut done = 0;
     let mut failed = Vec::new();
+    let mut stopped = false;
+    let todo: Vec<&PlanOp> = ops.iter().filter(|o| o.status == "ok").collect();
+    let total = todo.len();
     // In the given order: files first, then season folders, then the show folder.
-    for op in ops.iter().filter(|o| o.status == "ok") {
+    for (index, op) in todo.into_iter().enumerate() {
+        if stop(index) {
+            stopped = true;
+            break;
+        }
         let target = if op.step_to.is_empty() { &op.to } else { &op.step_to };
-        let id = store.journal_begin(batch, &root_str, &op.from, target)?;
-        match move_one(root, &root_canon, &op.from, target) {
+        let step = |state, error| Step { index, total, from: op.from.clone(), to: target.clone(), state, error };
+        progress(step("working", None));
+        let id = journal.begin(batch, &root_str, &op.from, target)?;
+        match move_with_timeout(root, &root_canon, &op.from, target) {
             Ok(()) => {
-                store.journal_set_state(id, "done")?;
+                journal.set_state(id, "done")?;
                 done += 1;
+                progress(step("done", None));
                 if remove_empty && op.kind != "folder" {
-                    remove_empty_parents(root, &op.from);
+                    let (r, f) = (root.to_path_buf(), op.from.clone());
+                    let _ = with_timeout(Duration::from_secs(10), move || {
+                        remove_empty_parents(&r, &f);
+                        Ok(())
+                    });
                 }
             }
             Err(e) => {
-                store.journal_delete(id)?;
+                let stuck = e.to_string() == NAS_STUCK;
+                // When the share hung, the move may still finish later: keep the entry
+                // "pending" so the next start can check what really happened.
+                if !stuck {
+                    journal.delete(id)?;
+                }
+                progress(step("failed", Some(e.to_string())));
                 failed.push(format!("{}: {e}", op.from));
+                if stuck {
+                    stopped = true;
+                    break;
+                }
             }
         }
     }
-    Ok(ApplyReport { batch: batch.to_string(), done, failed })
+    Ok(ApplyReport { batch: batch.to_string(), done, failed, stopped })
 }
 
 #[derive(Debug, Serialize)]
@@ -208,30 +321,82 @@ pub struct UndoReport {
 
 /// Moves every file of a batch back, newest first. Skips a file when its old name is
 /// taken again or the file was moved away since.
-pub fn undo(store: &Store, batch: &str) -> Result<UndoReport> {
+pub fn undo(journal: &dyn Journal, batch: &str) -> Result<UndoReport> {
     let mut restored = 0;
     let mut skipped = Vec::new();
-    for e in store.journal_entries(batch)? {
+    for e in journal.entries(batch)? {
         if e.undone {
             continue;
         }
         let root = PathBuf::from(&e.root);
-        let root_canon = match root.canonicalize() {
+        let root_canon = match reach_root(&root) {
             Ok(c) => c,
             Err(_) => {
                 skipped.push(format!("{}: library folder not reachable", e.to));
                 continue;
             }
         };
-        match move_one(&root, &root_canon, &e.to, &e.from) {
+        match move_with_timeout(&root, &root_canon, &e.to, &e.from) {
             Ok(()) => {
-                store.journal_mark_undone(e.id)?;
+                journal.mark_undone(e.id)?;
                 restored += 1;
             }
-            Err(err) => skipped.push(format!("{}: {err}", e.to)),
+            Err(err) => {
+                let stuck = err.to_string() == NAS_STUCK;
+                skipped.push(format!("{}: {err}", e.to));
+                if stuck {
+                    break;
+                }
+            }
         }
     }
     Ok(UndoReport { restored, skipped })
+}
+
+/// Is there an entry with exactly this name (also on Mac/Windows, where "a" and "A" match)?
+fn exact_exists(p: &Path) -> bool {
+    let (Some(parent), Some(name)) = (p.parent(), p.file_name()) else { return false };
+    fs::read_dir(parent)
+        .map(|rd| rd.flatten().any(|e| e.file_name() == name))
+        .unwrap_or(false)
+}
+
+/// After the app was closed in the middle of renaming: looks at every rename that was
+/// started but not confirmed, checks the disk, and makes the journal match it. A file left
+/// under a temporary name (a case-only rename) is put back under its old name.
+/// Returns how many entries were sorted out. Does nothing for shares that are not mounted.
+pub fn recover(journal: &dyn Journal) -> Result<usize> {
+    let mut fixed = 0;
+    for e in journal.pending()? {
+        let root = PathBuf::from(&e.root);
+        let r2 = root.clone();
+        let reachable = with_timeout(Duration::from_secs(15), move || Ok(r2.is_dir())).unwrap_or(false);
+        if !reachable {
+            continue;
+        }
+        let (Ok(from_rel), Ok(to_rel)) = (safe_rel(&e.from), safe_rel(&e.to)) else { continue };
+        let (from, to) = (root.join(from_rel), root.join(to_rel));
+        let (f2, t2) = (from.clone(), to.clone());
+        let Ok((has_from, has_to)) = with_timeout(Duration::from_secs(15), move || Ok((exact_exists(&f2), exact_exists(&t2)))) else { continue };
+        if has_to && !has_from {
+            journal.set_state(e.id, "done")?;
+            fixed += 1;
+        } else if has_from && !has_to {
+            journal.delete(e.id)?; // never happened
+            fixed += 1;
+        } else if !has_from && !has_to {
+            // A case-only rename stopped halfway: the file waits under a temporary name.
+            let Some(dir) = from.parent() else { continue };
+            let tmps: Vec<PathBuf> = fs::read_dir(dir)
+                .map(|rd| rd.flatten().filter(|x| x.file_name().to_string_lossy().starts_with(".mediahub-tmp-")).map(|x| x.path()).collect())
+                .unwrap_or_default();
+            if tmps.len() == 1 && fs::rename(&tmps[0], &from).is_ok() {
+                journal.delete(e.id)?;
+                fixed += 1;
+            }
+        }
+    }
+    Ok(fixed)
 }
 
 #[cfg(test)]
@@ -334,6 +499,41 @@ mod tests {
         assert_eq!(fs::read(r.join("Bluey (2018)/poster.jpg")).unwrap(), b"p", "other files move with the folder");
         assert_eq!(undo(&store, "b").unwrap().restored, 3);
         assert_eq!(fs::read(r.join("Bluey/Season 1/a.mkv")).unwrap(), b"v");
+        fs::remove_dir_all(&r).unwrap();
+    }
+
+    #[test]
+    fn recovery_matches_the_journal_to_the_disk() {
+        let r = temp_root("recover");
+        fs::write(r.join("moved.mkv"), b"v").unwrap();
+        fs::write(r.join("stayed.mkv"), b"v").unwrap();
+        fs::write(r.join(".mediahub-tmp-42"), b"t").unwrap();
+        let store = Store::in_memory().unwrap();
+        let root = r.to_string_lossy().into_owned();
+        let a = store.journal_begin("b", &root, "old.mkv", "moved.mkv").unwrap();
+        let b = store.journal_begin("b", &root, "stayed.mkv", "new.mkv").unwrap();
+        let _c = store.journal_begin("b", &root, "half.mkv", "Half.mkv").unwrap();
+        assert_eq!(recover(&store).unwrap(), 3);
+        assert!(store.journal_pending().unwrap().is_empty());
+        let left: Vec<i64> = store.journal_entries("b").unwrap().iter().map(|e| e.id).collect();
+        assert_eq!(left, vec![a], "only the move that really happened stays");
+        assert!(!left.contains(&b));
+        assert_eq!(fs::read(r.join("half.mkv")).unwrap(), b"t", "the temporary file got its old name back");
+        fs::remove_dir_all(&r).unwrap();
+    }
+
+    #[test]
+    fn stop_ends_the_batch_and_progress_reports_each_step() {
+        let r = temp_root("stop");
+        fs::write(r.join("a.mkv"), b"1").unwrap();
+        fs::write(r.join("b.mkv"), b"2").unwrap();
+        let store = Store::in_memory().unwrap();
+        let steps = std::cell::RefCell::new(Vec::new());
+        let rep = apply_with(&r, &[op("a.mkv", "A1.mkv"), op("b.mkv", "B1.mkv")], &store, "s", false, &|i| i >= 1, &|s| steps.borrow_mut().push(s.state)).unwrap();
+        assert_eq!(rep.done, 1);
+        assert!(rep.stopped);
+        assert_eq!(*steps.borrow(), vec!["working", "done"]);
+        assert!(r.join("b.mkv").exists());
         fs::remove_dir_all(&r).unwrap();
     }
 

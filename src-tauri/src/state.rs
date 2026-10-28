@@ -133,3 +133,25 @@ impl AppState {
         Ok(Some(c))
     }
 }
+
+/// Each journal write takes the database lock only for that write.
+impl crate::fsops::Journal for AppState {
+    fn begin(&self, batch: &str, root: &str, from: &str, to: &str) -> Result<i64> {
+        self.store()?.journal_begin(batch, root, from, to)
+    }
+    fn set_state(&self, id: i64, state: &str) -> Result<()> {
+        self.store()?.journal_set_state(id, state)
+    }
+    fn delete(&self, id: i64) -> Result<()> {
+        self.store()?.journal_delete(id)
+    }
+    fn entries(&self, batch: &str) -> Result<Vec<crate::store::JournalEntry>> {
+        self.store()?.journal_entries(batch)
+    }
+    fn mark_undone(&self, id: i64) -> Result<()> {
+        self.store()?.journal_mark_undone(id)
+    }
+    fn pending(&self) -> Result<Vec<crate::store::JournalEntry>> {
+        self.store()?.journal_pending()
+    }
+}

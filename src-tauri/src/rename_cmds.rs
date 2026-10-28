@@ -443,11 +443,24 @@ pub async fn apply_plan(
         });
     }
     let batch = stamp();
+    crate::cancel::begin("rename");
     blocking(move || {
-        use tauri::Manager;
+        use tauri::{Emitter, Manager};
         let st = app.state::<AppState>();
-        let store = st.store()?;
-        fsops::apply(&plan.root, &plan.ops, &store, &batch, remove_empty)
+        // The database is locked only for each single journal write, so the rest of the app
+        // keeps working during a long batch. Every step is reported ("rename-step") so the
+        // window can show each file turning green.
+        fsops::apply_with(
+            &plan.root,
+            &plan.ops,
+            &*st,
+            &batch,
+            remove_empty,
+            &|_| crate::cancel::stopped("rename"),
+            &|step| {
+                let _ = app.emit("rename-step", step);
+            },
+        )
     })
     .await
 }
@@ -462,8 +475,7 @@ pub async fn undo_rename(app: AppHandle, batch: String) -> Result<UndoReport> {
     blocking(move || {
         use tauri::Manager;
         let st = app.state::<AppState>();
-        let store = st.store()?;
-        fsops::undo(&store, &batch)
+        fsops::undo(&*st, &batch)
     })
     .await
 }

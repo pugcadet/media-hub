@@ -56,6 +56,12 @@ pub fn run() {
             std::thread::spawn(move || images::prune(&prune_dir));
             let state = state::AppState::new(dir)?;
             app.manage(state);
+            // A rename batch cut short (app force-quit, crash): make the journal match the disk.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let st = handle.state::<state::AppState>();
+                let _ = fsops::recover(&*st);
+            });
             #[cfg(target_os = "macos")]
             uncap_frame_rate(app);
             Ok(())

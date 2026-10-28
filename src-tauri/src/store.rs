@@ -425,6 +425,24 @@ impl Store {
         Ok(())
     }
 
+    /// Renames that were started but never confirmed (the app was closed in the middle).
+    pub fn journal_pending(&self) -> Result<Vec<JournalEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, target, old_value, new_value, undone FROM undo_journal
+             WHERE action='rename' AND state='pending' ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(JournalEntry {
+                id: r.get(0)?,
+                root: r.get(1)?,
+                from: r.get(2)?,
+                to: r.get(3)?,
+                undone: r.get::<_, i64>(4)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Newest first. Pending rows (app closed mid-move) are included: undo checks the disk anyway.
     pub fn journal_entries(&self, batch: &str) -> Result<Vec<JournalEntry>> {
         let mut stmt = self.conn.prepare(

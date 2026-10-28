@@ -1,0 +1,59 @@
+name: screens
+
+# Builds the window part only and takes screenshots of every screen with a fake backend,
+# so layout problems can be seen without a Mac. Results go to the ci-logs branch (screens/).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  screens:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build
+        run: |
+          npm install --no-audit --no-fund
+          npx tsc --noEmit 2>&1 | tee tsc.log || true
+          npx vite build --outDir dist-screens 2>&1 | tail -5
+      - name: Screenshots
+        run: |
+          npm install --no-save playwright@1.48.2
+          npx playwright install --with-deps chromium
+          npx vite preview --outDir dist-screens --port 4173 &
+          sleep 3
+          node screens/shoot.mjs http://localhost:4173 shots || true
+          cp tsc.log shots/ || true
+      - name: Save to ci-logs
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ../ci-logs-work && cd ../ci-logs-work
+          rm -rf repo && mkdir repo && cd repo
+          git init -q -b ci-logs
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin ci-logs || true
+          git checkout -q ci-logs 2>/dev/null || git checkout -q -b ci-logs
+          git reset -q --hard FETCH_HEAD 2>/dev/null || true
+          rm -rf screens && mkdir -p screens
+          cp -r "$GITHUB_WORKSPACE"/shots/* screens/ 2>/dev/null || true
+          echo "${{ github.sha }}" > screens/commit.txt
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          git add -A
+          git commit -q -m "screens ${{ github.run_number }}" || exit 0
+          for i in 1 2 3 4 5; do
+            git push -q origin ci-logs && exit 0
+            git fetch -q --depth 1 origin ci-logs && git rebase -q FETCH_HEAD || true
+            sleep 3
+          done
+          exit 0

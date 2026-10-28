@@ -43,3 +43,6 @@ export const nav: Nav = {
   play: (id) => impl.play(id),
   route: (r) => impl.route(r),
 };
+
+// For the screenshot checks in CI (screens/shoot.mjs): lets the test open any screen.
+(window as unknown as { __mhNav?: Nav }).__mhNav = nav;
