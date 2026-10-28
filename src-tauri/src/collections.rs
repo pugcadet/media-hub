@@ -209,7 +209,7 @@ pub const PICKS_NAME: &str = "Picks of the day";
 /// Keeps a Jellyfin collection called "Picks of the day" equal to today's picks, so Infuse
 /// and every other Jellyfin app shows them too. Only touches that one collection.
 #[tauri::command]
-pub async fn sync_picks_collection(state: State<'_, AppState>, ids: Vec<String>) -> Result<String> {
+pub async fn sync_picks_collection(state: State<'_, AppState>, ids: Vec<String>, date: Option<String>) -> Result<String> {
     let ids: Vec<String> = ids.into_iter().filter(|i| valid_item_id(i)).take(30).collect();
     check_ids(&ids)?;
     let w = state.writer().await?;
@@ -220,26 +220,51 @@ pub async fn sync_picks_collection(state: State<'_, AppState>, ids: Vec<String>)
         .into_iter()
         .find(|c| s(c, "Name") == PICKS_NAME)
         .map(|c| clean_id(s(&c, "Id")));
-    let Some(cid) = existing.filter(|i| valid_item_id(i)) else {
-        return w.collection_create(PICKS_NAME, &ids).await;
+    let cid = match existing.filter(|i| valid_item_id(i)) {
+        None => w.collection_create(PICKS_NAME, &ids).await?,
+        Some(cid) => {
+            let current: Vec<String> = w
+                .reader()
+                .collection_items(&cid)
+                .await?
+                .iter()
+                .map(|v| clean_id(s(v, "Id")))
+                .filter(|i| valid_item_id(i))
+                .collect();
+            let gone: Vec<String> = current.iter().filter(|c| !ids.contains(c)).cloned().collect();
+            let new: Vec<String> = ids.iter().filter(|i| !current.contains(i)).cloned().collect();
+            if !gone.is_empty() {
+                w.collection_remove(&cid, &gone).await?;
+            }
+            if !new.is_empty() {
+                w.collection_add(&cid, &new).await?;
+            }
+            cid
+        }
     };
-    let current: Vec<String> = w
-        .reader()
-        .collection_items(&cid)
-        .await?
-        .iter()
-        .map(|v| clean_id(s(v, "Id")))
-        .filter(|i| valid_item_id(i))
-        .collect();
-    let gone: Vec<String> = current.iter().filter(|c| !ids.contains(c)).cloned().collect();
-    let new: Vec<String> = ids.iter().filter(|i| !current.contains(i)).cloned().collect();
-    if !gone.is_empty() {
-        w.collection_remove(&cid, &gone).await?;
-    }
-    if !new.is_empty() {
-        w.collection_add(&cid, &new).await?;
+    // Changing what's in a collection doesn't change the collection itself, so apps that only
+    // look for changed items (Infuse) keep showing yesterday's. A new summary with the date
+    // marks it as changed. Only this collection, which Media Hub made, is touched.
+    if let Some(d) = date.filter(|d| crate::picks::valid_date(d)) {
+        if let Ok(mut item) = w.reader().item_json(&cid).await {
+            let text = picks_summary(&d);
+            if item.get("Overview").and_then(Value::as_str) != Some(text.as_str()) {
+                item["Overview"] = Value::String(text);
+                // Listed first among the collections.
+                item["ForcedSortName"] = Value::String("!Picks of the day".into());
+                let _ = w.update_item(&cid, &item).await;
+            }
+        }
     }
     Ok(cid)
+}
+
+/// "Today's picks, 28 October 2026. Media Hub changes them every day."
+pub fn picks_summary(date: &str) -> String {
+    const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    let m: usize = date.get(5..7).and_then(|m| m.parse().ok()).unwrap_or(1);
+    let day: u32 = date.get(8..10).and_then(|d| d.parse().ok()).unwrap_or(1);
+    format!("Today's picks, {day} {} {}. Media Hub changes them every day.", MONTHS[m.clamp(1, 12) - 1], date.get(..4).unwrap_or(""))
 }
 
 #[cfg(test)]
@@ -261,6 +286,11 @@ mod tests {
         assert_eq!(c.art_id, "fedcba9876543210fedcba9876543210");
         assert_eq!(c.progress, Some(0.25));
         assert!(card(&serde_json::json!({"Id": "../x", "Type": "Movie"})).is_none());
+    }
+
+    #[test]
+    fn picks_summary_has_the_date() {
+        assert_eq!(picks_summary("2026-10-28"), "Today's picks, 28 October 2026. Media Hub changes them every day.");
     }
 }
 

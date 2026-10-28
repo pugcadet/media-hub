@@ -79,7 +79,7 @@ export async function syncPicks(today: string = localDate()): Promise<void> {
     const picks = await getPicks(today);
     if (!picks.length) return;
     const ids = picks.map((x) => x.id);
-    await api.syncPicksCollection(ids).catch(() => undefined);
+    await api.syncPicksCollection(ids, today).catch(() => undefined);
     const n = await api.syncPicksPlaylist(ids);
     let favs = 0;
     if (prefs().picksAsFavorites) {
