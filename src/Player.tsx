@@ -6,7 +6,7 @@ import { api, cleanTitle, errorText, imageUrl, PlayInfo, ScoredSub, Status, SubT
 import { autoDetectSeason, fmt } from "./Intros";
 import { DEFAULT_PREFS, prefs, setPrefs, subCss, usePrefs, type SubStyle, SUB_FONTS } from "./prefs";
 import { nav } from "./nav";
-import { Icon, SettingsLink } from "./ui";
+import { Icon, openMenu, SettingsLink, type IconName } from "./ui";
 import { logProblem } from "./activity";
 
 /** Reports a failed position save once per playback (not every 15 seconds). */
@@ -17,7 +17,7 @@ function progressFailed(e: unknown) {
   logProblem("Saving where you are in Jellyfin", errorText(e));
 }
 
-type Panel = "none" | "subs" | "audio" | "style" | "speed" | "chapters" | "sleep";
+type Panel = "none" | "subs" | "audio" | "style" | "speed" | "chapters";
 const SPEEDS = [0.75, 1, 1.1, 1.25, 1.5, 2];
 
 const TICKS = 10_000_000;
@@ -118,8 +118,8 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   // The volume you set last time (also for the next video).
   const [volume, setVolumeState] = useState(() => { try { return Number(localStorage.getItem("mediahub.volume") ?? "1") || 1; } catch { return 1; } });
   const setVolume = (v: number) => { setVolumeState(v); try { localStorage.setItem("mediahub.volume", String(v)); } catch { /* ignore */ } };
-  // Sleep timer: minutes left, or "end" (stop when this video ends).
-  const [sleep, setSleep] = useState<{ until: number } | "end" | null>(null);
+  // Subtitle tracks being fetched right now (built-in ones can take a while to extract).
+  const [loadingSubs, setLoadingSubs] = useState<Set<number>>(new Set());
   const [showKeys, setShowKeys] = useState(false);
   const [upNextDismissed, setUpNextDismissed] = useState(false);
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
@@ -202,16 +202,20 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           if (startAt > 0) v.currentTime = startAt;
         }
         if (!offerResume) v.play().catch(() => undefined);
-        const loaded: Record<number, Cue[]> = {};
+        // Every track is fetched at the same time in the background; each one appears in the
+        // menu as soon as it's ready (a subtitle inside a big file can take a while).
+        setSubUrls({});
+        setOffset(0);
+        setLoadingSubs(new Set(pi.subtitles.map((t) => t.index)));
+        const def = pi.subtitles.find((t) => t.default);
         for (const t of pi.subtitles) {
-          const u = await loadTrack(t);
-          if (u) loaded[t.index] = u;
-        }
-        if (!cancelled) {
-          setSubUrls(loaded);
-          setOffset(0);
-          const def = pi.subtitles.find((t) => t.default && loaded[t.index]);
-          setSub((cur) => (cur >= 0 && loaded[cur] ? cur : def ? def.index : -1));
+          void loadTrack(t).then((u) => {
+            if (cancelled) return;
+            setLoadingSubs((l) => { const n = new Set(l); n.delete(t.index); return n; });
+            if (!u) return;
+            setSubUrls((m) => ({ ...m, [t.index]: u }));
+            if (def && def.index === t.index) setSub((cur) => (cur >= 0 ? cur : t.index));
+          });
         }
       })
       .catch((e) => setError(errorText(e)));
@@ -226,19 +230,6 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     };
   }, [id, session]);
 
-
-  // Sleep timer: pause when the time is up (or at the end of this video).
-  useEffect(() => {
-    if (!sleep || sleep === "end") return;
-    const t = window.setInterval(() => {
-      if (Date.now() >= sleep.until) {
-        video.current?.pause();
-        setSleep(null);
-        say("Sleep timer: paused", 4000);
-      }
-    }, 5000);
-    return () => window.clearInterval(t);
-  }, [sleep]);
 
   // Nothing behind the player scrolls while it's open.
   useEffect(() => {
@@ -400,7 +391,6 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
   }, [autoNext, nextTotal]);
   useEffect(() => {
     if (nextLeft !== null && nextLeft <= 0) {
-      if (sleep === "end") { video.current?.pause(); setSleep(null); say("Sleep timer: stopped after this one", 4000); return; }
       playNext();
     }
   }, [nextLeft]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -422,7 +412,6 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       else if (e.key === "]" || e.key === "PageDown") { e.preventDefault(); jumpChapter(1); }
       else if (e.key === "[" || e.key === "PageUp") { e.preventDefault(); jumpChapter(-1); }
       else if (k === "f") void fullscreen();
-      else if (k === "p") void pip();
       else if (e.key === "?") setShowKeys((x) => !x);
       else if (k === "s" && current) skipCurrent();
       else if (e.key === "Escape") { if (panel !== "none") setPanel("none"); else onClose(); }
@@ -441,19 +430,6 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     say(target.name || `Chapter ${chapters.indexOf(target) + 1}`);
   }
   const chapterAt = (t: number) => [...chapters].reverse().find((c) => c.start <= t);
-
-  /** Picture in picture: the video in a small window that stays on top. */
-  async function pip() {
-    const v = video.current as (HTMLVideoElement & { webkitSetPresentationMode?: (m: string) => void; webkitPresentationMode?: string }) | null;
-    if (!v) return;
-    try {
-      if (document.pictureInPictureElement) await document.exitPictureInPicture();
-      else if (v.requestPictureInPicture) await v.requestPictureInPicture();
-      else if (v.webkitSetPresentationMode) v.webkitSetPresentationMode(v.webkitPresentationMode === "picture-in-picture" ? "inline" : "picture-in-picture");
-    } catch {
-      say("Picture in picture isn't available here");
-    }
-  }
 
   function changeVolume(d: number) {
     const v = video.current;
@@ -475,6 +451,19 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
 
   const loadedTracks = tracks.filter((t) => subUrls[t.index]);
 
+  /** Picks a subtitle; one that's still loading (or failed) is fetched first. */
+  async function chooseSub(t: SubTrack) {
+    if (subUrls[t.index]) return setSub(t.index);
+    setLoadingSubs((l) => new Set(l).add(t.index));
+    say("Loading the subtitle…", 20000);
+    const u = await loadTrack(t);
+    setLoadingSubs((l) => { const n = new Set(l); n.delete(t.index); return n; });
+    if (!u) return say("This subtitle couldn't be read. Try another one.", 3000);
+    setSubUrls((m) => ({ ...m, [t.index]: u }));
+    setSub(t.index);
+    say(`Subtitles: ${t.title}`);
+  }
+
   /** C: your subtitle language on/off. Not there yet? Get the best match online, without stopping. */
   async function toggleMainSubs() {
     if (sub >= 0) {
@@ -482,10 +471,9 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       say("Subtitles off");
       return;
     }
-    const mine = loadedTracks.find((t) => isLang(t, subLang) && !/forced/i.test(t.title)) ?? loadedTracks.find((t) => isLang(t, subLang));
+    const mine = tracks.find((t) => isLang(t, subLang) && !/forced/i.test(t.title)) ?? tracks.find((t) => isLang(t, subLang));
     if (mine) {
-      setSub(mine.index);
-      say(`Subtitles: ${mine.title}`);
+      void chooseSub(mine);
       return;
     }
     if (status?.readOnly) {
@@ -671,6 +659,18 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           }
         }}
         onDoubleClick={() => void fullscreen()}
+        onContextMenu={(e) => openMenu(e, [
+          { label: playing ? "Pause" : "Play", run: toggle },
+          { sep: true },
+          ...(info?.about ? [
+            { label: "Details (open in the Library)", run: () => { onClose(); setPrefs({ mode: "manage" }); nav.open(info.about.itemId); } },
+            ...(info.about.artId !== info.about.itemId ? [{ label: "Go to the show", run: () => { onClose(); setPrefs({ mode: "manage" }); nav.open(info.about.artId); } }] : []),
+          ] : []),
+          { sep: true },
+          { label: "Subtitles…", run: () => setPanel("subs") },
+          { label: "Audio…", run: () => setPanel("audio") },
+          { label: "Full screen", run: () => void fullscreen() },
+        ])}
         onLoadedMetadata={(e) => { e.currentTarget.playbackRate = speed; e.currentTarget.volume = volume; }}
         onPlay={() => setPlaying(true)}
         onWaiting={() => setLoadState((s) => (s === "start" ? s : "buffer"))}
@@ -759,7 +759,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       {showKeys && (
         <div className="p-keys" onClick={(e) => { e.stopPropagation(); setShowKeys(false); }}>
           <h3>Keyboard</h3>
-          {([["Space / K", "Play or pause"], ["← / →", "Back / forward 10 s (Shift: 30 s)"], ["↑ / ↓", "Volume"], ["M", "Mute"], ["C", "Subtitles on/off (Shift+C: next language)"], ["S", "Skip intro or credits"], ["N", "Next episode"], ["[ / ]", "Previous / next chapter"], ["F", "Full screen"], ["P", "Picture in picture"], ["?", "This list"], ["Esc", "Close"]] as [string, string][]).map(([k, v]) => (
+          {([["Space / K", "Play or pause"], ["← / →", "Back / forward 10 s (Shift: 30 s)"], ["↑ / ↓", "Volume"], ["M", "Mute"], ["C", "Subtitles on/off (Shift+C: next language)"], ["S", "Skip intro or credits"], ["N", "Next episode"], ["[ / ]", "Previous / next chapter"], ["F", "Full screen"], ["?", "This list"], ["Esc", "Close"]] as [string, string][]).map(([k, v]) => (
             <div key={k} className="p-key"><span className="mono">{k}</span><span>{v}</span></div>
           ))}
         </div>
@@ -793,8 +793,14 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       {panel !== "none" && (
         <div className={`p-settings ${panel === "subs" ? "p-subs-panel" : ""}`} onClick={(e) => e.stopPropagation()}>
           <div className="p-tabs">
-            {([["subs", "Subtitles"], ["style", "Look"], ["audio", "Audio"], ["speed", "Speed"], ...(chapters.length ? [["chapters", "Chapters"]] : []), ["sleep", sleep ? "Sleep ●" : "Sleep"]] as [Panel, string][]).map(([k, label]) => (
-              <button key={k} className={panel === k ? "on" : ""} onClick={() => setPanel(k)}>{label}</button>
+            {menuOrder(p.playerMenu).filter((k) => k !== "chapters" || chapters.length).map((k) => (
+              <button key={k} className={panel === k ? "on" : ""} onClick={() => setPanel(k)} draggable
+                onDragStart={(e) => e.dataTransfer.setData("text/x-mh-tab", k)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => { e.preventDefault(); const from = e.dataTransfer.getData("text/x-mh-tab") as Panel; if (from && from !== k) setPrefs({ playerMenu: moveTab(menuOrder(p.playerMenu), from, k) }); }}
+                title="Drag to change the order">
+                <Icon name={MENU_ICON[k]} size={14} /> {MENU_LABEL[k]}
+              </button>
             ))}
             <span className="spacer" />
             <button className="p-x" onClick={() => setPanel("none")} aria-label="Close"><Icon name="x" size={14} /></button>
@@ -802,13 +808,15 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           <div className="p-settings-body">
             {panel === "subs" && (
               <>
-                <div className="p-sub-grid">
-                  <button className={`p-opt ${sub === -1 ? "on" : ""}`} onClick={() => setSub(-1)}><span>Off</span>{sub === -1 && <Icon name="check" size={14} />}</button>
-                  {loadedTracks.map((t) => (
+                <div className="p-sub-list">
+                  <button className={`p-opt ${sub === -1 ? "on" : ""}`} onClick={() => setSub(-1)}><span className="p-opt-check">{sub === -1 && <Icon name="check" size={14} />}</span><span className="grow">Off</span></button>
+                  {tracks.map((t) => (
                     <div key={t.index} className={`p-opt p-sub-opt ${sub === t.index ? "on" : ""}`} role="button" tabIndex={0} title={t.title}
-                      onClick={() => setSub(t.index)} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setSub(t.index)}>
-                      <span className="ellipsis">{t.title}</span>
-                      {sub === t.index ? <Icon name="check" size={14} /> : t.default ? <span className="small muted">Default</span> : null}
+                      onClick={() => void chooseSub(t)} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && void chooseSub(t)}>
+                      <span className="p-opt-check">{sub === t.index ? <Icon name="check" size={14} /> : loadingSubs.has(t.index) ? <span className="spinner small-spin" /> : null}</span>
+                      <span className="ellipsis grow">{t.title}</span>
+                      {t.default && <span className="small muted">Default</span>}
+                      {!subUrls[t.index] && !loadingSubs.has(t.index) && <span className="small warn">Not loaded</span>}
                       {t.path && !status?.readOnly && (
                         <button className="p-sub-x" aria-label={`Remove ${t.title}`} title="Remove this subtitle file (it goes to the trash; can be undone in History)" onClick={(e) => { e.stopPropagation(); void removeTrack(t); }}><Icon name="x" size={12} /></button>
                       )}
@@ -816,15 +824,16 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
                   ))}
                 </div>
                 {online === null ? (
-                  <button className="p-opt" disabled={!!onlineBusy} onClick={() => void searchOnline()}><span><Icon name="search" size={14} /> {onlineBusy === "search" ? "Searching…" : "Find more online"}</span></button>
+                  <button className="p-opt" disabled={!!onlineBusy} onClick={() => void searchOnline()}><span className="p-opt-check"><Icon name="search" size={14} /></span><span className="grow">{onlineBusy === "search" ? "Searching…" : "Find more online"}</span></button>
                 ) : (
                   <>
                     {online.length === 0 && <div className="small muted">Nothing found online.</div>}
                     {online.length > 0 && <div className="small muted p-sub-head">Online (best {Math.min(6, online.length)})</div>}
-                    <div className="p-sub-grid">
+                    <div className="p-sub-list">
                       {online.slice(0, 6).map((o) => (
                         <button key={o.sub.Id} className="p-opt" disabled={!!onlineBusy || status?.readOnly} onClick={() => void downloadOnline(o)} title={o.sub.Name}>
-                          <span className="ellipsis">{o.sub.Name}</span>
+                          <span className="p-opt-check"><Icon name="download" size={14} /></span>
+                          <span className="ellipsis grow">{o.sub.Name}</span>
                           <span className={`small strong ${o.score >= 85 ? "ok" : o.score >= 60 ? "warn" : "bad"}`}>{onlineBusy === o.sub.Id ? "…" : `${o.score}${o.score === 100 ? " · Best" : ""}`}</span>
                         </button>
                       ))}
@@ -833,7 +842,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
                   </>
                 )}
                 {sub >= 0 && !status?.readOnly && (
-                  <button className="p-opt" disabled={!!onlineBusy} onClick={() => void autoTiming()}><span><Icon name="wand" size={14} /> Fix timing automatically</span><span className="small muted">{onlineBusy === "timing" ? "Listening…" : ""}</span></button>
+                  <button className="p-opt" disabled={!!onlineBusy} onClick={() => void autoTiming()}><span className="p-opt-check"><Icon name="wand" size={14} /></span><span className="grow">Fix timing automatically</span><span className="small muted">{onlineBusy === "timing" ? "Listening…" : ""}</span></button>
                 )}
                 <div className="p-timing">
                   <span className="muted small">Timing</span>
@@ -863,19 +872,6 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
                 <span>{x === 1 ? "Normal" : `${x}×`}</span>{speed === x && <Icon name="check" size={14} />}
               </button>
             ))}
-            {panel === "sleep" && (
-              <>
-                {([["Off", null], ["End of this episode", "end"], ["15 minutes", 15], ["30 minutes", 30], ["45 minutes", 45], ["1 hour", 60], ["1½ hours", 90]] as [string, number | "end" | null][]).map(([label, v]) => {
-                  const on = v === null ? !sleep : v === "end" ? sleep === "end" : false;
-                  return (
-                    <button key={label} className={`p-opt ${on ? "on" : ""}`} onClick={() => { setSleep(v === null ? null : v === "end" ? "end" : { until: Date.now() + v * 60000 }); say(v === null ? "Sleep timer off" : `Sleep timer: ${label.toLowerCase()}`); }}>
-                      <span>{label}</span>{on && <Icon name="check" size={14} />}
-                    </button>
-                  );
-                })}
-                {sleep && sleep !== "end" && <div className="muted small p-sleep-left">Pauses in {Math.max(1, Math.round((sleep.until - Date.now()) / 60000))} min</div>}
-              </>
-            )}
             {panel === "chapters" && chapters.map((c, i) => {
               const on = chapterAt(time) === c;
               return (
@@ -932,7 +928,6 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           {info?.next && onNext && <button className="p-ic" onClick={playNext} title={`Next: ${info.next.label} (N)`} aria-label="Next episode"><Icon name="next" size={22} /></button>}
           <button className={`p-ic ${sub >= 0 ? "on" : ""}`} onClick={() => setPanel(panel === "subs" ? "none" : "subs")} title={`Subtitles: ${subTitle} (C)`} aria-label="Subtitles"><Icon name="subtitles" size={22} /></button>
           <button className={`p-ic ${panel !== "none" && panel !== "subs" ? "on" : ""}`} onClick={() => setPanel(panel === "none" || panel === "subs" ? "audio" : "none")} title="Audio, speed, chapters" aria-label="Settings"><Icon name="settings" size={22} /></button>
-          <button className="p-ic" onClick={() => void pip()} aria-label="Picture in picture" title="Picture in picture (P)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="5" width="18" height="14" rx="2" /><rect x="12" y="11" width="7" height="6" rx="1" fill="currentColor" /></svg></button>
           <button className="p-ic" onClick={() => void fullscreen()} aria-label="Full screen" title="Full screen (F)"><Icon name="expand" size={20} /></button>
         </div>
       </div>
@@ -994,4 +989,18 @@ export function SubStyleEditor({ compact }: { compact?: boolean }) {
       </div>
     </div>
   );
+}
+
+const MENU_LABEL: Record<Exclude<Panel, "none">, string> = { subs: "Subtitles", style: "Look", audio: "Audio", speed: "Speed", chapters: "Chapters" };
+const MENU_ICON: Record<Exclude<Panel, "none">, IconName> = { subs: "subtitles", style: "image", audio: "volume", speed: "clock", chapters: "list" };
+const MENU_DEFAULT: Exclude<Panel, "none">[] = ["subs", "audio", "style", "speed", "chapters"];
+/** The player's settings tabs in your order (new ones at the end). */
+function menuOrder(saved: string[]): Exclude<Panel, "none">[] {
+  const known = saved.filter((x): x is Exclude<Panel, "none"> => (MENU_DEFAULT as string[]).includes(x));
+  return [...known, ...MENU_DEFAULT.filter((x) => !known.includes(x))];
+}
+function moveTab<T>(list: T[], from: T, to: T): T[] {
+  const l = list.filter((x) => x !== from);
+  l.splice(l.indexOf(to), 0, from);
+  return l;
 }

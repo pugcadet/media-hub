@@ -616,7 +616,13 @@ impl Client {
         if !(low.starts_with("/videos/") || low.starts_with("/audio/")) || path.contains("..") || path_query.contains("://") {
             return Err(Error::msg("bad stream path"));
         }
-        let resp = self.send(self.http.get(self.url(path_query))).await?;
+        let mut req = self.http.get(self.url(path_query));
+        if low.contains("/subtitles/") || low.contains("/trickplay/") {
+            // Jellyfin pulls a subtitle out of the video file the first time: on a big file on
+            // the NAS that takes longer than a normal request.
+            req = req.timeout(Duration::from_secs(300));
+        }
+        let resp = self.send(req).await?;
         let ct = resp
             .headers()
             .get("content-type")
