@@ -18,7 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, label: mac, bundles: "app,dmg" }
+          # Intel Macs build the Apple Silicon app (GitHub's Apple Silicon machines are often all busy).
+          - { os: macos-15-intel, label: mac, bundles: "app,dmg", target: aarch64-apple-darwin }
           - { os: windows-latest, label: windows, bundles: nsis }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -32,6 +33,8 @@ jobs:
           node-version: 22
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target || '' }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -44,7 +47,7 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee -a ci.log
 
       - name: Build installer
-        run: npx tauri build --bundles ${{ matrix.bundles }} 2>&1 | tee -a ci.log
+        run: npx tauri build --bundles ${{ matrix.bundles }} ${{ matrix.target && format('--target {0}', matrix.target) || '' }} 2>&1 | tee -a ci.log
 
       - name: Publish release
         run: |
@@ -53,8 +56,10 @@ jobs:
           tag="v$version"
           mkdir -p out
           if [ "${{ matrix.label }}" = "mac" ]; then
-            tar -czf out/MediaHub-macos.app.tar.gz -C src-tauri/target/release/bundle/macos "Media Hub.app"
-            cp src-tauri/target/release/bundle/dmg/*.dmg out/MediaHub-macos.dmg
+            b=src-tauri/target/${{ matrix.target }}/release/bundle
+            [ -d "$b" ] || b=src-tauri/target/release/bundle
+            tar -czf out/MediaHub-macos.app.tar.gz -C "$b/macos" "Media Hub.app"
+            cp "$b"/dmg/*.dmg out/MediaHub-macos.dmg
             (cd out && shasum -a 256 MediaHub-macos.app.tar.gz MediaHub-macos.dmg > SHA256SUMS-macos.txt)
           else
             cp src-tauri/target/release/bundle/nsis/*-setup.exe out/MediaHub-windows-setup.exe
