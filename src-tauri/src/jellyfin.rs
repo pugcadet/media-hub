@@ -1082,6 +1082,14 @@ pub struct ItemEdits {
     pub lock_data: Option<bool>,
     /// Language Jellyfin uses for this item's titles and summaries ("en", "nl", ...).
     pub preferred_language: Option<String>,
+    /// Music: album name, album artist, the song's artists, track and disc number.
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub artists: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "double")]
+    pub index_number: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "double")]
+    pub parent_index_number: Option<Option<i32>>,
 }
 
 /// Applies edits to the full item JSON, touching only the edited keys.
@@ -1174,6 +1182,28 @@ pub fn apply_edits(item: &mut serde_json::Value, e: &ItemEdits) -> Result<()> {
             return Err(Error::msg("bad language"));
         }
         obj.insert("PreferredMetadataLanguage".into(), json!(v));
+    }
+    if let Some(v) = &e.album {
+        obj.insert("Album".into(), json!(clean(v)));
+    }
+    if let Some(v) = &e.album_artist {
+        let v = clean(v);
+        obj.insert("AlbumArtist".into(), json!(v));
+        obj.insert("AlbumArtists".into(), if v.is_empty() { json!([]) } else { json!([{ "Name": v }]) });
+    }
+    if let Some(v) = &e.artists {
+        let names = list(v);
+        let pairs: Vec<Value> = names.as_array().into_iter().flatten().map(|n| json!({ "Name": n })).collect();
+        obj.insert("Artists".into(), names);
+        obj.insert("ArtistItems".into(), json!(pairs));
+    }
+    for (key, v) in [("IndexNumber", &e.index_number), ("ParentIndexNumber", &e.parent_index_number)] {
+        if let Some(n) = v {
+            if n.map(|n| !(0..=9999).contains(&n)).unwrap_or(false) {
+                return Err(Error::msg("That number looks wrong."));
+            }
+            obj.insert(key.into(), json!(n));
+        }
     }
     Ok(())
 }

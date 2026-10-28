@@ -8,6 +8,7 @@ import { DEFAULT_PREFS, prefs, setPrefs, subCss, usePrefs, type SubStyle, SUB_FO
 import { nav } from "./nav";
 import { Icon, openMenu, SettingsLink, type IconName } from "./ui";
 import { logProblem } from "./activity";
+import { music } from "./musicPlayer";
 
 /** Reports a failed position save once per playback (not every 15 seconds). */
 let reportedProgress = false;
@@ -86,6 +87,8 @@ function cueHtml(text: string): string {
 export default function Player({ id, onClose, status, onNext }: { id: string; onClose: () => void; status?: Status; onNext?: (id: string) => void }) {
   const p = usePrefs();
   const video = useRef<HTMLVideoElement>(null);
+  // A video starting pauses the music (the small player stays, to carry on after).
+  useEffect(() => music.pause(), []);
   const [session, setSession] = useState<Session>({ start: 0, audio: null, n: 0 });
   const [info, setInfo] = useState<PlayInfo | null>(null);
   const [tracks, setTracks] = useState<SubTrack[]>([]);

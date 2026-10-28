@@ -31,13 +31,24 @@ export interface KTab {
  * The tab row used everywhere (the Library's look). With `folders`, the folder tabs follow
  * your folder order and can be dragged into a new order (it applies to every screen).
  */
-export function KTabs({ tabs, active, onChange, folders = false, after }: {
+export function KTabs({ tabs, active, onChange, folders = false, after, order, onReorder }: {
   tabs: KTab[]; active: string; onChange: (id: string) => void; folders?: boolean; after?: ReactNode;
+  /** Your own order for these tabs (ids); with `onReorder` they can be dragged. */
+  order?: string[]; onReorder?: (ids: string[]) => void;
 }) {
   usePrefs(); // re-render when the folder order changes
-  const fixed = folders ? tabs.filter((t) => t.id.startsWith("@")) : tabs;
-  const movable = folders ? orderFolders(tabs.filter((t) => !t.id.startsWith("@")), (t) => t.id) : [];
+  const own = !!onReorder;
+  const fixed = folders || own ? tabs.filter((t) => t.id.startsWith("@")) : tabs;
+  const rest = tabs.filter((t) => !t.id.startsWith("@"));
+  const rank = (id: string) => { const i = (order ?? []).indexOf(id); return i < 0 ? 1000 + rest.findIndex((t) => t.id === id) : i; };
+  const movable = folders ? orderFolders(rest, (t) => t.id) : own ? [...rest].sort((a, b) => rank(a.id) - rank(b.id)) : [];
   const names = movable.map((t) => t.id);
+  const moveTo = (from: string, to: string) => {
+    if (!own) return moveFolder(names, from, to);
+    const ids = names.filter((n) => n !== from);
+    ids.splice(ids.indexOf(to) + (names.indexOf(from) < names.indexOf(to) ? 1 : 0), 0, from);
+    onReorder?.(ids);
+  };
   const dragged = useRef<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
   const tab = (t: KTab, drag: boolean) => (
@@ -51,9 +62,9 @@ export function KTabs({ tabs, active, onChange, folders = false, after }: {
       onDragStart={drag ? (e) => { dragged.current = t.id; e.dataTransfer.effectAllowed = "move"; } : undefined}
       onDragOver={drag ? (e) => { if (dragged.current && dragged.current !== t.id) { e.preventDefault(); setOver(t.id); } } : undefined}
       onDragLeave={drag ? () => setOver(null) : undefined}
-      onDrop={drag ? (e) => { e.preventDefault(); setOver(null); if (dragged.current) moveFolder(names, dragged.current, t.id); dragged.current = null; } : undefined}
+      onDrop={drag ? (e) => { e.preventDefault(); setOver(null); if (dragged.current) moveTo(dragged.current, t.id); dragged.current = null; } : undefined}
       onDragEnd={() => { dragged.current = null; setOver(null); }}
-      title={drag ? "Drag to change the order of your folders" : undefined}
+      title={drag ? (own ? "Drag to change the order" : "Drag to change the order of your folders") : undefined}
     >
       {t.icon && <Icon name={t.icon} size={14} />}
       <span>{t.label}</span>

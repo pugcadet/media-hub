@@ -14,7 +14,7 @@ const CACHED = new Set([
   "list_folders", "local_subtitles", "storage_overview", "trash_list", "health_row", "music_source",
 ]);
 /** Reads that don't change anything and don't need remembering. */
-const HARMLESS = /^(play_|music_play|music_stop|status$|check_update|ffmpeg_info|ytdlp_info|cancel_job|naming_check_cancel|subtitle_options|identify_search|dl_probe|find_|scan_folders|watch_sync_test|images_revalidate)/;
+const HARMLESS = /^(play_|music_play|music_stop|music_art_options|status$|check_update|ffmpeg_info|ytdlp_info|cancel_job|naming_check_cancel|subtitle_options|identify_search|dl_probe|find_|scan_folders|watch_sync_test|images_revalidate)/;
 const TTL = 5 * 60_000;
 const cache = new Map<string, { at: number; value: Promise<unknown> }>();
 
@@ -354,6 +354,28 @@ export interface ItemEdits {
   providerIds?: Record<string, string>;
   lockData?: boolean;
   preferredLanguage?: string;
+  /** Music */
+  album?: string;
+  albumArtist?: string;
+  artists?: string[];
+  indexNumber?: number | null;
+  parentIndexNumber?: number | null;
+}
+
+/** A change to a song, album or artist in Music (local folder). */
+export interface MusicEdit {
+  title?: string;
+  artist?: string;
+  album?: string;
+  year?: number;
+  index?: number;
+  disc?: number;
+}
+
+export interface ArtOption {
+  url: string;
+  label: string;
+  source: string;
 }
 
 export interface Culture {
@@ -939,7 +961,11 @@ export const api = {
   subtitleSync: (id: string, index: number, apply: boolean) =>
     invoke<{ fit: SyncFit; sure: boolean; applied: boolean; file: string }>("subtitle_sync", { id, index, apply }),
   musicRescan: () => invoke<number>("music_rescan"),
-  musicFetchArt: () => invoke<{ covers: number; artists: number; missingCovers: number }>("music_fetch_art"),
+  musicFetchArt: (again = false) => invoke<{ covers: number; artists: number; missingCovers: number }>("music_fetch_art", { again }),
+  musicLocalEdit: (id: string, edit: MusicEdit) => invoke<void>("music_local_edit", { id, edit }),
+  musicLocalReset: (id: string) => invoke<void>("music_local_reset", { id }),
+  musicArtOptions: (kind: "album" | "artist", name: string, artist: string | null) => invoke<ArtOption[]>("music_art_options", { kind, name, artist }),
+  musicLocalSetArt: (id: string, url: string | null) => invoke<boolean>("music_local_set_art", { id, url }),
   musicList: (view: string, parent: string | null, query: string | null, start: number, limit: number) =>
     invoke<MusicItem[]>("music_list", { view, parent, query, start, limit }),
   musicPlay: (id: string) => invoke<string>("music_play", { id }),

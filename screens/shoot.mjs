@@ -65,6 +65,31 @@ for (const [w, h] of [[1440, 900], [1100, 760]]) {
   } catch (e) {
     log.push(`[${w}] item: ${e.message}`);
   }
+  // Music: tiles, list, manage (through the hub switcher, like a person would).
+  try {
+    await page.click(".hub-btn");
+    await page.click(".hub-menu >> text=Music");
+    await page.waitForTimeout(1000);
+    await page.click(".m-tabs >> text=Albums");
+    await page.waitForTimeout(700);
+    await page.screenshot({ path: `${out}/${w}-music.png` });
+    await page.click(".w-top [title=List]");
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${out}/${w}-music-list.png` });
+    await page.click(".m-tabs >> text=Manage");
+    await page.waitForTimeout(900);
+    await page.click(".m-manage .studio-item", { timeout: 1500 }).catch(() => undefined);
+    await page.waitForTimeout(700);
+    await page.screenshot({ path: `${out}/${w}-music-manage.png` });
+    await page.click(".m-manage >> text=Source");
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${out}/${w}-music-source.png` });
+    await page.click(".hub-btn");
+    await page.click(".hub-menu >> text=Media manager");
+    await page.waitForTimeout(600);
+  } catch (e) {
+    log.push(`[${w}] music: ${e.message}`);
+  }
   // Collapsed sidebar.
   try {
     await page.evaluate(() => { const p = JSON.parse(localStorage.getItem("mediahub.prefs.v1") || "{}"); p.sidebarSmall = true; localStorage.setItem("mediahub.prefs.v1", JSON.stringify(p)); });

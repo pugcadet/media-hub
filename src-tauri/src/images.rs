@@ -19,6 +19,10 @@ const REMOTE_HOSTS: &[&str] = &[
     "m.media-amazon.com",
     "static.tvmaze.com",
     "i.ytimg.com",
+    // Music pictures (Deezer, Cover Art Archive and where it redirects to).
+    "dzcdn.net",
+    "coverartarchive.org",
+    "archive.org",
 ];
 const MAX_REMOTE_BYTES: usize = 15 * 1024 * 1024;
 

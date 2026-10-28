@@ -24,6 +24,8 @@ export interface StudioItem {
   warn?: boolean;
   /** Status icons (instead of dots). */
   status?: ReactNode;
+  /** A picture of its own (instead of `thumb`). */
+  pic?: ReactNode;
 }
 
 export function Dots({ dots }: { dots: Dot[] }) {
@@ -88,7 +90,7 @@ export function Studio({ items, selected, onSelect, onMenu, onOpen, head, empty,
                 {header && <div className="studio-group">{header}</div>}
                 <div className={`studio-item ${selected === it.id ? "on" : ""}`} onClick={() => onSelect(it.id)} onDoubleClick={onOpen && (() => onOpen(it.id))} onContextMenu={onMenu && ((e) => onMenu(it.id, e))} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onSelect(it.id)}>
                   {it.lead && <span className="studio-lead" onClick={(e) => e.stopPropagation()}>{it.lead}</span>}
-                  {it.thumb !== undefined && (
+                  {it.pic ? <span className={`studio-pic ${it.warn ? "warn" : ""}`}>{it.pic}</span> : it.thumb !== undefined && (
                     <span className={`studio-thumb ${it.warn ? "warn" : ""}`}>{it.thumb ? <img src={it.thumb} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /> : null}</span>
                   )}
                   <span className="studio-text">

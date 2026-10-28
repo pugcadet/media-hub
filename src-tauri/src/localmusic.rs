@@ -123,7 +123,9 @@ fn from_lib(root: &Path) -> Option<Index> {
         .collect();
     let covers = lib.covers.iter().map(|(k, v)| (k.clone(), root.join(v))).collect();
     let artists = lib.artists.iter().map(|(k, v)| (k.clone(), root.join(v))).collect();
-    Some(Index { root: root.to_path_buf(), at: Instant::now(), tracks, covers, artists, tagged: false })
+    let mut ix = Index { root: root.to_path_buf(), at: Instant::now(), tracks, covers, artists, tagged: false };
+    apply_edits(&mut ix);
+    Some(ix)
 }
 
 fn index() -> &'static Mutex<Option<Index>> {
@@ -376,7 +378,9 @@ fn scan(root: &Path, tags: bool) -> Index {
         let _ = changed;
         save_lib(root, &LibFile { version: 2, entries, tracks: saved, covers: covers_rel, artists: artists_rel });
     }
-    Index { root: root.to_path_buf(), at: Instant::now(), tracks, covers, artists, tagged: tags }
+    let mut ix = Index { root: root.to_path_buf(), at: Instant::now(), tracks, covers, artists, tagged: tags };
+    apply_edits(&mut ix);
+    ix
 }
 
 /// Reads tags in the background and swaps the result in; the window is told to reload.
@@ -520,6 +524,7 @@ pub fn list(app: &AppHandle, state: &AppState, view: &str, parent: Option<&str>,
                     .map(|t| track_item(t, ix.covers.contains_key(&t.album_key)))
                     .collect()
             }
+            "songs" => ix.tracks.iter().filter(|t| hit(t)).map(|t| track_item(t, ix.covers.contains_key(&t.album_key))).collect(),
             "search" => ix.tracks.iter().filter(|t| hit(t)).take(300).map(|t| track_item(t, ix.covers.contains_key(&t.album_key))).collect(),
             _ => Vec::new(),
         };
@@ -733,14 +738,34 @@ async fn find_cover(artist: &str, album: &str) -> Option<(Vec<u8>, &'static str)
     get_image(first.get("cover_xl").and_then(|x| x.as_str())?).await
 }
 
-/// An artist picture from Deezer (MusicBrainz has no pictures itself).
+/// Names compared loosely ("The Beatles" = "beatles", "AC/DC" = "acdc").
+fn norm_name(s: &str) -> String {
+    let l: String = s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
+    l.strip_prefix("the").filter(|r| !r.is_empty()).map(String::from).unwrap_or(l)
+}
+
+/// Artists that are not one person or band: no picture is looked up for them.
+fn is_placeholder_artist(a: &str) -> bool {
+    let n = norm_name(a);
+    n.is_empty() || ["unknownartist", "variousartists", "various", "va", "soundtrack", "compilations"].contains(&n.as_str())
+}
+
+/// An artist picture from Deezer (MusicBrainz has no pictures itself). Only an exact name
+/// match counts; with several, the best known one (a lookalike name used to give wrong
+/// pictures). Pick another one yourself under Music → Edit.
 async fn find_artist(artist: &str) -> Option<(Vec<u8>, &'static str)> {
-    let url = format!("https://api.deezer.com/search/artist?q={}&limit=3", enc(artist));
+    if is_placeholder_artist(artist) {
+        return None;
+    }
+    let url = format!("https://api.deezer.com/search/artist?q={}&limit=10", enc(&format!("artist:\"{artist}\"")));
     let v = get_json(&url).await?;
-    let a = v.get("data")?.as_array()?.iter().find(|a| {
-        let n = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
-        crate::sources::similarity(n, artist) >= 0.85
-    })?;
+    let want = norm_name(artist);
+    let a = v
+        .get("data")?
+        .as_array()?
+        .iter()
+        .filter(|a| norm_name(a.get("name").and_then(|x| x.as_str()).unwrap_or("")) == want)
+        .max_by_key(|a| a.get("nb_fan").and_then(|x| x.as_i64()).unwrap_or(0))?;
     let pic = a.get("picture_xl").and_then(|x| x.as_str())?;
     // Deezer's placeholder for artists without a picture.
     if pic.contains("/artist//") {
@@ -761,8 +786,12 @@ pub struct ArtResult {
 /// them in `.mediahub/` (never touches your music files). One request a second, as
 /// MusicBrainz asks. Progress as "music-art-progress"; Stop with the "musicart" job.
 #[tauri::command]
-pub async fn music_fetch_art(app: AppHandle, state: State<'_, AppState>) -> Result<ArtResult> {
+pub async fn music_fetch_art(app: AppHandle, state: State<'_, AppState>, again: Option<bool>) -> Result<ArtResult> {
     let root = root_of(&state)?;
+    // "Check artist pictures again": every artist picture found earlier is looked up again
+    // with the stricter match (the ones you chose yourself stay).
+    let again = again.unwrap_or(false);
+    let chosen = load_edits(&root).chosen_artist_pics;
     let (albums, artists): (Vec<(String, String, String)>, Vec<String>) = {
         let g = index().lock().map_err(|_| Error::msg("internal error"))?;
         let ix = g.as_ref().filter(|i| i.root == root).ok_or_else(|| Error::msg("Open Music first so the folder is read."))?;
@@ -773,7 +802,7 @@ pub async fn music_fetch_art(app: AppHandle, state: State<'_, AppState>) -> Resu
             .filter(|t| !ix.covers.contains_key(&t.album_key) && seen.insert(t.album_key.clone()))
             .map(|t| (t.album_key.clone(), t.artist.clone(), t.album.clone()))
             .collect();
-        let mut names: Vec<String> = ix.tracks.iter().map(|t| t.artist.clone()).filter(|a| !ix.artists.contains_key(&key_of(a)) && a != "Unknown artist").collect();
+        let mut names: Vec<String> = ix.tracks.iter().map(|t| t.artist.clone()).filter(|a| (again || !ix.artists.contains_key(&key_of(a))) && !chosen.contains(&key_of(a)) && !is_placeholder_artist(a)).collect();
         names.sort();
         names.dedup();
         (albums, names)
@@ -809,6 +838,9 @@ pub async fn music_fetch_art(app: AppHandle, state: State<'_, AppState>) -> Resu
         crate::cancel::check("musicart")?;
         let _ = app.emit("music-art-progress", serde_json::json!({ "done": albums.len() + i, "total": total, "label": name }));
         if let Some((bytes, ext)) = find_artist(name).await {
+            for e in ["jpg", "png"].iter().filter(|e| **e != ext) {
+                let _ = std::fs::remove_file(artists_dir.join(format!("{}.{e}", key_of(name))));
+            }
             let f = artists_dir.join(format!("{}.{ext}", key_of(name)));
             if std::fs::write(&f, bytes).is_ok() {
                 res.artists += 1;
@@ -816,6 +848,16 @@ pub async fn music_fetch_art(app: AppHandle, state: State<'_, AppState>) -> Resu
                     if let Some(ix) = g.as_mut() {
                         ix.artists.insert(key_of(name), f);
                     }
+                }
+            }
+        } else if again {
+            // No sure match any more: the earlier (likely wrong) picture goes; the album cover shows instead.
+            for e in ["jpg", "png"] {
+                let _ = std::fs::remove_file(artists_dir.join(format!("{}.{e}", key_of(name))));
+            }
+            if let Ok(mut g) = index().lock() {
+                if let Some(ix) = g.as_mut() {
+                    ix.artists.remove(&key_of(name));
                 }
             }
         }
@@ -831,4 +873,388 @@ pub async fn music_fetch_art(app: AppHandle, state: State<'_, AppState>) -> Resu
     })
     .await;
     Ok(res)
+}
+
+/* ------------------------------------------------------------- your own edits */
+
+/// What you changed yourself (names, numbers, pictures). Kept in `.mediahub/edits.json`
+/// next to the library file, so the music files themselves are never written to, and a
+/// fresh read of the folder keeps your changes. Reset brings back what the files say.
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+struct Edits {
+    /// song file (relative) -> changes
+    #[serde(default)]
+    tracks: HashMap<String, TrackEdit>,
+    /// album folder (relative) -> changes
+    #[serde(default)]
+    albums: HashMap<String, AlbumEdit>,
+    /// artist name as read -> the name you gave it
+    #[serde(default)]
+    artists: HashMap<String, String>,
+    /// artist keys whose picture you chose (a new search never replaces those)
+    #[serde(default)]
+    chosen_artist_pics: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackEdit {
+    title: Option<String>,
+    artist: Option<String>,
+    index: Option<i64>,
+    disc: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumEdit {
+    name: Option<String>,
+    artist: Option<String>,
+    year: Option<i64>,
+    /// a picture you chose, relative to the music folder (in `.mediahub/covers`)
+    cover: Option<String>,
+}
+
+/// Changes from the edit form (empty text = back to what the files say).
+#[derive(Deserialize, Default, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicEdit {
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    year: Option<i64>,
+    index: Option<i64>,
+    disc: Option<i64>,
+}
+
+fn load_edits(root: &Path) -> Edits {
+    std::fs::read(lib_dir(root).join("edits.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+fn save_edits(root: &Path, e: &Edits) -> Result<()> {
+    let dir = lib_dir(root);
+    std::fs::create_dir_all(&dir)?;
+    let tmp = dir.join("edits.json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(e).map_err(|x| Error::msg(x.to_string()))?)?;
+    std::fs::rename(&tmp, dir.join("edits.json"))?;
+    Ok(())
+}
+
+fn parent_rel(rel: &str) -> &str {
+    rel.rsplit_once('/').map(|x| x.0).unwrap_or("")
+}
+
+/// Puts your edits over what was read from the files.
+fn apply_edits(ix: &mut Index) {
+    let e = load_edits(&ix.root);
+    if e.tracks.is_empty() && e.albums.is_empty() && e.artists.is_empty() {
+        return;
+    }
+    let root = ix.root.clone();
+    for t in &mut ix.tracks {
+        let rel = rel_of(&root, &t.path);
+        if let Some(n) = e.artists.get(&t.artist) {
+            t.artist = n.clone();
+        }
+        if let Some(a) = e.albums.get(parent_rel(&rel)) {
+            if let Some(v) = &a.name { t.album = v.clone(); }
+            if let Some(v) = &a.artist { t.artist = v.clone(); }
+            if a.year.is_some() { t.year = a.year; }
+        }
+        if let Some(x) = e.tracks.get(&rel) {
+            if let Some(v) = &x.title { t.title = v.clone(); }
+            if let Some(v) = &x.artist { t.artist = v.clone(); }
+            if x.index.is_some() { t.index = x.index; }
+            if x.disc.is_some() { t.disc = x.disc; }
+        }
+    }
+    for (folder, a) in &e.albums {
+        if let Some(c) = &a.cover {
+            let p = root.join(c);
+            if p.is_file() {
+                ix.covers.insert(key_of(folder), p);
+            }
+        }
+    }
+    ix.tracks.sort_by(|a, b| (a.artist.to_lowercase(), a.year, a.album.to_lowercase(), a.disc, a.index, a.title.to_lowercase()).cmp(&(b.artist.to_lowercase(), b.year, b.album.to_lowercase(), b.disc, b.index, b.title.to_lowercase())));
+}
+
+/// Reads the index again from the library file with the edits on top (no walk over the NAS).
+fn reload_with_edits(root: &Path) {
+    if let Ok(mut g) = index().lock() {
+        let (tagged, at) = g.as_ref().map(|i| (i.tagged, i.at)).unwrap_or((false, Instant::now()));
+        if let Some(mut ix) = from_lib(root) {
+            ix.tagged = tagged;
+            ix.at = at;
+            *g = Some(ix);
+        }
+    }
+}
+
+enum Target {
+    Track(String),
+    Album(String),
+    Artist(String),
+}
+
+/// Which song file, album folder or artist an id points at.
+fn target_of(root: &Path, id: &str) -> Result<Target> {
+    let g = index().lock().map_err(|_| Error::msg("internal error"))?;
+    let ix = g.as_ref().filter(|i| i.root == root).ok_or_else(|| Error::msg("Open Music first so the folder is read."))?;
+    let (p, key) = id.split_at(1);
+    let t = match p {
+        "L" => ix.tracks.iter().find(|t| t.key == key).map(|t| Target::Track(rel_of(root, &t.path))),
+        "A" => ix.tracks.iter().find(|t| t.album_key == key).map(|t| Target::Album(parent_rel(&rel_of(root, &t.path)).to_string())),
+        "R" => ix.tracks.iter().find(|t| key_of(&t.artist) == key).map(|t| Target::Artist(t.artist.clone())),
+        _ => None,
+    };
+    t.ok_or_else(|| Error::msg("That song, album or artist isn't in the music folder any more."))
+}
+
+fn text(v: &Option<String>) -> Option<Option<String>> {
+    v.as_ref().map(|s| Some(s.trim().chars().take(300).collect::<String>()).filter(|s| !s.is_empty()))
+}
+
+fn num(v: Option<i64>, max: i64) -> Result<Option<i64>> {
+    match v {
+        Some(n) if n <= 0 => Ok(None), // 0 = back to what the file says
+        Some(n) if n > max => Err(Error::msg("That number looks wrong.")),
+        x => Ok(x),
+    }
+}
+
+/// Saves your changes to a song, album or artist from the music folder.
+#[tauri::command]
+pub fn music_local_edit(app: AppHandle, state: State<'_, AppState>, id: String, edit: MusicEdit) -> Result<()> {
+    let root = root_of(&state)?;
+    let mut e = load_edits(&root);
+    match target_of(&root, &id)? {
+        Target::Track(rel) => {
+            let t = e.tracks.entry(rel.clone()).or_default();
+            if let Some(v) = text(&edit.title) { t.title = v; }
+            if let Some(v) = text(&edit.artist) { t.artist = v; }
+            if edit.index.is_some() { t.index = num(edit.index, 999)?; }
+            if edit.disc.is_some() { t.disc = num(edit.disc, 99)?; }
+            if t.title.is_none() && t.artist.is_none() && t.index.is_none() && t.disc.is_none() {
+                e.tracks.remove(&rel);
+            }
+        }
+        Target::Album(folder) => {
+            let a = e.albums.entry(folder.clone()).or_default();
+            if let Some(v) = text(&edit.album).or_else(|| text(&edit.title)) { a.name = v; }
+            if let Some(v) = text(&edit.artist) { a.artist = v; }
+            if edit.year.is_some() {
+                a.year = match edit.year { Some(y) if y <= 0 => None, Some(y) if !(1000..3000).contains(&y) => return Err(Error::msg("That year looks wrong.")), y => y };
+            }
+            if a.name.is_none() && a.artist.is_none() && a.year.is_none() && a.cover.is_none() {
+                e.albums.remove(&folder);
+            }
+        }
+        Target::Artist(name) => {
+            // The name as the files have it (an artist renamed before keeps its first name).
+            let original = e.artists.iter().find(|(_, v)| **v == name).map(|(k, _)| k.clone()).unwrap_or(name);
+            match text(&edit.title).or_else(|| text(&edit.artist)) {
+                Some(Some(n)) if n != original => { e.artists.insert(original, n); }
+                Some(_) => { e.artists.remove(&original); }
+                None => {}
+            }
+        }
+    }
+    save_edits(&root, &e)?;
+    reload_with_edits(&root);
+    let _ = app.emit("music-updated", ());
+    Ok(())
+}
+
+/// Forgets your changes to a song, album or artist (the picture you chose stays).
+#[tauri::command]
+pub fn music_local_reset(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<()> {
+    let root = root_of(&state)?;
+    let mut e = load_edits(&root);
+    match target_of(&root, &id)? {
+        Target::Track(rel) => { e.tracks.remove(&rel); }
+        Target::Album(folder) => {
+            if let Some(a) = e.albums.get_mut(&folder) {
+                *a = AlbumEdit { cover: a.cover.take(), ..Default::default() };
+                if a.cover.is_none() { e.albums.remove(&folder); }
+            }
+        }
+        Target::Artist(name) => { e.artists.retain(|k, v| *v != name && *k != name); }
+    }
+    save_edits(&root, &e)?;
+    reload_with_edits(&root);
+    let _ = app.emit("music-updated", ());
+    Ok(())
+}
+
+/// A picture to choose from.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtOption {
+    url: String,
+    label: String,
+    source: &'static str,
+}
+
+/// Pictures for an album or artist from Deezer and the Cover Art Archive, best match first.
+#[tauri::command]
+pub async fn music_art_options(kind: String, name: String, artist: Option<String>) -> Result<Vec<ArtOption>> {
+    let name: String = name.trim().chars().take(200).collect();
+    let artist: String = artist.unwrap_or_default().trim().chars().take(200).collect();
+    if name.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    if kind == "artist" {
+        let url = format!("https://api.deezer.com/search/artist?q={}&limit=12", enc(&name));
+        let want = norm_name(&name);
+        let mut list: Vec<(bool, i64, ArtOption)> = Vec::new();
+        for a in get_json(&url).await.and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned()).unwrap_or_default() {
+            let Some(pic) = a.get("picture_xl").and_then(|x| x.as_str()).filter(|p| !p.contains("/artist//")) else { continue };
+            let n = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
+            let fans = a.get("nb_fan").and_then(|x| x.as_i64()).unwrap_or(0);
+            list.push((norm_name(n) == want, fans, ArtOption { url: pic.to_string(), label: format!("{n} · {} fans", fans), source: "Deezer" }));
+        }
+        list.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+        out.extend(list.into_iter().map(|x| x.2));
+        return Ok(out);
+    }
+    let q = if artist.is_empty() { name.clone() } else { format!("{artist} {name}") };
+    let url = format!("https://api.deezer.com/search/album?q={}&limit=12", enc(&q));
+    for a in get_json(&url).await.and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned()).unwrap_or_default() {
+        let Some(pic) = a.get("cover_xl").and_then(|x| x.as_str()) else { continue };
+        let t = a.get("title").and_then(|x| x.as_str()).unwrap_or("");
+        let who = a.pointer("/artist/name").and_then(|x| x.as_str()).unwrap_or("");
+        out.push(ArtOption { url: pic.to_string(), label: format!("{t} · {who}"), source: "Deezer" });
+    }
+    let mbq = if artist.is_empty() { format!("releasegroup:\"{}\"", lucene(&name)) } else { format!("releasegroup:\"{}\" AND artist:\"{}\"", lucene(&name), lucene(&artist)) };
+    let url = format!("https://musicbrainz.org/ws/2/release-group/?query={}&fmt=json&limit=4", enc(&mbq));
+    for rg in get_json(&url).await.and_then(|v| v.get("release-groups").and_then(|d| d.as_array()).cloned()).unwrap_or_default() {
+        let Some(id) = rg.get("id").and_then(|x| x.as_str()) else { continue };
+        let t = rg.get("title").and_then(|x| x.as_str()).unwrap_or("");
+        let who = rg.pointer("/artist-credit/0/name").and_then(|x| x.as_str()).unwrap_or("");
+        out.push(ArtOption { url: format!("https://coverartarchive.org/release-group/{id}/front-500"), label: format!("{t} · {who}"), source: "MusicBrainz" });
+    }
+    Ok(out)
+}
+
+/// Only pictures from the places the choices come from.
+fn allowed_art_url(u: &str) -> bool {
+    let Ok(p) = url::Url::parse(u) else { return false };
+    let host = p.host_str().unwrap_or("");
+    p.scheme() == "https" && (host.ends_with(".dzcdn.net") || host == "coverartarchive.org" || host.ends_with(".archive.org") || host == "archive.org")
+}
+
+/// Uses a picture for an album or artist from the music folder: one of the choices (`url`),
+/// or a picture file you pick (no `url`). Saved in `.mediahub`; your folders aren't changed.
+#[tauri::command]
+pub async fn music_local_set_art(app: AppHandle, state: State<'_, AppState>, id: String, url: Option<String>) -> Result<bool> {
+    let root = root_of(&state)?;
+    let target = target_of(&root, &id)?;
+    let (bytes, ext) = match url {
+        Some(u) => {
+            if !allowed_art_url(&u) {
+                return Err(Error::msg("bad picture address"));
+            }
+            get_image(&u).await.ok_or_else(|| Error::msg("That picture couldn't be downloaded. Try another one."))?
+        }
+        None => {
+            use tauri_plugin_dialog::DialogExt;
+            let a2 = app.clone();
+            let picked = tauri::async_runtime::spawn_blocking(move || a2.dialog().file().add_filter("Pictures", &["jpg", "jpeg", "png"]).blocking_pick_file()).await.map_err(|e| Error::msg(e.to_string()))?;
+            let Some(fp) = picked else { return Ok(false) };
+            let p = fp.into_path().map_err(|_| Error::msg("That file cannot be used."))?;
+            let b = std::fs::read(&p)?;
+            let ext = if b.starts_with(&[0x89, b'P', b'N', b'G']) { "png" } else if b.starts_with(&[0xFF, 0xD8, 0xFF]) { "jpg" } else { return Err(Error::msg("Choose a JPG or PNG picture.")) };
+            if b.len() > 15_000_000 {
+                return Err(Error::msg("That picture is too big (over 15 MB)."));
+            }
+            (b, ext)
+        }
+    };
+    let (dir, key) = match &target {
+        Target::Album(folder) => (lib_dir(&root).join("covers"), key_of(folder)),
+        Target::Artist(name) => (lib_dir(&root).join("artists"), key_of(name)),
+        Target::Track(_) => return Err(Error::msg("Choose a picture for the album instead.")),
+    };
+    std::fs::create_dir_all(&dir)?;
+    // Only the app's own copies in .mediahub are replaced.
+    for e in ["jpg", "png"] {
+        let old = dir.join(format!("{key}.{e}"));
+        if e != ext && old.is_file() {
+            let _ = std::fs::remove_file(old);
+        }
+    }
+    let file = dir.join(format!("{key}.{ext}"));
+    std::fs::write(&file, bytes)?;
+    let mut e = load_edits(&root);
+    match &target {
+        Target::Album(folder) => e.albums.entry(folder.clone()).or_default().cover = Some(rel_of(&root, &file)),
+        Target::Artist(_) => {
+            if !e.chosen_artist_pics.contains(&key) {
+                e.chosen_artist_pics.push(key.clone());
+            }
+        }
+        Target::Track(_) => {}
+    }
+    save_edits(&root, &e)?;
+    if let Ok(mut g) = index().lock() {
+        if let Some(ix) = g.as_mut().filter(|i| i.root == root) {
+            match &target {
+                Target::Album(_) => { ix.covers.insert(key, file); }
+                _ => { ix.artists.insert(key, file); }
+            }
+        }
+    }
+    let _ = app.emit("music-updated", ());
+    Ok(true)
+}
+
+#[cfg(test)]
+mod edit_tests {
+    use super::*;
+
+    #[test]
+    fn names_compare_loosely() {
+        assert_eq!(norm_name("The Beatles"), norm_name("beatles"));
+        assert_eq!(norm_name("AC/DC"), "acdc");
+        assert_eq!(norm_name("The The"), "the");
+        assert!(is_placeholder_artist("Various Artists"));
+        assert!(!is_placeholder_artist("Air"));
+    }
+
+    #[test]
+    fn only_picture_hosts_from_the_choices() {
+        assert!(allowed_art_url("https://e-cdns-images.dzcdn.net/images/artist/x/1000x1000.jpg"));
+        assert!(allowed_art_url("https://coverartarchive.org/release-group/abc/front-500"));
+        assert!(!allowed_art_url("http://coverartarchive.org/x"));
+        assert!(!allowed_art_url("https://example.com/a.jpg"));
+        assert!(!allowed_art_url("https://dzcdn.net.evil.com/a.jpg"));
+    }
+
+    #[test]
+    fn edits_go_over_the_files_and_reset() {
+        let root = std::env::temp_dir().join(format!("mh-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let album = root.join("Air/Moon Safari (1998)");
+        std::fs::create_dir_all(&album).unwrap();
+        std::fs::write(album.join("01 - La Femme.mp3"), b"x").unwrap();
+        std::fs::write(album.join("02 - Sexy Boy.mp3"), b"x").unwrap();
+        let mut e = Edits::default();
+        e.tracks.insert("Air/Moon Safari (1998)/01 - La Femme.mp3".into(), TrackEdit { title: Some("La Femme d'Argent".into()), ..Default::default() });
+        e.albums.insert("Air/Moon Safari (1998)".into(), AlbumEdit { year: Some(1997), ..Default::default() });
+        e.artists.insert("Air".into(), "AIR".into());
+        save_edits(&root, &e).unwrap();
+        let ix = scan(&root, false);
+        let first = ix.tracks.iter().find(|t| t.index == Some(1)).unwrap();
+        assert_eq!(first.title, "La Femme d'Argent");
+        assert!(ix.tracks.iter().all(|t| t.artist == "AIR" && t.year == Some(1997)));
+        // The music files are untouched.
+        assert!(album.join("01 - La Femme.mp3").is_file());
+        assert_eq!(std::fs::read(album.join("02 - Sexy Boy.mp3")).unwrap(), b"x");
+        save_edits(&root, &Edits::default()).unwrap();
+        let ix = scan(&root, false);
+        assert!(ix.tracks.iter().all(|t| t.artist == "Air" && t.year == Some(1998)));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

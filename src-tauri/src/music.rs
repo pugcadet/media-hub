@@ -96,7 +96,7 @@ pub fn to_item(v: &Value) -> Option<MusicItem> {
 }
 
 /// Lists music. `view`: "albums" | "artists" | "tracks" (of `parent`: an album or artist) |
-/// "recent" | "favorites" | "search".
+/// "recent" | "favorites" | "songs" (every song) | "search".
 #[tauri::command]
 pub async fn music_list(app: tauri::AppHandle, state: State<'_, AppState>, view: String, parent: Option<String>, query: Option<String>, start: u64, limit: u64) -> Result<Vec<MusicItem>> {
     let query = query.unwrap_or_default().chars().take(100).collect::<String>();
@@ -149,6 +149,10 @@ pub async fn music_list(app: tauri::AppHandle, state: State<'_, AppState>, view:
             q.push(("IncludeItemTypes", "MusicAlbum".into()));
             q.push(("SortBy", "ProductionYear,SortName".into()));
             q.push(("SortOrder", "Descending".into()));
+        }
+        "songs" => {
+            q.push(("IncludeItemTypes", "Audio".into()));
+            q.push(("SortBy", "AlbumArtist,Album,ParentIndexNumber,IndexNumber,SortName".into()));
         }
         "search" => {
             q.push(("IncludeItemTypes", "Audio,MusicAlbum".into()));
