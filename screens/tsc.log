@@ -1,2 +1,6 @@
-src/Player.tsx(666,118): error TS18048: 'info.about' is possibly 'undefined'.
-src/Player.tsx(667,149): error TS18048: 'info.about' is possibly 'undefined'.
+src/MusicManage.tsx(45,71): error TS2345: Argument of type '{ id: Check; label: string; icon: "music" | "image" | "clock"; }' is not assignable to parameter of type 'Check'.
+src/MusicManage.tsx(81,57): error TS2345: Argument of type '{ id: Check; label: string; icon: "music" | "image" | "clock"; }' is not assignable to parameter of type 'Check'.
+src/MusicManage.tsx(85,45): error TS2345: Argument of type '{ id: Check; label: string; icon: "music" | "image" | "clock"; }' is not assignable to parameter of type 'Check'.
+src/MusicManage.tsx(86,26): error TS2367: This comparison appears to be unintentional because the types '{ id: Check; label: string; icon: "music" | "image" | "clock"; }' and 'string' have no overlap.
+src/Player.tsx(669,118): error TS18048: 'info.about' is possibly 'undefined'.
+src/Player.tsx(670,149): error TS18048: 'info.about' is possibly 'undefined'.
