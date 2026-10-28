@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { api, applyPlan, scanAround, Batch, Candidate, CheckResult, CheckRow, errorText, FindReplace, imageUrl, PlanArgs, PlanOp, PlanResult, remoteImageUrl, Status } from "./api";
+import { api, titleYear, applyPlan, scanAround, Batch, Candidate, CheckResult, CheckRow, errorText, FindReplace, imageUrl, PlanArgs, PlanOp, PlanResult, remoteImageUrl, Status } from "./api";
 import { askConfirm } from "./confirm";
 import type { View } from "./nav";
 import { nav } from "./nav";
@@ -647,8 +647,8 @@ export const namingArgs = (): [string, string, boolean, boolean] => [tvTemplate(
 
 function presetFor(r: CheckRow): Preset {
   return r.kind === "series"
-    ? { folder: r.folder, kind: "tv", matchId: `jellyfin:${r.id}`, onlyFile: null, itemId: null, label: `${r.name}${r.year ? ` (${r.year})` : ""}` }
-    : { folder: r.folder, kind: "movie", matchId: null, onlyFile: r.file, itemId: r.id, label: `${r.name}${r.year ? ` (${r.year})` : ""}` };
+    ? { folder: r.folder, kind: "tv", matchId: `jellyfin:${r.id}`, onlyFile: null, itemId: null, label: titleYear(r.name, r.year) }
+    : { folder: r.folder, kind: "movie", matchId: null, onlyFile: r.file, itemId: r.id, label: titleYear(r.name, r.year) };
 }
 
 /** Plans and renames one checked title the same way the check did. Returns files renamed. */
@@ -765,7 +765,7 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
           {r.kind === "series" ? (
             <>
               <li className={ids.Tmdb || ids.Tvdb ? "ok" : "warn"}>
-                {ids.Tmdb || ids.Tvdb ? `Identified in Jellyfin as “${r.name}${r.year ? ` (${r.year})` : ""}” (${idText})` : "Not identified in Jellyfin yet, so the name and year aren't certain"}
+                {ids.Tmdb || ids.Tvdb ? `Identified in Jellyfin as “${titleYear(r.name, r.year)}” (${idText})` : "Not identified in Jellyfin yet, so the name and year aren't certain"}
               </li>
               <li className={known === videos.length && videos.length ? "ok" : "warn"}>{known} of {videos.length} episode files were found in the episode list{plan.titlesFound ? ` (${plan.titlesFound} titles known)` : ""}</li>
               {plan.unparsed > 0 && <li className="warn">{plan.unparsed} file{plan.unparsed === 1 ? "" : "s"} without a season/episode number: left alone</li>}
@@ -773,7 +773,7 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
             </>
           ) : (
             <>
-              <li className={ids.Tmdb || ids.Imdb ? "ok" : "warn"}>{ids.Tmdb || ids.Imdb ? `Jellyfin knows this file as “${r.name}${r.year ? ` (${r.year})` : ""}” (${idText})` : "Not identified in Jellyfin yet"}</li>
+              <li className={ids.Tmdb || ids.Imdb ? "ok" : "warn"}>{ids.Tmdb || ids.Imdb ? `Jellyfin knows this file as “${titleYear(r.name, r.year)}” (${idText})` : "Not identified in Jellyfin yet"}</li>
               <li>Only this movie's own files are touched (the video and files with the same name)</li>
             </>
           )}
@@ -954,7 +954,7 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
   const listed: CheckRow[] = show === "todo" ? [...sure.filter(match), ...look.filter(match)] : show === "right" ? right.filter(match) : errors.filter(match);
   const items: StudioItem[] = listed.map((r) => ({
     id: r.id,
-    title: `${r.name}${r.year ? ` (${r.year})` : ""}`,
+    title: titleYear(r.name, r.year),
     sub: r.error ?? (show === "right" ? `✓ ${r.right} right · ${r.folder}` : r.reasons[0] ?? r.folder),
     thumb: imageUrl(r.id, "Primary", 80),
     group: show === "todo" ? (r.sure ? `Sure matches · rename in one go` : "Needs a look") : undefined,
@@ -1151,7 +1151,7 @@ function BulkEdit({ status, onCheck }: { status: Status; onCheck: () => void }) 
   const groups = new Map<string, PlanOp[]>();
   for (const o of ops) {
     const r = ownerOf(o.from);
-    const g = r ? `${r.name}${r.year ? ` (${r.year})` : ""}` : "Other";
+    const g = r ? titleYear(r.name, r.year) : "Other";
     groups.set(g, [...(groups.get(g) ?? []), o]);
   }
   const okKeys = (list: PlanOp[]) => list.filter((o) => o.status === "ok").map((o) => o.from);

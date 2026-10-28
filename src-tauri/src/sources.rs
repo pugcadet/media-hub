@@ -181,6 +181,64 @@ impl Tmdb {
             .collect())
     }
 
+    /// Pictures of any movie, show or collection on TMDB matching `query`, in Jellyfin's
+    /// RemoteImage shape so the artwork screen can show them like its own options.
+    pub async fn art_search(&self, query: &str, kind: &str) -> Result<Vec<Value>> {
+        let found = self.get("/search/multi", &[("query", query.to_string())]).await?;
+        let mut hits: Vec<(String, String, String)> = results(&found)
+            .iter()
+            .filter_map(|r| {
+                let mt = r.get("media_type").and_then(Value::as_str)?;
+                if mt != "movie" && mt != "tv" {
+                    return None;
+                }
+                let id = r.get("id")?.to_string();
+                let name = r.get("title").or_else(|| r.get("name")).and_then(Value::as_str).unwrap_or("").to_string();
+                Some((mt.to_string(), id, name))
+            })
+            .take(6)
+            .collect();
+        let coll = self.get("/search/collection", &[("query", query.to_string())]).await.unwrap_or(Value::Null);
+        for r in results(&coll).iter().take(3) {
+            if let Some(id) = r.get("id") {
+                hits.push(("collection".into(), id.to_string(), r.get("name").and_then(Value::as_str).unwrap_or("").to_string()));
+            }
+        }
+        let field = match kind {
+            "Primary" => "posters",
+            "Logo" => "logos",
+            _ => "backdrops",
+        };
+        let mut out = Vec::new();
+        for (mt, id, name) in hits {
+            if !id.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let lang = self.lang.split('-').next().unwrap_or("en").to_string();
+            let imgs = self
+                .get(&format!("/{mt}/{id}/images"), &[("include_image_language", format!("{lang},en,null"))])
+                .await
+                .unwrap_or(Value::Null);
+            for i in imgs.get(field).and_then(Value::as_array).into_iter().flatten().take(20) {
+                let Some(path) = i.get("file_path").and_then(Value::as_str) else { continue };
+                out.push(serde_json::json!({
+                    "ProviderName": format!("TMDB · {name}"),
+                    "Url": format!("https://image.tmdb.org/t/p/original{path}"),
+                    "ThumbnailUrl": format!("https://image.tmdb.org/t/p/w300{path}"),
+                    "Width": i.get("width"),
+                    "Height": i.get("height"),
+                    "Language": i.get("iso_639_1"),
+                    "CommunityRating": i.get("vote_average"),
+                    "VoteCount": i.get("vote_count"),
+                }));
+            }
+            if out.len() >= 120 {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     /// All episode titles of a show: (season, episode) -> title.
     pub async fn episodes(&self, id: &str) -> Result<HashMap<(u32, u32), String>> {
         if !id.chars().all(|c| c.is_ascii_digit()) {

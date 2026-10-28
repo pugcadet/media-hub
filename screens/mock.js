@@ -42,6 +42,8 @@
     trash_info: { files: 0, bytes: 0 },
     plugins_installed: [{ name: "Intro Skipper", version: "1.0", status: "Active" }, { name: "subbuzz", version: "1.0", status: "Active" }],
     scan_folders: "all",
+    plan_rename: { planId: "p1", ok: 3, unchanged: 1, conflict: 0, unparsed: 0, titlesFound: 24, warning: null, guess: "Nijntje", candidates: [], chosen: { source: "jellyfin", id: hex(2), name: "Nijntje", year: 2003, poster: null, score: 100, ids: {} }, matchedMovies: 0, mode: "tv",
+      ops: [1, 2, 3].map((n) => ({ from: `TV/nijntje/S01E0${n}.1080p.WEB.mkv`, to: `TV/Nijntje (2003)/Season 01/Nijntje - S01E0${n} - Title ${n}.mkv`, kind: "video", status: "ok", note: null, season: 1, episodes: [n], verified: true, score: 100, title: `Title ${n}` })).concat([{ from: "TV/nijntje", to: "TV/Nijntje (2003)", kind: "folder", status: "ok", note: null, season: null, episodes: [], verified: true, score: null, title: null }]) },
     missing_language: { TotalRecordCount: 8, Items: episodes.map((e) => ({ ...e, SeriesName: "Nijntje" })) },
     missing_subtitles: { TotalRecordCount: 8, Items: episodes },
   };

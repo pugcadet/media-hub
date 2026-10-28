@@ -1970,3 +1970,18 @@ label.check > span { white-space: nowrap; }
 .pill.bad { background: rgba(238,123,110,.18); color: var(--red); }
 .ep-card.missing { opacity: .8; border: 1px dashed rgba(240,180,76,.5); cursor: default; }
 .ep-card.missing .noart { color: var(--amber); }
+
+/* Picture editor */
+.crop-frame2 { position: relative; overflow: hidden; width: min(100%, calc(60vh * var(--ar, 1.78))); margin: 0 auto; border-radius: 8px; cursor: grab; touch-action: none; background: #111; box-shadow: 0 0 0 1px var(--line); }
+.crop-frame2:active { cursor: grabbing; }
+.crop-frame2.checker { background: repeating-conic-gradient(#2a2f38 0% 25%, #1c2028 0% 50%) 50% / 20px 20px; }
+.crop-img { position: absolute; max-width: none; user-select: none; pointer-events: none; }
+.crop-blur { position: absolute; inset: -8%; width: 116%; height: 116%; object-fit: cover; filter: blur(30px) brightness(.7); pointer-events: none; }
+.crop-guides { position: absolute; inset: 0; pointer-events: none; background-image: linear-gradient(rgba(255,255,255,.12) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.12) 1px, transparent 1px); background-size: 33.33% 33.33%; background-position: -1px -1px; }
+.crop-stage { display: flex; justify-content: center; }
+.crop-controls { align-items: center; }
+.art-kind.drop { outline: 2px dashed var(--accent); outline-offset: 3px; }
+.avail-badge[role="button"] { cursor: pointer; }
+.avail-badge[role="button"]:hover { background: var(--accent); color: var(--accent-ink); }
+.note-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; border: 1px solid rgba(var(--accent-rgb),.4); background: rgba(var(--accent-rgb),.08); }
+.cine-art.from-poster { object-fit: cover; filter: blur(28px) saturate(1.2) brightness(.6); transform: scale(1.15); }

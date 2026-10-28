@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePageState } from "./saved";
 import { applyArt, askArt } from "./ArtPicker";
-import { api, Card, CheckRow, Details, errorText, HealthRow, imageUrl, SegSummary, Status } from "./api";
+import { api, titleYear, Card, CheckRow, Details, errorText, HealthRow, imageUrl, SegSummary, Status } from "./api";
 import { followEvent, onItemsChanged, track, useEpoch } from "./activity";
 import { nav, type Route } from "./nav";
 import { artSkipped, fixTitles, FixKind, noSubsOf, targetOf } from "./fixers";
@@ -300,7 +300,7 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
 
   const items: StudioItem[] = shown.map((r) => ({
     id: r.id,
-    title: `${r.name}${r.year ? ` (${r.year})` : ""}`,
+    title: titleYear(r.name, r.year),
     sub: sub(r),
     thumb: imageUrl(r.id, "Primary", 80),
     status: statusOf(r),

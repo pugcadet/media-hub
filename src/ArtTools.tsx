@@ -12,6 +12,7 @@ export const ART_SHAPE: Partial<Record<ImageKind, { aspect: number; width: numbe
   Banner: { aspect: 1000 / 185, width: 1000 },
   Art: { aspect: 1000 / 562, width: 1000 },
   Disc: { aspect: 1, width: 1000 },
+  Logo: { aspect: 800 / 310, width: 800 },
 };
 
 const NAMES: Record<string, string> = { Primary: "poster", Backdrop: "background", Logo: "logo", Thumb: "thumbnail", Banner: "banner", Art: "clear art", Disc: "disc" };
@@ -43,17 +44,27 @@ function endCrop(v: string | null) {
   c?.resolve(v);
 }
 
-interface Frame { x: number; y: number; w: number }
-
+/**
+ * The picture editor: the frame has the exact shape of the picture you're making; drag the
+ * picture to move it, use the slider or the scroll wheel to make it bigger or smaller. When it's
+ * smaller than the frame, the rest is filled with a blurred copy or a colour of your choice.
+ */
 function CropDialog({ req }: { req: CropReq }) {
   const shape = ART_SHAPE[req.kind] ?? { aspect: 16 / 9, width: 1280 };
+  const logo = req.kind === "Logo";
+  const outW = shape.width;
+  const outH = Math.round(outW / shape.aspect);
   const [src, setSrc] = useState(req.sources[0]?.src ?? "");
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   const [failed, setFailed] = useState(false);
-  const [frame, setFrame] = useState<Frame | null>(null);
-  const [size, setSize] = useState(1);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ px: number; py: number; f: Frame } | null>(null);
+  // Picture centre (in output pixels) and size (1 = just covers the frame).
+  const [cx, setCx] = useState(outW / 2);
+  const [cy, setCy] = useState(outH / 2);
+  const [zoom, setZoom] = useState(1);
+  const [fill, setFill] = useState<"blur" | "color">("blur");
+  const [color, setColor] = useState("#000000");
+  const stageRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ px: number; py: number; cx: number; cy: number } | null>(null);
 
   useEffect(() => {
     setImg(null);
@@ -66,14 +77,16 @@ function CropDialog({ req }: { req: CropReq }) {
     i.src = src;
   }, [src]);
 
-  const maxW = img ? Math.min(img.naturalWidth, img.naturalHeight * shape.aspect) : 0;
-  // A new picture: the biggest frame that fits, in the middle (top third for posters from a background).
+  const cover = img ? Math.max(outW / img.naturalWidth, outH / img.naturalHeight) : 1;
+  const contain = img ? Math.min(outW / img.naturalWidth, outH / img.naturalHeight) : 1;
+  const minZoom = Math.max(0.1, (contain / cover) * 0.5);
+  // A new picture starts covering the frame, centred (a bit higher for a poster from a background).
   useEffect(() => {
     if (!img) return;
-    const w = maxW;
-    const h = w / shape.aspect;
-    setSize(1);
-    setFrame({ x: (img.naturalWidth - w) / 2, y: Math.max(0, (img.naturalHeight - h) / (shape.aspect < 1 ? 2 : 3)), w });
+    setZoom(1);
+    setCx(outW / 2);
+    const h = img.naturalHeight * cover;
+    setCy(shape.aspect < 1 ? outH / 2 : Math.min(h / 2, outH / 2 + (h - outH) / 6));
   }, [img]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -82,89 +95,119 @@ function CropDialog({ req }: { req: CropReq }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const clamp = (f: Frame): Frame => {
-    if (!img) return f;
-    const h = f.w / shape.aspect;
-    return { w: f.w, x: Math.min(Math.max(0, f.x), img.naturalWidth - f.w), y: Math.min(Math.max(0, f.y), img.naturalHeight - h) };
-  };
-  const resize = (s: number) => {
-    if (!frame) return;
-    setSize(s);
-    const w = Math.max(40, maxW * s);
-    const cx = frame.x + frame.w / 2, cy = frame.y + frame.w / shape.aspect / 2;
-    setFrame(clamp({ w, x: cx - w / 2, y: cy - w / shape.aspect / 2 }));
-  };
-  const scale = img && boxRef.current ? boxRef.current.clientWidth / img.naturalWidth : 1;
+  const k = () => (stageRef.current ? stageRef.current.clientWidth / outW : 1);
+  const w = img ? img.naturalWidth * cover * zoom : 0;
+  const h = img ? img.naturalHeight * cover * zoom : 0;
   const down = (e: RPointerEvent) => {
-    if (!frame) return;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    drag.current = { px: e.clientX, py: e.clientY, f: frame };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    drag.current = { px: e.clientX, py: e.clientY, cx, cy };
   };
   const move = (e: RPointerEvent) => {
     const d = drag.current;
     if (!d) return;
-    setFrame(clamp({ w: d.f.w, x: d.f.x + (e.clientX - d.px) / scale, y: d.f.y + (e.clientY - d.py) / scale }));
+    setCx(d.cx + (e.clientX - d.px) / k());
+    setCy(d.cy + (e.clientY - d.py) / k());
   };
+  const setZ = (z: number) => setZoom(Math.min(4, Math.max(minZoom, z)));
+  const wheel = (e: React.WheelEvent) => setZ(zoom * (e.deltaY < 0 ? 1.06 : 1 / 1.06));
+  const fitWhole = () => { setZ(contain / cover); setCx(outW / 2); setCy(outH / 2); };
+  const fillFrame = () => { setZoom(1); setCx(outW / 2); setCy(outH / 2); };
 
   function done() {
-    if (!img || !frame) return;
-    const outW = Math.round(Math.min(frame.w, shape.width));
-    const outH = Math.round(outW / shape.aspect);
+    if (!img) return;
     const c = document.createElement("canvas");
     c.width = outW;
     c.height = outH;
     const ctx = c.getContext("2d");
     if (!ctx) return;
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(img, frame.x, frame.y, frame.w, frame.w / shape.aspect, 0, 0, outW, outH);
+    if (!logo) {
+      if (fill === "color") {
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, outW, outH);
+      } else {
+        // A blurred, darkened copy that covers the frame.
+        ctx.filter = "blur(40px) brightness(.7)";
+        const bw = img.naturalWidth * cover * 1.15, bh = img.naturalHeight * cover * 1.15;
+        ctx.drawImage(img, (outW - bw) / 2, (outH - bh) / 2, bw, bh);
+        ctx.filter = "none";
+      }
+    }
+    ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
     try {
-      endCrop(c.toDataURL("image/jpeg", 0.92));
+      endCrop(logo ? c.toDataURL("image/png") : c.toDataURL("image/jpeg", 0.92));
     } catch {
       setFailed(true);
     }
   }
 
-  const small = frame && frame.w < shape.width * 0.5;
+  const gaps = img && (w < outW - 1 || h < outH - 1 || cx - w / 2 > 1 || cy - h / 2 > 1 || cx + w / 2 < outW - 1 || cy + h / 2 < outH - 1);
+  const soft = img && img.naturalWidth * cover * zoom > img.naturalWidth * 2;
   return (
     <div className="overlay confirm-layer" onClick={() => endCrop(null)}>
       <div className="card crop-dlg" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <div className="row between">
           <div>
             <h2>Make a {NAMES[req.kind] ?? req.kind} for {req.title}</h2>
-            <div className="muted small">Pick a picture, then drag the frame to the part you want.</div>
+            <div className="muted small">Drag the picture to move it; scroll or use the slider to make it bigger or smaller.</div>
           </div>
           <button className="link-plain" onClick={() => endCrop(null)} aria-label="Close"><Icon name="x" /></button>
         </div>
-        <div className="crop-sources">
-          {req.sources.map((s) => (
-            <button key={s.src} className={`crop-src ${s.src === src ? "on" : ""}`} onClick={() => setSrc(s.src)} title={s.label}>
-              <img src={s.src} alt="" loading="lazy" crossOrigin="anonymous" />
-              <span>{s.label}</span>
-            </button>
-          ))}
-          {req.sources.length === 0 && <span className="muted small">No other pictures of this title yet.</span>}
-        </div>
+        {req.sources.length > 1 && (
+          <div className="crop-sources">
+            {req.sources.map((s) => (
+              <button key={s.src} className={`crop-src ${s.src === src ? "on" : ""}`} onClick={() => setSrc(s.src)} title={s.label}>
+                <img src={s.src} alt="" loading="lazy" crossOrigin="anonymous" />
+                <span>{s.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="crop-stage">
           {!img && !failed && src && <div className="pg-loading"><span className="spinner" /> Loading the picture…</div>}
-          {failed && <p className="error">This picture can't be cut here. Try another one.</p>}
-          {img && frame && (
-            <div className="crop-box" ref={boxRef} style={{ aspectRatio: `${img.naturalWidth} / ${img.naturalHeight}` }}>
-              <img src={src} alt="" crossOrigin="anonymous" draggable={false} />
-              <div
-                className="crop-frame"
-                style={{ left: `${(frame.x / img.naturalWidth) * 100}%`, top: `${(frame.y / img.naturalHeight) * 100}%`, width: `${(frame.w / img.naturalWidth) * 100}%`, height: `${(frame.w / shape.aspect / img.naturalHeight) * 100}%` }}
-                onPointerDown={down}
-                onPointerMove={move}
-                onPointerUp={() => (drag.current = null)}
+          {failed && <p className="error">This picture can't be edited here. Try another one.</p>}
+          {img && (
+            <div
+              className={`crop-frame2 ${logo ? "checker" : ""}`}
+              ref={stageRef}
+              style={{ aspectRatio: `${outW} / ${outH}`, ["--ar" as string]: outW / outH, background: logo ? undefined : fill === "color" ? color : undefined }}
+              onPointerDown={down}
+              onPointerMove={move}
+              onPointerUp={() => (drag.current = null)}
+              onWheel={wheel}
+            >
+              {!logo && fill === "blur" && <img className="crop-blur" src={src} alt="" crossOrigin="anonymous" draggable={false} />}
+              <img
+                className="crop-img"
+                src={src}
+                alt=""
+                crossOrigin="anonymous"
+                draggable={false}
+                style={{ left: `${((cx - w / 2) / outW) * 100}%`, top: `${((cy - h / 2) / outH) * 100}%`, width: `${(w / outW) * 100}%`, height: `${(h / outH) * 100}%` }}
               />
+              <div className="crop-guides" />
             </div>
           )}
         </div>
+        <div className="row crop-controls">
+          <label className="row grow small">Size <input type="range" min={minZoom} max={4} step={0.01} value={zoom} onChange={(e) => setZ(Number(e.target.value))} disabled={!img} /></label>
+          <button className="mini-btn" disabled={!img} onClick={fitWhole} title="Shrink so the whole picture fits">Whole picture</button>
+          <button className="mini-btn" disabled={!img} onClick={fillFrame} title="Fill the frame, centred">Fill frame</button>
+          {!logo && (
+            <>
+              <div className="seg-ctl">
+                <button className={fill === "blur" ? "on" : ""} onClick={() => setFill("blur")} title="Empty space gets a blurred copy of the picture">Blur</button>
+                <button className={fill === "color" ? "on" : ""} onClick={() => setFill("color")} title="Empty space gets a plain colour">Colour</button>
+              </div>
+              {fill === "color" && <input type="color" value={color} onChange={(e) => setColor(e.target.value)} aria-label="Fill colour" />}
+            </>
+          )}
+        </div>
         <div className="row">
-          <label className="row grow small">Size <input type="range" min={0.2} max={1} step={0.01} value={size} onChange={(e) => resize(Number(e.target.value))} disabled={!frame} /></label>
-          {small && <span className="warn small">Small: it may look soft on a big screen.</span>}
+          <span className="muted small grow">{outW}×{outH}{gaps ? (logo ? " · the empty part stays see-through" : ` · empty space is filled with ${fill === "blur" ? "a blurred copy" : "the colour"}`) : ""}</span>
+          {soft && <span className="warn small">Zoomed in a lot: it may look soft on a big screen.</span>}
           <button onClick={() => endCrop(null)}>Cancel</button>
-          <button className="primary" disabled={!frame} onClick={done}>Use this</button>
+          <button className="primary" disabled={!img} onClick={done}>Use this</button>
         </div>
       </div>
     </div>

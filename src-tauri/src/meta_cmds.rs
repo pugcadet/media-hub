@@ -762,3 +762,16 @@ mod tests {
         assert_eq!(sniff_image(b"<svg onload=alert(1)>"), None);
     }
 }
+
+/// Finds pictures on TMDB for any title you type (for shows that are named differently,
+/// collections, or when Jellyfin's own options aren't good).
+#[tauri::command]
+pub async fn art_search(state: State<'_, AppState>, query: String, kind: String) -> Result<Vec<Value>> {
+    let q = query.trim();
+    if q.is_empty() || q.len() > 200 {
+        return Err(Error::msg("Type what to search for."));
+    }
+    image_kind(&kind).ok_or_else(|| Error::msg("bad image kind"))?;
+    let t = crate::rename_cmds::tmdb_client(&state).ok_or_else(|| Error::msg("Searching for artwork needs a TMDB key (Settings → Online metadata)."))?;
+    t.art_search(q, &kind).await
+}

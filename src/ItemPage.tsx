@@ -17,6 +17,7 @@ import { askIdentify } from "./IdentifyDialog";
 import { askCrop, readPaste, showPreview, type CropSource } from "./ArtTools";
 import { numberYouTube } from "./youtube";
 import { readSaved } from "./saved";
+import { SearchBox } from "./kit";
 import { askRenumber } from "./Renumber";
 
 export const ART_KINDS: { kind: ImageKind; label: string; wide: boolean; hint: string }[] = [
@@ -223,7 +224,10 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
   dirtyRef.current = dirty;
   const heroId = (isEpisode || isSeason) && item.SeriesId ? item.SeriesId : id;
   const title = cleanTitle(item.Name, item.ProductionYear);
-  const hasBackdrop = isEpisode || isSeason ? true : d.images.some((i) => i.ImageType === "Backdrop");
+  const hasPoster = d.images.some((i) => i.ImageType === "Primary");
+  // No background picture (often collections): the poster, blurred, fills the header instead.
+  const posterBg = !isEpisode && !isSeason && !d.images.some((i) => i.ImageType === "Backdrop") && hasPoster;
+  const hasBackdrop = isEpisode || isSeason ? true : d.images.some((i) => i.ImageType === "Backdrop") || posterBg;
   const meta = [
     isEpisode && item.ParentIndexNumber != null ? `S${item.ParentIndexNumber} · E${item.IndexNumber ?? "?"}` : "",
     isBoxSet ? "Collection" : "",
@@ -249,7 +253,7 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
   return (
     <div className={`pg item ${embedded ? "embedded" : ""}`}>
       <section className={`cine ${hasBackdrop ? "" : "flat"} ${shownTab === "main" && !embedded ? "" : "compact"}`} onContextMenu={(e) => openMenu(e, menu())}>
-        {hasBackdrop && <img className="cine-art" key={heroId} src={isEpisode ? imageUrl(id, "Primary", 1920, 0, item.ImageTags?.Primary ?? "") : artSrc(heroId, "Backdrop", 1920, heroId === id ? d.images : [])} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />}
+        {hasBackdrop && <img className={`cine-art ${posterBg ? "from-poster" : ""}`} key={heroId} src={isEpisode ? imageUrl(id, "Primary", 1920, 0, item.ImageTags?.Primary ?? "") : posterBg ? artSrc(id, "Primary", 800, d.images) : artSrc(heroId, "Backdrop", 1920, heroId === id ? d.images : [])} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />}
         <div className="cine-shade" />
         <div className="cine-top">
           {!embedded && <button className="cine-back" onClick={onBack}><span className="flip"><Icon name="chevron" size={16} /></span> Back</button>}
@@ -266,7 +270,7 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
           <button className="cine-ghost icon-only" aria-label="More" onClick={(e) => openMenu(e, menu())}><Icon name="more" /></button>
         </div>
         <div className="cine-body">
-          {embedded && !isEpisode && !isSeason && (
+          {(embedded || isBoxSet || posterBg) && !isEpisode && !isSeason && (
             <button className="hero-poster" onClick={() => showPicture(artSrc(id, "Primary", 1400, d.images), `${title} · poster`)} title="Show big">
               {d.images.some((i) => i.ImageType === "Primary") ? <img src={artSrc(id, "Primary", 300, d.images)} alt="" /> : <div className="noart">{title}</div>}
             </button>
@@ -313,6 +317,7 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
       {shownTab === "main" && !isSeason && (
         <div className="stack">
           {kind && <StatusCards d={d} kind={kind} onTab={setTab} onIdentify={() => identify(d)} />}
+          <SaveToFilesHint canEdit={d.canEdit} />
           <div className="card form">
             <div className="section-head"><h2><Icon name="info" /> Details</h2>{kind && <button className="link small" onClick={() => identify(d)}>Identify again…</button>}</div>
             <div className="fields2">
@@ -646,6 +651,31 @@ function ArtworkTab({ d, title }: { d: Details; title: string }) {
     return () => window.removeEventListener("paste", onPaste);
   }, [id, canEdit, title]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [dropOn, setDropOn] = useState<ImageKind | null>(null);
+  /** The best-rated option online, added right away (the download badge). */
+  async function addBest(k: ImageKind) {
+    const best = rankImages(await api.remoteImages(id, k).catch(() => []), k, "en")[0];
+    if (!best?.Url) return;
+    void act(`Adding ${ART_KINDS.find((a) => a.kind === k)?.label.toLowerCase()}`, () => api.setImage(id, k, best.Url!));
+  }
+  /** A picture dropped on a tile: a file from Finder or a picture from a web page. */
+  async function dropInto(k: ImageKind, dt: DataTransfer) {
+    const file = [...dt.files].find((f) => f.type.startsWith("image/"));
+    const label = ART_KINDS.find((a) => a.kind === k)?.label.toLowerCase() ?? "picture";
+    if (file) {
+      if (file.size > 20 * 1024 * 1024) return setError("That picture is larger than 20 MB.");
+      const data = await new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(file); });
+      // Opens the editor so you can place it in the frame.
+      const out = await askCrop(title, k, [{ label: file.name, src: data }]);
+      if (out) void act(`New ${label}`, () => api.uploadImageBytes(id, k, out, "dropped"));
+      return;
+    }
+    const url = (dt.getData("text/uri-list") || dt.getData("text/plain") || "").split("\n")[0].trim();
+    if (/^https:\/\//i.test(url)) {
+      if (await askConfirm(`Use the dropped picture as the ${label} of ${title}?`, { okLabel: "Use it" })) void act(`New ${label}`, () => api.setImageFromLink(id, k, url));
+    } else setError("Drop a picture file or a picture from a web page.");
+  }
+
   async function cropInto(k: ImageKind) {
     const sources: CropSource[] = [];
     const seen = new Set<string>();
@@ -673,6 +703,7 @@ function ArtworkTab({ d, title }: { d: Details; title: string }) {
           <button className="primary" disabled={!canEdit || !!saving || !missing.length} onClick={() => void askArt(id, title, missing.map((k) => k.kind)).then((c) => c && act(`Artwork for ${title}`, () => applyArt(id, c)))}><Icon name="wand" /> Fill in missing…</button>
         </div>
       </div>
+      <SaveToFilesHint canEdit={canEdit} />
       {error && <p className="error">{error}</p>}
       <div className="art-kinds">
         {kinds.map((k) => {
@@ -680,10 +711,19 @@ function ArtworkTab({ d, title }: { d: Details; title: string }) {
           const isMissing = !cur.length && !OPTIONAL.includes(k.kind);
           const online = avail[k.kind] ?? 0;
           return (
-            <button key={k.kind} className={`art-kind ${kind === k.kind ? "on" : ""} ${isMissing ? "missing" : ""}`} onClick={() => setKind(k.kind)}>
+            <button key={k.kind} className={`art-kind ${kind === k.kind ? "on" : ""} ${isMissing ? "missing" : ""} ${dropOn === k.kind ? "drop" : ""}`} onClick={() => setKind(k.kind)}
+              onDragOver={(e) => { if (canEdit) { e.preventDefault(); setDropOn(k.kind); } }}
+              onDragLeave={() => setDropOn(null)}
+              onDrop={(e) => { e.preventDefault(); setDropOn(null); setKind(k.kind); void dropInto(k.kind, e.dataTransfer); }}
+              title={canEdit ? "Drop a picture here to use it" : undefined}>
               <div className={`art ${k.wide ? "wide" : ""}`}>
                 {cur.length ? <img src={artSrc(id, k.kind, 400, images)} alt="" loading="lazy" /> : <div className="noart small muted">{OPTIONAL.includes(k.kind) ? "Optional" : "Missing"}</div>}
-                {isMissing && online > 0 && <span className="avail-badge" title={`${online} found online: click to pick one`}><Icon name="download" size={12} /> {online}</span>}
+                {isMissing && online > 0 && (
+                  <span className="avail-badge" role="button" title={`${online} found online: click to add the best one now`}
+                    onClick={(e) => { e.stopPropagation(); if (canEdit) void addBest(k.kind); }}>
+                    <Icon name="download" size={12} /> {online}
+                  </span>
+                )}
               </div>
               <span className="small strong">{k.label}{cur.length > 1 ? ` · ${cur.length}` : ""}{OPTIONAL.includes(k.kind) && <span className="muted thin"> · optional</span>}</span>
             </button>
@@ -724,6 +764,9 @@ function ArtworkTab({ d, title }: { d: Details; title: string }) {
         </div>
       </section>
 
+      <ArtSearch id={id} kind={kind} label={info.label} wide={info.wide} canEdit={canEdit} busy={!!saving} title={title}
+        onUse={(url) => void act(`Using new ${info.label.toLowerCase()}`, () => api.setImage(id, kind, url))} />
+
       <section className="card form">
         <div className="section-head">
           <h2>Options online</h2>
@@ -756,6 +799,72 @@ function ArtworkTab({ d, title }: { d: Details; title: string }) {
       {isSeries && <SeasonArt seasons={d.seasons} canEdit={canEdit} />}
       {isSeries && <EpisodePictures series={item} seasons={d.seasons} canEdit={canEdit} />}
     </div>
+  );
+}
+
+/**
+ * Edits stick only when Jellyfin also writes them next to the video files (pictures and .nfo).
+ * If that's off for this library, offer to switch it on.
+ */
+function SaveToFilesHint({ canEdit }: { canEdit: boolean }) {
+  const [rows, setRows] = useState<{ scope: "library" | "task"; target: string; targetName: string; key: string; recommended: unknown }[] | null>(null);
+  const load = () => void api.backendTuning().then((t) => setRows(t.rows.filter((r) => (r.key === "SaveLocalMetadata" || r.key === "MetadataSavers") && !r.ok))).catch(() => setRows([]));
+  useEffect(load, []);
+  if (!rows || !rows.length || !canEdit) return null;
+  const libs = [...new Set(rows.map((r) => r.targetName))];
+  return (
+    <div className="note-bar">
+      <Icon name="info" />
+      <span className="grow small">Changes are only kept in Jellyfin's database{libs.length ? ` for ${libs.join(", ")}` : ""}. Save pictures and details next to the video files too, so they stay if Jellyfin is ever reset?</span>
+      <button className="primary" onClick={() => void track("Saving details next to the files", async () => {
+        for (const r of rows) await api.backendSet(r.scope, r.target, r.key, r.recommended);
+      }).then(load).catch(() => undefined)}>Save to files too</button>
+    </div>
+  );
+}
+
+/** Search TMDB for pictures of any title (other spellings, collections, a different show). */
+function ArtSearch({ id, kind, label, wide, canEdit, busy, title, onUse }: { id: string; kind: ImageKind; label: string; wide: boolean; canEdit: boolean; busy: boolean; title: string; onUse: (url: string) => void }) {
+  const [q, setQ] = useState(cleanTitle(title));
+  const [res, setRes] = useState<RemoteImage[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
+  useEffect(() => setRes(null), [id, kind]);
+  async function search() {
+    setSearching(true);
+    setError(null);
+    try {
+      setRes(await api.artSearch(q, kind));
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setSearching(false);
+    }
+  }
+  if (kind === "Banner" || kind === "Art" || kind === "Disc") return null;
+  return (
+    <section className="card form">
+      <div className="section-head"><h2>Find {label.toLowerCase()} by searching</h2><span className="muted small">Searches TMDB for any movie, show or collection</span></div>
+      <div className="row">
+        <SearchBox value={q} onChange={setQ} placeholder="e.g. a title, another spelling, a collection" />
+        <button className="primary" disabled={!q.trim() || searching} onClick={() => void search()}>{searching ? "Searching…" : "Search"}</button>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {res && res.length === 0 && <p className="muted small">Nothing found. Try another name.</p>}
+      {res && res.length > 0 && (
+        <div className={`art-options ${wide ? "wide" : ""}`}>
+          {res.map((o) => (
+            <div key={o.Url} className="art-opt-wrap">
+              <button className={`art-opt ${wide ? "wide" : ""}`} disabled={!canEdit || busy} onClick={() => onUse(o.Url!)} title={`${o.ProviderName ?? ""} ${o.Width ? `${o.Width}×${o.Height}` : ""}`}>
+                <img src={remoteImageUrl(o.ThumbnailUrl || o.Url!)} alt="" loading="lazy" />
+                <span className="src">{o.ProviderName}{o.Language ? ` · ${o.Language}` : ""}</span>
+              </button>
+              <button className="expand on-opt" aria-label="Show big" onClick={() => showPicture(remoteImageUrl(o.Url!), `${o.ProviderName ?? ""} ${o.Width ? `${o.Width}×${o.Height}` : ""}`)}><Icon name="expand" size={14} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

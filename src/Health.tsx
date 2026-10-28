@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePageState } from "./saved";
 import { applyArt, askArt } from "./ArtPicker";
-import { api, CheckRow, Details, errorText, HealthRow, imageUrl, Status } from "./api";
+import { api, titleYear, CheckRow, Details, errorText, HealthRow, imageUrl, Status } from "./api";
 import { followEvent, track, useEpoch } from "./activity";
 import { nav } from "./nav";
 import { artSkipped, fixTitles, FixKind, noSubsOf, targetOf } from "./fixers";
@@ -156,7 +156,7 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
   if (focus === "art") {
     const items: StudioItem[] = shown.map((r) => ({
       id: r.id,
-      title: `${r.name}${r.year ? ` (${r.year})` : ""}`,
+      title: titleYear(r.name, r.year),
       sub: `${r.kind === "series" ? "Show" : "Movie"}${r.libraryFolder ? ` · ${r.libraryFolder}` : ""}`,
       thumb: imageUrl(r.id, "Primary", 80),
       dots: checks.map((c) => ({ ok: status(r, c), label: LABEL[c] })),

@@ -145,6 +145,7 @@ pub fn run() {
             meta_cmds::main_backdrop,
             meta_cmds::remove_image,
             meta_cmds::fill_missing_art,
+            meta_cmds::art_search,
             collections::home_feed,
             collections::collections_list,
             collections::collection_items,

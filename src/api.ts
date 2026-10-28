@@ -796,6 +796,7 @@ export const api = {
   /** Renames one episode's file to another season/episode number (undoable in History). */
   episodeRenumber: (id: string, season: number, episode: number) =>
     invoke<{ batch: string; done: number; failed: string[]; stopped: boolean }>("episode_renumber", { id, season, episode }),
+  artSearch: (query: string, kind: ImageKind) => invoke<RemoteImage[]>("art_search", { query, kind }),
   missingLanguage: (lang: string, codes: string[]) =>
     invoke<{ Items: JfChild[]; TotalRecordCount: number }>("missing_language", { lang, codes }),
   missingSubtitles: (start: number, limit: number) =>
@@ -1043,6 +1044,14 @@ export function cleanTitle(name: string, year?: number | null): string {
   const m = name.match(/^(.*?)\s*\((\d{4})\)\s*$/);
   if (m && (!year || Number(m[2]) === year)) return m[1];
   return name;
+}
+
+/** "Name (Year)" for lists: a year already in the name is not shown twice. */
+export function titleYear(name: string, year?: number | null): string {
+  const m = name.match(/^(.*?)\s*\((\d{4})\)\s*$/);
+  const base = m ? m[1] : name;
+  const y = year ?? (m ? Number(m[2]) : null);
+  return y ? `${base} (${y})` : base;
 }
 
 /** Wraps a promise so the "open in Finder" style one-liners don't need their own error handling. */
