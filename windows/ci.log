@@ -1,8 +1,8 @@
 
-added 75 packages in 9s
+added 75 packages in 8s
 [1m[92m    Updating[0m crates.io index
 [1m[92m   Compiling[0m media-hub v0.23.0 (D:\a\media-hub\media-hub\src-tauri)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 27s
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 21s
 [1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-30b369d74bbfc62a.exe)
 
 running 161 tests
@@ -27,17 +27,17 @@ test downloads::tests::plain_error_text ... ok
 test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
 test downloads::tests::search_targets_and_results ... ok
-test bulk::tests::drops_release_tags ... ok
 test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
 test downloads::tests::summarizes_playlists ... ok
+test bulk::tests::drops_release_tags ... ok
+test bulk::tests::plans_files_sidecars_and_folder ... ok
 test fake_jellyfin::tests::a_missing_picture_is_none_not_an_error ... ok
 test fake_jellyfin::tests::missing_markers_plugin_is_not_called_a_missing_title ... ok
-test bulk::tests::plans_files_sidecars_and_folder ... ok
-test fake_jellyfin::tests::position_is_saved_and_read_back ... ok
 test fake_jellyfin::tests::position_falls_back_to_the_older_route_when_the_new_one_keeps_nothing ... ok
 test fingerprint::tests::fft_matches_a_plain_dft ... ok
-test fake_jellyfin::tests::subtitle_download_limit_is_reported_not_hidden ... ok
+test fake_jellyfin::tests::position_is_saved_and_read_back ... ok
 test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
+test fake_jellyfin::tests::subtitle_download_limit_is_reported_not_hidden ... ok
 test fingerprint::tests::silence_does_not_match ... ok
 test fingerprint::tests::survives_noise_like_a_different_encode ... ok
 test fsops::tests::apply_then_undo_restores_everything ... ok
@@ -158,17 +158,17 @@ test subs::tests::parses_jellyfin_json ... ok
 test subs::tests::ranking_sorts_and_drops_empty_ids ... ok
 test subs::tests::same_release_beats_other_release ... ok
 test subs::tests::wrong_episode_is_zero ... ok
-test fingerprint::tests::unrelated_audio_has_no_match ... ok
+test subsync::tests::finds_a_shift ... ok
 test subsync::tests::reads_and_writes_srt_and_vtt ... ok
 test subsync::tests::speech_detection_follows_loudness ... ok
 test updater::tests::checksums_and_assets ... ok
 test updater::tests::swap_keeps_old_when_new_is_missing ... ok
 test updater::tests::versions_compare ... ok
-test subsync::tests::finds_a_shift ... ok
+test fingerprint::tests::unrelated_audio_has_no_match ... ok
 test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 161 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.49s
+test result: ok. 161 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.22s
 
 [1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-fd925078f590ecb7.exe)
 
@@ -260,5 +260,5 @@ computing gzip size...
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 4.15s[39m
+[32m✓ built in 3.45s[39m
 [1m[92m   Compiling[0m media-hub v0.23.0 (D:\a\media-hub\media-hub\src-tauri)
