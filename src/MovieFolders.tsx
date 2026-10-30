@@ -168,11 +168,11 @@ export default function MovieFolders({ readOnly }: { readOnly: boolean }) {
               ]} />
             </div>
             {mode === "fix" && (
-              <label className="row small mf-rename">
-                <span className="muted">Folder name</span>
-                <input value={groupName[g] ?? last(g)} onChange={(e) => setGroupName((x) => ({ ...x, [g]: e.target.value }))} />
+              <div className="small mf-rename">
+                <span className="muted">Rename the folder</span>
+                <input aria-label="Folder name" value={groupName[g] ?? last(g)} onChange={(e) => setGroupName((x) => ({ ...x, [g]: e.target.value }))} />
                 {(groupName[g] ?? last(g)) !== last(g) && <button className="link small" onClick={() => setGroupName((x) => ({ ...x, [g]: last(g) }))}>Keep “{last(g)}”</button>}
-              </label>
+              </div>
             )}
             {mode === "out" && <div className="muted small">The movies move out into “{last(ms[0].top)}”, each in a folder of its own. The collection folder is removed once it's empty (anything else in it keeps it).</div>}
             <div className="struct-list">{ms.map((m) => row(m, mode))}</div>

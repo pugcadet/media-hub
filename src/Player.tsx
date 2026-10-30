@@ -87,6 +87,9 @@ function cueHtml(text: string): string {
 export default function Player({ id, onClose, status, onNext }: { id: string; onClose: () => void; status?: Status; onNext?: (id: string) => void }) {
   const p = usePrefs();
   const video = useRef<HTMLVideoElement>(null);
+  // "Mark as unwatched" while watching: kept after closing too (stopping near the end would
+  // otherwise mark it watched again).
+  const keepUnwatched = useRef(false);
   // A video starting pauses the music (the small player stays, to carry on after).
   useEffect(() => music.pause(), []);
   const [session, setSession] = useState<Session>({ start: 0, audio: null, n: 0 });
@@ -228,7 +231,10 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       if (token) {
         const pos = video.current?.currentTime || lastPos.current;
         const t = token;
-        void api.playProgress(t, pos, false).catch(progressFailed).finally(() => void api.playStop(t).catch(() => undefined));
+        const vid = id;
+        void api.playProgress(t, pos, false).catch(progressFailed).finally(() => void api.playStop(t).catch(() => undefined).then(() => {
+          if (keepUnwatched.current) void api.setPlayed(vid, false).catch(() => undefined);
+        }));
       }
     };
   }, [id, session]);
@@ -707,6 +713,9 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
             ...(a.artId !== a.itemId ? [{ label: "Go to the show", run: () => { onClose(); setPrefs({ mode: "manage" }); nav.open(a.artId); } }] : []),
           ])(info.about) : []),
           { sep: true },
+          { label: "Mark as unwatched", run: () => { keepUnwatched.current = true; void api.setPlayed(id, false).then(() => say("Marked as unwatched", 1800)).catch((err) => say(errorText(err), 3000)); } },
+          { label: "Mark as watched", run: () => { keepUnwatched.current = false; void api.setPlayed(id, true).then(() => say("Marked as watched", 1800)).catch((err) => say(errorText(err), 3000)); } },
+          { sep: true },
           { label: "Subtitles…", run: () => setPanel("subs") },
           { label: "Audio…", run: () => setPanel("audio") },
           { label: "Full screen", run: () => void fullscreen() },
@@ -723,7 +732,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
           if (tokenRef.current && e.currentTarget.currentTime > 5) void api.playProgress(tokenRef.current, e.currentTarget.currentTime, false).catch(progressFailed);
         }}
         onEnded={() => {
-          if (tokenRef.current) void api.playProgress(tokenRef.current, 0, true).catch(() => undefined);
+          if (tokenRef.current && !keepUnwatched.current) void api.playProgress(tokenRef.current, 0, true).catch(() => undefined);
           if (info?.next && onNext) playNext();
           else onClose();
         }}
