@@ -1,11 +1,11 @@
 
-added 75 packages in 5s
+added 75 packages in 9s
 [1m[92m    Updating[0m crates.io index
-[1m[92m   Compiling[0m media-hub v0.22.0 (D:\a\media-hub\media-hub\src-tauri)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 07s
-[1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-5acce23be7c308fa.exe)
+[1m[92m   Compiling[0m media-hub v0.23.0 (D:\a\media-hub\media-hub\src-tauri)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 27s
+[1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-30b369d74bbfc62a.exe)
 
-running 159 tests
+running 161 tests
 test backend::tests::versions ... ok
 test backend::tests::schedules_read_nicely ... ok
 test backend::tests::library_rows_compare_with_recommended ... ok
@@ -20,24 +20,24 @@ test config::tests::strips_trailing_slash_query_and_fragment ... ok
 test detect::tests::chapters_with_names_are_used ... ok
 test bulk::tests::removes_and_adds_episode_tags ... ok
 test detect::tests::windows_and_snapping ... ok
-test bulk::tests::drops_release_tags ... ok
 test downloads::tests::audio_mode ... ok
 test downloads::tests::builds_safe_arguments ... ok
-test downloads::tests::plain_error_text ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
+test downloads::tests::plain_error_text ... ok
 test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
 test downloads::tests::search_targets_and_results ... ok
+test bulk::tests::drops_release_tags ... ok
 test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
 test downloads::tests::summarizes_playlists ... ok
-test bulk::tests::plans_files_sidecars_and_folder ... ok
 test fake_jellyfin::tests::a_missing_picture_is_none_not_an_error ... ok
 test fake_jellyfin::tests::missing_markers_plugin_is_not_called_a_missing_title ... ok
+test bulk::tests::plans_files_sidecars_and_folder ... ok
 test fake_jellyfin::tests::position_is_saved_and_read_back ... ok
 test fake_jellyfin::tests::position_falls_back_to_the_older_route_when_the_new_one_keeps_nothing ... ok
 test fingerprint::tests::fft_matches_a_plain_dft ... ok
-test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
 test fake_jellyfin::tests::subtitle_download_limit_is_reported_not_hidden ... ok
+test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
 test fingerprint::tests::silence_does_not_match ... ok
 test fingerprint::tests::survives_noise_like_a_different_encode ... ok
 test fsops::tests::apply_then_undo_restores_everything ... ok
@@ -80,6 +80,8 @@ test media_tools::tests::splits_both_separator_styles ... ok
 test meta_cmds::tests::best_picture_prefers_language_then_rating ... ok
 test meta_cmds::tests::recognises_pictures_by_content ... ok
 test meta_cmds::tests::youtube_videos_are_numbered_oldest_first ... ok
+test moviefolders::tests::plans_keep_out_and_collection_rename ... ok
+test moviefolders::tests::sorts_movies_by_their_folders ... ok
 test music::tests::tracks_borrow_the_album_picture ... ok
 test naming::tests::bad_templates_are_rejected ... ok
 test naming::tests::episode_formats ... ok
@@ -156,19 +158,19 @@ test subs::tests::parses_jellyfin_json ... ok
 test subs::tests::ranking_sorts_and_drops_empty_ids ... ok
 test subs::tests::same_release_beats_other_release ... ok
 test subs::tests::wrong_episode_is_zero ... ok
-test subsync::tests::finds_a_shift ... ok
+test fingerprint::tests::unrelated_audio_has_no_match ... ok
 test subsync::tests::reads_and_writes_srt_and_vtt ... ok
 test subsync::tests::speech_detection_follows_loudness ... ok
 test updater::tests::checksums_and_assets ... ok
 test updater::tests::swap_keeps_old_when_new_is_missing ... ok
 test updater::tests::versions_compare ... ok
-test fingerprint::tests::unrelated_audio_has_no_match ... ok
+test subsync::tests::finds_a_shift ... ok
 test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 159 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.06s
+test result: ok. 161 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.49s
 
-[1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-537a8b0bbf830401.exe)
+[1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-fd925078f590ecb7.exe)
 
 running 0 tests
 
@@ -183,18 +185,18 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         Info Looking up installed tauri packages to check mismatched versions...
      Running beforeBuildCommand `npm run build`
 
-> media-hub@0.22.0 build
+> media-hub@0.23.0 build
 > tsc && vite build
 
 [36mvite v5.4.21 [32mbuilding for production...[36m[39m
 transforming...
-[32m✓[39m 97 modules transformed.
+[32m✓[39m 98 modules transformed.
 [1m[33m[plugin:vite:reporter][39m[22m [33m[plugin vite:reporter] 
 (!) D:/a/media-hub/media-hub/src/Renamer.tsx is dynamically imported by D:/a/media-hub/media-hub/src/scan.ts but also statically imported by D:/a/media-hub/media-hub/src/App.tsx, dynamic import will not move module into another chunk.
 [39m
 rendering chunks...
 computing gzip size...
-[2mdist/[22m[32mindex.html                                                 [39m[1m[2m    0.41 kB[22m[1m[22m[2m │ gzip:   0.28 kB[22m
+[2mdist/[22m[32mindex.html                                                 [39m[1m[2m    0.41 kB[22m[1m[22m[2m │ gzip:   0.27 kB[22m
 [2mdist/[22m[32massets/jetbrains-mono-greek-400-normal-C190GLew.woff2      [39m[1m[2m    4.23 kB[22m[1m[22m
 [2mdist/[22m[32massets/manrope-vietnamese-500-normal-DCXiE_xi.woff2        [39m[1m[2m    4.32 kB[22m[1m[22m
 [2mdist/[22m[32massets/manrope-vietnamese-400-normal-DHb3EETF.woff2        [39m[1m[2m    4.46 kB[22m[1m[22m
@@ -251,26 +253,12 @@ computing gzip size...
 [2mdist/[22m[32massets/jetbrains-mono-latin-400-normal-6-qcROiO.woff       [39m[1m[2m   27.50 kB[22m[1m[22m
 [2mdist/[22m[32massets/inter-latin-wght-normal-Dx4kXJAl.woff2              [39m[1m[2m   48.26 kB[22m[1m[22m
 [2mdist/[22m[32massets/inter-latin-ext-wght-normal-DO1Apj_S.woff2          [39m[1m[2m   85.07 kB[22m[1m[22m
-[2mdist/[22m[35massets/index-BmNGVAh8.css                                  [39m[1m[2m  182.86 kB[22m[1m[22m[2m │ gzip:  50.45 kB[22m
-[2mdist/[22m[36massets/index-D9RSQxH2.js                                   [39m[1m[33m1,257.71 kB[39m[22m[2m │ gzip: 386.96 kB[22m
+[2mdist/[22m[35massets/index--MyIjIpc.css                                  [39m[1m[2m  183.14 kB[22m[1m[22m[2m │ gzip:  50.51 kB[22m
+[2mdist/[22m[36massets/index-C6sE35o3.js                                   [39m[1m[33m1,265.20 kB[39m[22m[2m │ gzip: 388.77 kB[22m
 [33m
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 3.16s[39m
-[1m[92m   Compiling[0m media-hub v0.22.0 (D:\a\media-hub\media-hub\src-tauri)
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 5m 32s
-       Built application at: D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe
-        Info Patching D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe with bundle type information: nsis
-        Info Verifying NSIS package
- Downloading https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip
-        Info validating hash
-        Info extracting NSIS
- Downloading https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll
-        Info validating hash
-        Info Target: x64
-     Running makensis to produce D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.22.0_x64-setup.exe
-    Finished 1 bundle at:
-        D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.22.0_x64-setup.exe (6.82 MiB)
-
+[32m✓ built in 4.15s[39m
+[1m[92m   Compiling[0m media-hub v0.23.0 (D:\a\media-hub\media-hub\src-tauri)
