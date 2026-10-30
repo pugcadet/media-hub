@@ -44,6 +44,14 @@
     scan_folders: "all",
     plan_rename: { planId: "p1", ok: 3, unchanged: 1, conflict: 0, unparsed: 0, titlesFound: 24, warning: null, guess: "Nijntje", candidates: [], chosen: { source: "jellyfin", id: hex(2), name: "Nijntje", year: 2003, poster: null, score: 100, ids: {} }, matchedMovies: 0, mode: "tv",
       ops: [1, 2, 3].map((n) => ({ from: `TV/nijntje/S01E0${n}.1080p.WEB.mkv`, to: `TV/Nijntje (2003)/Season 01/Nijntje - S01E0${n} - Title ${n}.mkv`, kind: "video", status: "ok", note: null, season: 1, episodes: [n], verified: true, score: 100, title: `Title ${n}` })).concat([{ from: "TV/nijntje", to: "TV/Nijntje (2003)", kind: "folder", status: "ok", note: null, season: null, episodes: [], verified: true, score: null, title: null }]) },
+    movie_folders: [
+      { id: hex(100), title: "The Matrix", year: 1999, video: "Movies/The.Matrix.1999.1080p/The.Matrix.1999.1080p.mkv", folder: "Movies/The.Matrix.1999.1080p", top: "Movies", kind: "own", group: null, expected: "The Matrix (1999)", ok: false },
+      { id: hex(101), title: "Dune", year: 1992, video: "Movies/Dune.1992.mkv", folder: "Movies", top: "Movies", kind: "loose", group: null, expected: "Dune (1992)", ok: false },
+      { id: hex(106), title: "Alien", year: 2002, video: "Movies/Alien Collection/Alien.1979/Alien.1979.mkv", folder: "Movies/Alien Collection/Alien.1979", top: "Movies", kind: "own", group: "Movies/Alien Collection", expected: "Alien (1979)", ok: false },
+      { id: hex(107), title: "Aliens", year: 1986, video: "Movies/Alien Collection/Aliens (1986)/Aliens (1986).mkv", folder: "Movies/Alien Collection/Aliens (1986)", top: "Movies", kind: "own", group: "Movies/Alien Collection", expected: "Aliens (1986)", ok: true },
+      { id: hex(103), title: "Up", year: 2009, video: "Movies/Pixar/Up.mkv", folder: "Movies/Pixar", top: "Movies", kind: "shared", group: "Movies/Pixar", expected: "Up (2009)", ok: false },
+      { id: hex(104), title: "Coco", year: 2017, video: "Movies/Pixar/Coco.mkv", folder: "Movies/Pixar", top: "Movies", kind: "shared", group: "Movies/Pixar", expected: "Coco (2017)", ok: false },
+    ],
     missing_language: { TotalRecordCount: 8, Items: episodes.map((e) => ({ ...e, SeriesName: "Nijntje" })) },
     missing_subtitles: { TotalRecordCount: 8, Items: episodes },
   };

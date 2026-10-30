@@ -65,6 +65,18 @@ for (const [w, h] of [[1440, 900], [1100, 760]]) {
   } catch (e) {
     log.push(`[${w}] item: ${e.message}`);
   }
+  // Renamer → Folders → Movie folders.
+  try {
+    await page.evaluate(() => window.__mhNav?.route({ view: "renamer", section: "folders", n: Date.now() }));
+    await page.waitForTimeout(800);
+    await page.click("text=Check movie folders", { timeout: 2000 });
+    await page.waitForTimeout(800);
+    await page.click("text=Move them to", { timeout: 2000 }).catch(() => undefined);
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: `${out}/${w}-movie-folders.png` });
+  } catch (e) {
+    log.push(`[${w}] movie folders: ${e.message}`);
+  }
   // Music: tiles, list, manage (through the hub switcher, like a person would).
   try {
     await page.click(".hub-btn");
