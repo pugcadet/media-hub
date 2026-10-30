@@ -29,6 +29,8 @@ mod planner;
 mod player;
 mod rename_cmds;
 mod renumber;
+mod sublock;
+mod pin;
 mod secrets;
 mod seg_cmds;
 mod sources;
@@ -191,6 +193,8 @@ pub fn run() {
             sub_cmds::subtitle_auto,
             sub_cmds::missing_language,
             renumber::episode_renumber,
+            sublock::subtitle_lock,
+            pin::pin_identity,
             backend::intro_skipper_libraries,
             backend::set_intro_skipper_libraries,
             sub_cmds::local_subtitles,

@@ -341,17 +341,24 @@ function SourcePane({ source, changed }: { source: { folder: string | null; sour
       {error && <p className="error">{error}</p>}
       <section className="card stack-s">
         <h2>Where your music comes from</h2>
-        <Seg value={folder ? "folder" : "jellyfin"} onChange={(v) => run(v === "folder" ? useFolder(false) : api.setMusicSource(false))}
-          options={[{ id: "jellyfin", label: "Jellyfin", icon: "server" }, { id: "folder", label: "Music folder", icon: "folder" }]} />
-        <p className="muted small">{folder
-          ? "Plays straight from a folder on this computer or the NAS (Artist / Album / 01 - Song.mp3 works best). Jellyfin isn't needed."
-          : "Plays your Jellyfin music library."}</p>
-        {folder && (
-          <div className="row">
-            <span className="mono small ellipsis grow">{source?.folder}</span>
-            <button onClick={() => run(useFolder(true))}><Icon name="folder" /> Choose another folder</button>
-            <button onClick={() => run(track("Reading the music folder", async (job) => { const n = await api.musicRescan(); job.update(`${n.toLocaleString()} songs`, 1); }, { reload: false }))}><Icon name="reload" /> Read it again</button>
-          </div>
+        {folder ? (
+          <>
+            <p className="small">Playing straight from a music folder{source?.folder ? <> (<span className="mono">{source.folder}</span>)</> : null}.</p>
+            <div className="row">
+              <button className="primary" onClick={() => run(api.setMusicSource(false))}><Icon name="server" /> Use my Jellyfin music instead</button>
+              <button onClick={() => run(useFolder(true))}><Icon name="folder" /> Choose another folder</button>
+              <button onClick={() => run(track("Reading the music folder", async (job) => { const n = await api.musicRescan(); job.update(`${n.toLocaleString()} songs`, 1); }, { reload: false }))}><Icon name="reload" /> Read it again</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="small">Your Jellyfin music library.</p>
+            <details className="more">
+              <summary className="muted small">Play from a folder instead (without Jellyfin)</summary>
+              <p className="muted small">Plays straight from a folder on this computer or the NAS (Artist / Album / 01 - Song.mp3 works best).</p>
+              <button onClick={() => run(useFolder(false))}><Icon name="folder" /> Use a music folder</button>
+            </details>
+          </>
         )}
       </section>
       <section className="card stack-s">

@@ -2,6 +2,7 @@
 // get a folder each (or every movie goes straight into the movies folder). You pick per folder
 // and per title; every move is one batch you can undo in History.
 import { useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { api, errorText, scanAround, Status } from "./api";
 import { track } from "./activity";
 import { askConfirm } from "./confirm";
@@ -23,6 +24,21 @@ export default function Structure({ status }: { status: Status }) {
   const sel = useUndoableSet<string>();
   // Per movies folder: give movies a folder each, or put them all straight in.
   const [movieMode, setMovieMode] = useState<Record<string, "own" | "flat">>({});
+  // While tidying: how far it is, what it's doing, and how each title went.
+  const [prog, setProg] = useState<{ done: number; total: number; now: string } | null>(null);
+  const [rowState, setRowState] = useState<Record<string, "working" | "done" | "failed">>({});
+  const rowOf = (from: string): string | null => {
+    for (const t of data ?? []) {
+      for (const sh of t.shows) if (from.startsWith(sh.folder + "/")) return `seasons:${sh.folder}`;
+      if (t.looseMovies.includes(from)) return `own:${from}`;
+      for (const m of t.folderedMovies) if (from.startsWith(m + "/")) return `flat:${m}`;
+    }
+    return null;
+  };
+  const mark = (key: string) => {
+    const st = rowState[key];
+    return st ? <span className={`struct-mark ${st}`}>{st === "working" ? <span className="spinner small-spin" /> : st === "done" ? <Icon name="check" size={12} /> : <Icon name="x" size={12} />}</span> : null;
+  };
 
   async function scan() {
     setError(null);
@@ -64,8 +80,25 @@ export default function Structure({ status }: { status: Status }) {
       }
       const folders = new Set(wanted.map((o) => o.to.split("/").slice(0, -1).join("/")));
       if (!(await askConfirm(`Move ${wanted.length} video${wanted.length === 1 ? "" : "s"} (with their subtitles) into ${folders.size} folder${folders.size === 1 ? "" : "s"}?${skipped ? `\n\n${skipped} are left where they are because the name is taken.` : ""}\n\nNothing is deleted or overwritten, and it's one batch you can undo in History. Jellyfin sees moved files as new: watched status stays (by TMDB/TVDB id).`, { okLabel: "Move" }))) return;
+      setRowState({});
+      setProg({ done: 0, total: wanted.length, now: "" });
       await track(`Tidying folders (${wanted.length} videos)`, async (job) => {
-        const rep = await api.apply(plan.planId, true, wanted.map((o) => o.from));
+        // Each move as it happens: the bar, the name, and the row's mark.
+        const un = await listen<{ index: number; total: number; from: string; state: "working" | "done" | "failed" }>("rename-step", (e) => {
+          const p = e.payload;
+          const name = last(p.from).replace(/\.[^.]+$/, "");
+          const done = p.state === "working" ? p.index : p.index + 1;
+          setProg({ done, total: p.total, now: name });
+          job.update(`${p.state === "working" ? "Moving" : p.state === "done" ? "Moved" : "Couldn't move"} ${name} · ${done} of ${p.total}`, p.total ? done / p.total : null);
+          const key = rowOf(p.from);
+          if (key) setRowState((m) => ({ ...m, [key]: m[key] === "failed" ? "failed" : p.state }));
+        });
+        let rep;
+        try {
+          rep = await api.apply(plan.planId, true, wanted.map((o) => o.from));
+        } finally {
+          un();
+        }
         job.update("Asking Jellyfin to look at the changed folders", null);
         await scanAround([...folders, ...actions.map((a) => a.path)]);
         if (rep.failed.length) throw `${rep.done} moved; ${rep.failed.length} failed: ${rep.failed[0]}`;
@@ -77,6 +110,7 @@ export default function Structure({ status }: { status: Status }) {
       setError(errorText(e));
     } finally {
       setBusy(false);
+      setProg(null);
     }
   }
 
@@ -114,7 +148,7 @@ export default function Structure({ status }: { status: Status }) {
                 {t.shows.map((s) => (
                   <label key={s.folder} className="check small">
                     <input type="checkbox" checked={sel.has(`seasons:${s.folder}`)} onChange={() => sel.toggle(`seasons:${s.folder}`)} />
-                    {s.name} <span className="muted">· {s.loose} episode{s.loose === 1 ? "" : "s"}{s.seasons ? ` · already ${s.seasons} season folder${s.seasons === 1 ? "" : "s"}` : ""}</span>
+                    {mark(`seasons:${s.folder}`)}{s.name} <span className="muted">· {s.loose} episode{s.loose === 1 ? "" : "s"}{s.seasons ? ` · already ${s.seasons} season folder${s.seasons === 1 ? "" : "s"}` : ""}</span>
                   </label>
                 ))}
               </div>
@@ -136,7 +170,7 @@ export default function Structure({ status }: { status: Status }) {
                     </div>
                     <div className="struct-list">
                       {t.looseMovies.map((m) => (
-                        <label key={m} className="check small mono"><input type="checkbox" checked={sel.has(`own:${m}`)} onChange={() => sel.toggle(`own:${m}`)} />{last(m)}</label>
+                        <label key={m} className="check small mono"><input type="checkbox" checked={sel.has(`own:${m}`)} onChange={() => sel.toggle(`own:${m}`)} />{mark(`own:${m}`)}{last(m)}</label>
                       ))}
                     </div>
                   </>
@@ -149,7 +183,7 @@ export default function Structure({ status }: { status: Status }) {
                   </div>
                   <div className="struct-list">
                     {t.folderedMovies.map((m) => (
-                      <label key={m} className="check small"><input type="checkbox" checked={sel.has(`flat:${m}`)} onChange={() => sel.toggle(`flat:${m}`)} />{last(m)}</label>
+                      <label key={m} className="check small"><input type="checkbox" checked={sel.has(`flat:${m}`)} onChange={() => sel.toggle(`flat:${m}`)} />{mark(`flat:${m}`)}{last(m)}</label>
                     ))}
                   </div>
                 </>
@@ -159,10 +193,16 @@ export default function Structure({ status }: { status: Status }) {
           {!todo(t) && <p className="muted small">Nothing to tidy here.</p>}
         </section>
       ))}
+      {prog && (
+        <div className="struct-progress" role="status">
+          <div className="row between small"><span className="ellipsis">{prog.now ? <>Moving <b>{prog.now}</b></> : "Starting…"}</span><span className="mono">{prog.done} of {prog.total} · {prog.total ? Math.round((prog.done / prog.total) * 100) : 0}%</span></div>
+          <div className="struct-bar"><span style={{ width: `${prog.total ? (prog.done / prog.total) * 100 : 0}%` }} /></div>
+        </div>
+      )}
       {data && (
         <div className="row end struct-apply">
           {sel.canUndo && <button className="link small" onClick={sel.undo}><Icon name="undo" size={12} /> Undo selection</button>}
-          <button className="primary" disabled={busy || !picked || status.readOnly} onClick={() => void apply()}>{busy ? "Working…" : `Tidy ${picked} selected`}</button>
+          <button className="primary" disabled={busy || !picked || status.readOnly} onClick={() => void apply()}>{busy ? (prog ? `Tidying… ${prog.total ? Math.round((prog.done / prog.total) * 100) : 0}%` : "Working…") : `Tidy ${picked} selected`}</button>
         </div>
       )}
     </div>

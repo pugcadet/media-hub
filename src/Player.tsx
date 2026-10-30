@@ -500,31 +500,30 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     }
   }
 
-  /** Lines the shown subtitle up with the speech, fixes the file, and reloads it here. */
+  /** Lines the shown subtitle up with the speech, fixes the file, and shows the result here. */
   async function autoTiming() {
     if (sub < 0) return;
+    const t = tracks.find((x) => x.index === sub);
+    if (!t?.path) {
+      say("This subtitle is built into the video; use − and + to shift it.", 3000);
+      return;
+    }
     setOnlineBusy("timing");
+    say("Listening to the first half hour of audio… (up to a minute)", 90000);
     try {
-      const d = await api.details(id);
-      const stream = (d.item.MediaStreams ?? []).find((m) => m.Type === "Subtitle" && m.Index === sub);
-      if (!stream?.IsExternal) {
-        say("This subtitle is built into the video; use − and + to shift it.", 3000);
-        return;
-      }
-      say("Listening to the audio…", 20000);
-      const r = await api.subtitleSync(id, sub, true);
+      // A file just downloaded isn't in Jellyfin's list yet: it goes by its path.
+      const fresh = sub >= 100000;
+      const r = await api.subtitleSync(id, fresh ? -1 : sub, true, fresh ? t.path : null);
       if (!r.applied) {
-        say(r.fit.after - r.fit.before < 0.02 ? "Timing already looks right" : "Not sure enough to change it; use − and +", 3000);
+        say(r.fit.after - r.fit.before < 0.02 ? "The timing already looks right" : "Not sure enough to change it; use − and + instead", 3500);
         return;
       }
-      const t = tracks.find((x) => x.index === sub);
-      if (t) {
-        const u = await loadTrack(t);
-        if (u) setSubUrls((m) => ({ ...m, [sub]: u }));
-      }
-      say(`Timing fixed (${r.fit.offset > 0 ? "+" : ""}${r.fit.offset.toFixed(1)} s)`, 2500);
+      // The same shift for what's on screen now.
+      setSubUrls((m) => ({ ...m, [sub]: (m[sub] ?? []).map((c) => ({ ...c, start: Math.max(0, c.start * r.fit.scale + r.fit.offset), end: Math.max(0, c.end * r.fit.scale + r.fit.offset) })) }));
+      setOffset(0);
+      say(`Timing fixed and saved in the file (${r.fit.offset > 0 ? "+" : ""}${r.fit.offset.toFixed(1)} s)`, 3000);
     } catch (e) {
-      say(errorText(e), 3500);
+      say(errorText(e), 4000);
     } finally {
       setOnlineBusy(null);
     }
@@ -547,22 +546,40 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     }
   }
 
-  /** "This one is right": the other subtitle files in the same language go to the trash (undoable). */
-  async function keepOnly(t: SubTrack) {
-    const same = (a: string) => (a || "").toLowerCase().slice(0, 2);
-    const others = tracks.filter((x) => x.index !== t.index && x.path && same(x.language) === same(t.language));
-    if (!others.length) return say("It's the only subtitle in this language", 2000);
-    const ok = await askConfirm(`Keep “${t.title}” and remove the other ${others.length} subtitle file${others.length === 1 ? "" : "s"} in this language? ${others.length === 1 ? "It goes" : "They go"} to the trash folder, so History can put ${others.length === 1 ? "it" : "them"} back. Subtitles built into the video stay.`, { okLabel: "Keep this one" });
+  /**
+   * "This one is right": the timing you set goes into the file, the other subtitle files in
+   * this language go to the trash folder, and the file is named after the video. Undoable.
+   */
+  async function lockIn(t: SubTrack) {
+    if (!t.path) return;
+    const lang = /^[a-z]{3}$/i.test(t.language) ? t.language.toLowerCase() : subLang;
+    const same = (x: SubTrack) => x.index !== t.index && !!x.path && (x.language || "").slice(0, 2).toLowerCase() === (t.language || lang).slice(0, 2).toLowerCase();
+    const others = tracks.filter(same);
+    const parts = [
+      Math.abs(offset) >= 0.05 ? `the timing (${offset > 0 ? "+" : ""}${offset.toFixed(1)} s) is saved into the file` : "",
+      others.length ? `${others.length} other subtitle file${others.length === 1 ? "" : "s"} in this language go${others.length === 1 ? "es" : ""} to the trash folder` : "",
+      "it's named after the video",
+    ].filter(Boolean);
+    const ok = await askConfirm(`Keep “${t.title}”? ${parts.join(", ")}. History can undo each step. Subtitles built into the video stay.`, { okLabel: "Keep this one" });
     if (!ok) return;
+    setOnlineBusy("lock");
     try {
-      await api.removeSubtitleFiles(others.map((x) => ({ id, path: x.path! })));
+      const r = await api.subtitleLock(id, t.path, lang, offset, true);
+      // What's on screen now matches the file.
+      if (Math.abs(offset) >= 0.05) {
+        const o = offset;
+        setSubUrls((m) => ({ ...m, [t.index]: (m[t.index] ?? []).map((c) => ({ ...c, start: c.start + o, end: c.end + o })) }));
+        setOffset(0);
+      }
       const gone = new Set(others.map((x) => x.index));
-      setTracks((l) => l.filter((x) => !gone.has(x.index)));
+      setTracks((l) => l.filter((x) => !gone.has(x.index)).map((x) => (x.index === t.index ? { ...x, title: r.file || x.title, path: r.file && x.path ? x.path.replace(/[^/\\]+$/, r.file) : x.path } : x)));
       setSubUrls((m) => { const n2 = { ...m }; gone.forEach((i) => delete n2[i]); return n2; });
       setSub(t.index);
-      say(`Kept this one · ${others.length} removed`, 2200);
+      say(`Kept${r.shifted ? ` · timing saved` : ""}${r.removed ? ` · ${r.removed} removed` : ""}${r.renamed ? ` · now ${r.file}` : ""}`, 3000);
     } catch (e) {
-      say(errorText(e), 3000);
+      say(errorText(e), 4000);
+    } finally {
+      setOnlineBusy(null);
     }
   }
 
@@ -612,7 +629,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
       if (d.text && (d.format === "srt" || d.format === "vtt")) {
         const idx = 100000 + Object.keys(subUrls).length;
         const cues = parseCues(toVtt(d.text));
-        setTracks((l) => [...l, { index: idx, language: subLang, title: `${s.sub.Name ?? subLang} (downloaded)`.slice(0, 60), url: "", default: false }]);
+        setTracks((l) => [...l, { index: idx, language: subLang, title: `${s.sub.Name ?? subLang} (downloaded)`.slice(0, 60), url: "", default: false, path: d.file || undefined }]);
         setSubUrls((m) => ({ ...m, [idx]: cues }));
         done(idx);
         return;
@@ -839,8 +856,8 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
                       <span className="p-opt-check">{sub === t.index ? <Icon name="check" size={14} /> : loadingSubs.has(t.index) ? <span className="spinner small-spin" /> : null}</span>
                       <span className="ellipsis grow">{t.title}</span>
                       {t.default && <span className="small muted">Default</span>}
-                      {sub === t.index && t.path && !status?.readOnly && tracks.some((x) => x.index !== t.index && x.path && (x.language || "").slice(0, 2).toLowerCase() === (t.language || "").slice(0, 2).toLowerCase()) && (
-                        <button className="p-keep" title="This subtitle is right: remove the other subtitle files in this language" onClick={(e) => { e.stopPropagation(); void keepOnly(t); }}><Icon name="check" size={12} /> This one is right</button>
+                      {sub === t.index && t.path && !status?.readOnly && (
+                        <button className="p-keep" disabled={!!onlineBusy} title="Lock it in: the timing goes into the file, the other files in this language are removed, and it's named after the video" onClick={(e) => { e.stopPropagation(); void lockIn(t); }}>{onlineBusy === "lock" ? <span className="spinner small-spin" /> : <Icon name="check" size={12} />} This one is right</button>
                       )}
                       {!subUrls[t.index] && !loadingSubs.has(t.index) && <span className="small warn">Not loaded</span>}
                       {t.path && !status?.readOnly && (
@@ -876,7 +893,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
                   </>
                 )}
                 {sub >= 0 && !status?.readOnly && (
-                  <button className="p-opt" disabled={!!onlineBusy} onClick={() => void autoTiming()}><span className="p-opt-check"><Icon name="wand" size={14} /></span><span className="grow">Fix timing automatically</span><span className="small muted">{onlineBusy === "timing" ? "Listening…" : ""}</span></button>
+                  <button className="p-opt" disabled={!!onlineBusy} onClick={() => void autoTiming()}><span className="p-opt-check"><Icon name="wand" size={14} /></span><span className="grow">Fix timing automatically</span><span className="small muted">{onlineBusy === "timing" ? <><span className="spinner small-spin" /> Listening…</> : ""}</span></button>
                 )}
                 <div className="p-timing">
                   <span className="muted small">Timing</span>
@@ -886,6 +903,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
                     <button onClick={() => setOffset((o) => Math.round((o + 0.5) * 10) / 10)} aria-label="Later">+</button>
                   </span>
                 </div>
+                {Math.abs(offset) >= 0.05 && <div className="muted small">Only for now. “This one is right” saves the timing into the file.</div>}
                 <div className="muted small">C: {subLang === "eng" ? "English" : subLang} on/off · Shift+C: all tracks</div>
               </>
             )}

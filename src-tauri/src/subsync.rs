@@ -43,6 +43,9 @@ fn fmt_time(t: f64, comma: bool) -> String {
 }
 
 /// Reads SRT or WebVTT. Returns the cues and whether it was VTT.
+/// How much audio is listened to (seconds).
+const LISTEN_SECS: f64 = 1800.0;
+
 pub fn parse_subs(text: &str) -> (Vec<Cue>, bool) {
     let text = text.trim_start_matches('\u{feff}').replace("\r\n", "\n");
     let vtt = text.starts_with("WEBVTT");
@@ -171,30 +174,36 @@ pub struct SyncOutcome {
 
 /// Checks (and with `apply`, fixes) the timing of one external subtitle of an item.
 #[tauri::command]
-pub async fn subtitle_sync(state: State<'_, AppState>, id: String, index: i64, apply: bool) -> Result<SyncOutcome> {
+pub async fn subtitle_sync(state: State<'_, AppState>, id: String, index: i64, apply: bool, path: Option<String>) -> Result<SyncOutcome> {
     if !valid_item_id(&id) {
         return Err(Error::msg("bad id"));
     }
     let item = state.reader().await?.item_json(&id).await?;
-    let stream = item
-        .get("MediaStreams")
-        .and_then(Value::as_array)
-        .and_then(|a| a.iter().find(|s| s.get("Index").and_then(Value::as_i64) == Some(index) && s.get("Type").and_then(Value::as_str) == Some("Subtitle")))
-        .cloned()
-        .ok_or_else(|| Error::msg("That subtitle isn't there any more."))?;
-    if !stream.get("IsExternal").and_then(Value::as_bool).unwrap_or(false) {
-        return Err(Error::msg("Only subtitle files next to the video can be fixed (this one is built into the video)."));
-    }
-    let sub_server = stream.get("Path").and_then(Value::as_str).unwrap_or("").to_string();
-    let lower = sub_server.to_lowercase();
+    // A file just downloaded isn't listed by Jellyfin yet: then it comes by its path.
+    let sub_path = match path.filter(|p| !p.is_empty()) {
+        Some(p) => crate::sublock::resolve_sub(&state, &p)?,
+        None => {
+            let stream = item
+                .get("MediaStreams")
+                .and_then(Value::as_array)
+                .and_then(|a| a.iter().find(|s| s.get("Index").and_then(Value::as_i64) == Some(index) && s.get("Type").and_then(Value::as_str) == Some("Subtitle")))
+                .cloned()
+                .ok_or_else(|| Error::msg("That subtitle isn't there any more."))?;
+            if !stream.get("IsExternal").and_then(Value::as_bool).unwrap_or(false) {
+                return Err(Error::msg("Only subtitle files next to the video can be fixed (this one is built into the video)."));
+            }
+            local::to_local(&state, stream.get("Path").and_then(Value::as_str).unwrap_or(""))?
+        }
+    };
+    let lower = sub_path.to_string_lossy().to_lowercase();
     if !(lower.ends_with(".srt") || lower.ends_with(".vtt")) {
         return Err(Error::msg("Only SRT and VTT subtitles can be fixed."));
     }
     let video_server = item.get("Path").and_then(Value::as_str).unwrap_or("").to_string();
-    let sub_path = local::to_local(&state, &sub_server)?;
     let video_path = local::to_local(&state, &video_server)?;
     let ff = media_tools::locate_ffmpeg(state.settings()?.ffmpeg_path.as_deref()).ok_or_else(|| Error::msg("This needs ffmpeg (Settings → Tools)."))?;
-    let duration = item.get("RunTimeTicks").and_then(Value::as_f64).map(|t| t / 10_000_000.0).unwrap_or(7200.0).clamp(60.0, 4.0 * 3600.0);
+    // The first half hour is plenty to find the shift, and much quicker than the whole film.
+    let duration = item.get("RunTimeTicks").and_then(Value::as_f64).map(|t| t / 10_000_000.0).unwrap_or(7200.0).clamp(60.0, LISTEN_SECS);
 
     let raw = std::fs::read(&sub_path)?;
     let text = String::from_utf8_lossy(&raw).into_owned();
@@ -209,7 +218,11 @@ pub async fn subtitle_sync(state: State<'_, AppState>, id: String, index: i64, a
     })
     .await
     .map_err(|e| Error::msg(e.to_string()))??;
-    let fit = best_fit(&speech, &cues);
+    let window: Vec<Cue> = cues.iter().filter(|c| c.end < duration).cloned().collect();
+    if window.len() < 10 {
+        return Err(Error::msg("Too few subtitle lines in the first half hour to line up."));
+    }
+    let fit = best_fit(&speech, &window);
     let moved = fit.offset.abs() >= 0.3 || (fit.scale - 1.0).abs() > 0.001;
     let sure = moved && fit.after >= 0.45 && fit.after - fit.before >= 0.08;
     let mut applied = false;

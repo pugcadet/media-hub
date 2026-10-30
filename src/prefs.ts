@@ -121,6 +121,10 @@ export interface Prefs {
   subGot: Record<string, string[]>;
   /** How online subtitles are sorted. */
   subSort: "downloads" | "match";
+  /** After Identify: put the match in the folder name so it sticks. */
+  pinIds: boolean;
+  /** Titles you skipped in the Renamer (left out of "to fix" and "rename all"). */
+  renameSkip: string[];
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -168,6 +172,8 @@ export const DEFAULT_PREFS: Prefs = {
   musicTabs: [],
   subGot: {},
   subSort: "downloads",
+  pinIds: true,
+  renameSkip: [],
 };
 
 /** Ready-made highlight colours for Settings → Look. */
@@ -233,6 +239,8 @@ function load(): Prefs {
       musicTabs: p.musicTabs ?? [],
       subGot: p.subGot ?? {},
       subSort: p.subSort ?? "downloads",
+      pinIds: p.pinIds ?? true,
+      renameSkip: p.renameSkip ?? [],
     };
   } catch {
     return DEFAULT_PREFS;

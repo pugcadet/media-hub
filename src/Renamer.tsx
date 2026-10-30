@@ -879,7 +879,10 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
   const [filter, setFilter] = useState("");
   const pickedSel = useUndoableSet<string>();
   const picked = pickedSel.set;
-  const [show, setShow] = useState<"todo" | "right" | "errors">("todo");
+  const [show, setShow] = useState<"todo" | "right" | "errors" | "skipped">("todo");
+  const { renameSkip } = usePrefs();
+  const skipped = (r: CheckRow) => renameSkip.includes(r.id);
+  const setSkip = (r: CheckRow, on: boolean) => setPrefs((p) => ({ renameSkip: on ? [...new Set([...p.renameSkip, r.id])] : p.renameSkip.filter((x) => x !== r.id) }));
   const [open, setOpen] = useState<string | null>(null);
   // The folder tab (like the Library's): "@all" or a top folder.
   const [folderTab, setFolderTab] = usePageState<string>("renamer.folder", "@all");
@@ -918,10 +921,12 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
   const q = filter.toLowerCase();
   const match = (r: CheckRow) => (folderTab === "@all" || top(r) === folderTab) && (!q || r.name.toLowerCase().includes(q) || r.folder.toLowerCase().includes(q));
   const tops = [...new Set(rows.map(top))];
-  const todo = rows.filter((r) => !r.error && (r.toRename + r.folders + r.problems > 0 || r.reasons.length > 0));
+  const needsWork = (r: CheckRow) => !r.error && (r.toRename + r.folders + r.problems > 0 || r.reasons.length > 0);
+  const todo = rows.filter((r) => needsWork(r) && !skipped(r));
+  const skippedRows = rows.filter((r) => needsWork(r) && skipped(r));
   const sure = todo.filter((r) => r.sure);
   const look = todo.filter((r) => !r.sure);
-  const right = rows.filter((r) => !r.error && !todo.includes(r));
+  const right = rows.filter((r) => !r.error && !needsWork(r));
   const errors = rows.filter((r) => r.error);
 
   async function bulk() {
@@ -961,12 +966,13 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
     { label: "Open title", run: () => nav.open(r.id) },
     { label: "Open folder", run: () => void api.revealRel(r.folder).catch(() => undefined) },
     { label: "Check again", run: () => void check([r.id]) },
+    skipped(r) ? { label: "Don't skip any more", run: () => setSkip(r, false) } : { label: "Skip this one", run: () => setSkip(r, true) },
     { sep: true },
     ...itemMenu({ id: r.id, kind: r.kind, title: r.name }).filter((m) => m.label === "Identify…" || m.label === "Fill in missing artwork"),
   ];
 
   // The list on the left: sure matches (with a box to rename many at once), then the rest.
-  const listed: CheckRow[] = show === "todo" ? [...sure.filter(match), ...look.filter(match)] : show === "right" ? right.filter(match) : errors.filter(match);
+  const listed: CheckRow[] = show === "todo" ? [...sure.filter(match), ...look.filter(match)] : show === "right" ? right.filter(match) : show === "skipped" ? skippedRows.filter(match) : errors.filter(match);
   const items: StudioItem[] = listed.map((r) => ({
     id: r.id,
     title: titleYear(r.name, r.year),
@@ -993,7 +999,7 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
     focused.current = focus;
     setFilter("");
     if (folderTab !== "@all" && top(row) !== folderTab) setFolderTab("@all");
-    setShow(row.error ? "errors" : todo.includes(row) ? "todo" : "right");
+    setShow(row.error ? "errors" : todo.includes(row) ? "todo" : skipped(row) ? "skipped" : "right");
     setOpen(focus);
   }, [focus, res]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -1034,6 +1040,7 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
               <Seg value={show} onChange={setShow} options={[
                 { id: "todo", label: `To fix ${todo.filter(match).length}` },
                 { id: "right", label: `Right ${right.filter(match).length}` },
+                ...(skippedRows.length > 0 ? [{ id: "skipped" as const, label: `Skipped ${skippedRows.filter(match).length}` }] : []),
                 ...(errors.length > 0 ? [{ id: "errors" as const, label: `Couldn't check ${errors.filter(match).length}` }] : []),
               ]} />
               {show === "todo" && sureKeys.length > 0 && (
@@ -1058,12 +1065,15 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
                   </div>
                 </div>
                 <div className="row end">
+                  {show !== "right" && !openRow.error && (skipped(openRow)
+                    ? <button onClick={() => setSkip(openRow, false)} title="Put it back in “To fix”">Don't skip</button>
+                    : <button onClick={() => { const i = listed.findIndex((x) => x.id === openRow.id); setSkip(openRow, true); const nxt = listed[i + 1] ?? listed[i - 1]; if (nxt) setOpen(nxt.id); }} title="Leave this one as it is: it's no longer listed under “To fix” or renamed with “Rename all”. Undo under Skipped.">Skip</button>)}
                   <IconBtn icon="folder" title="Open folder" onClick={() => void api.revealRel(openRow.folder).catch(() => undefined)} />
                   <IconBtn icon="expand" title="Open the title's page" onClick={() => nav.open(openRow.id)} />
                   <button className="icon-btn" aria-label="More" onClick={(e) => openMenu(e, menuFor(openRow))}><Icon name="more" /></button>
                 </div>
               </div>
-              {show === "right" ? <p className="ok">✓ Every file and folder already has the right name.</p> : (
+              {show === "right" ? <p className="ok">✓ Every file and folder already has the right name.</p> : show === "skipped" ? <p className="muted">Skipped: left as it is. “Don't skip” puts it back in To fix.</p> : (
                 <CheckDetail key={openRow.id} r={openRow} onDone={() => void check([openRow.id])} />
               )}
             </div>

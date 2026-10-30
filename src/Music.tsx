@@ -229,6 +229,9 @@ export default function Music({ status }: { status: Status }) {
   const [srcN, setSrcN] = useState(0);
   const [showQueue, setShowQueue] = useState(false);
   const [quiet, setQuiet] = useState(0);
+  // Still playing from a folder while the music is in Jellyfin now: offer to switch.
+  const [fromFolder, setFromFolder] = useState(false);
+  useEffect(() => void api.musicSource().then((x) => setFromFolder(x.source === "folder")).catch(() => setFromFolder(false)), [srcN]);
   const changed = () => {
     clearCache();
     setSrcN((n) => n + 1);
@@ -314,6 +317,13 @@ export default function Music({ status }: { status: Status }) {
 
       <div className="w-page m-page">
         {error && <p className="error pad">{error}</p>}
+        {fromFolder && !manage && (
+          <div className="note-bar m-switch">
+            <Icon name="server" />
+            <span className="grow small">Playing from your music folder. Is your music in Jellyfin now?</span>
+            <button className="primary" onClick={() => void api.setMusicSource(false).then(changed)}>Use Jellyfin</button>
+          </div>
+        )}
         {manage ? (
           <MusicManage onChanged={changed} />
         ) : open ? (

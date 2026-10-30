@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { api, cleanTitle, errorText, ImageKind, remoteImageUrl, SearchResult } from "./api";
 import { track } from "./activity";
 import { Icon } from "./ui";
+import { setPrefs, usePrefs } from "./prefs";
 
 interface Req {
   id: string;
@@ -52,6 +53,7 @@ function IdentifyDialog({ req }: { req: Req }) {
   const [busy, setBusy] = useState(false);
   const [replaceImages, setReplaceImages] = useState(true);
   const [fillArt, setFillArt] = useState(true);
+  const { pinIds: pin } = usePrefs();
 
   const search = useCallback(async () => {
     setSearching(true);
@@ -82,6 +84,12 @@ function IdentifyDialog({ req }: { req: Req }) {
         if (fillArt) {
           job.update("Filling in missing artwork", null);
           await api.fillMissingArt(req.id, ALL_ART).catch(() => undefined);
+        }
+        if (pin) {
+          // The match into the folder name, so Jellyfin finds it the same way every time.
+          job.update("Putting the match in the folder name", null);
+          const p = await api.pinIdentity(req.id).catch((e) => ({ name: "", changed: false, note: errorText(e) }));
+          job.update(p.changed ? `Folder now “${p.name}”. Jellyfin picks it up on its scan.` : p.note ? `Folder name left as it is: ${p.note}` : "The folder name already has the match.", 1);
         }
       }, { items: [req.id] });
       close(true);
@@ -119,6 +127,7 @@ function IdentifyDialog({ req }: { req: Req }) {
         <div className="row">
           <label className="check"><input type="checkbox" checked={replaceImages} onChange={(e) => setReplaceImages(e.target.checked)} />Use the match's artwork</label>
           <label className="check"><input type="checkbox" checked={fillArt} onChange={(e) => setFillArt(e.target.checked)} />Then fill in artwork that's still missing</label>
+          <label className="check" title="Renames the folder to e.g. “Heat (1995) [tmdbid-949]”. Jellyfin then always matches it the same way, also after a reset. History can undo it."><input type="checkbox" checked={pin} onChange={(e) => setPrefs({ pinIds: e.target.checked })} />Make it stick: put the match in the folder name</label>
         </div>
         {error && <p className="error">{error}</p>}
         <div className="id-results">

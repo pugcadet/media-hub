@@ -854,6 +854,8 @@ export const api = {
   saveMetadata: (id: string, edits: ItemEdits) => invoke<void>("save_metadata", { id, edits }),
   identifySearch: (kind: "series" | "movie", name: string, year: number | null, ids: Record<string, string>) =>
     invoke<SearchResult[]>("identify_search", { kind, name, year, ids }),
+  /** Puts the identified match into the folder name ("Heat (1995) [tmdbid-949]"), so it sticks. */
+  pinIdentity: (id: string) => invoke<{ name: string; changed: boolean; note: string | null }>("pin_identity", { id }),
   identifyApply: (id: string, result: SearchResult, replaceImages: boolean) =>
     artChange(id, invoke<void>("identify_apply", { id, result, replaceImages })),
   remoteImages: (id: string, kind: ImageKind) => invoke<RemoteImage[]>("remote_images", { id, kind }),
@@ -965,8 +967,11 @@ export const api = {
   libraryLanguages: () => invoke<LibraryLang[]>("library_languages"),
   setLibraryLanguage: (id: string, language: string, country: string, refresh: boolean) =>
     invoke<void>("set_library_language", { id, language, country, refresh }),
-  subtitleSync: (id: string, index: number, apply: boolean) =>
-    invoke<{ fit: SyncFit; sure: boolean; applied: boolean; file: string }>("subtitle_sync", { id, index, apply }),
+  subtitleSync: (id: string, index: number, apply: boolean, path: string | null = null) =>
+    invoke<{ fit: SyncFit; sure: boolean; applied: boolean; file: string }>("subtitle_sync", { id, index, apply, path }),
+  /** Keeps one subtitle: its timing into the file, the others in its language to the trash, named after the video. */
+  subtitleLock: (id: string, path: string, lang: string, offset: number, removeOthers: boolean) =>
+    invoke<{ shifted: number; removed: number; file: string; renamed: boolean }>("subtitle_lock", { id, path, lang, offset, removeOthers }),
   musicRescan: () => invoke<number>("music_rescan"),
   musicFetchArt: (again = false) => invoke<{ covers: number; artists: number; missingCovers: number }>("music_fetch_art", { again }),
   musicLocalEdit: (id: string, edit: MusicEdit) => invoke<void>("music_local_edit", { id, edit }),
