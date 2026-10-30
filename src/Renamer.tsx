@@ -9,6 +9,7 @@ import { BulkSelect, Icon, itemMenu, openMenu, TriCheck, useUndoableSet } from "
 import { folderTabs, IconBtn, KTabs, PageHead, SearchBox, Seg } from "./kit";
 import { usePageState } from "./saved";
 import { Studio, StudioItem } from "./Studio";
+import Structure from "./Structure";
 import { setPrefs, usePrefs, withShowYear, yearOptional, minimalNames, type Prefs } from "./prefs";
 
 type Source = PlanArgs["source"];
@@ -708,6 +709,9 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
   const live = useRenameSteps();
   const [renameTop, setRenameTop] = useState(true);
   const [seasonDirs, setSeasonDirs] = useState(false);
+  // A clicked summary chip ("3× adds the episode title"): its files stand out, the rest fade.
+  const [hl, setHl] = useState<{ group: string; what: string } | null>(null);
+  const short = (w: string) => w.replace(/ “[^”]*”/, "").replace(/ from .*$/, "");
 
   useEffect(() => {
     const p = presetFor(r);
@@ -825,18 +829,29 @@ function CheckDetail({ r, onDone }: { r: CheckRow; onDone: () => void }) {
             {(() => {
               // What happens to this group, counted once instead of on every file.
               const tally = new Map<string, number>();
-              for (const o of ops.filter((x) => x.status === "ok" && x.kind !== "sidecar")) for (const w of explain(o, source)) tally.set(w, (tally.get(w) ?? 0) + 1);
+              for (const o of ops.filter((x) => x.status === "ok" && x.kind !== "sidecar")) for (const w of explain(o, source).map(short)) tally.set(w, (tally.get(w) ?? 0) + 1);
               const parts = [...tally.entries()].sort((a, b) => b[1] - a[1]);
               return parts.length > 0 && (
                 <div className="change-summary">
-                  {parts.map(([w, n]) => <span key={w} className="chip static">{n}× {w.replace(/ “[^”]*”/, "").replace(/ from .*$/, "")}</span>)}
+                  {parts.map(([w, n]) => {
+                    const on = hl?.group === g && hl.what === w;
+                    return (
+                      <button key={w} className={`chip ${on ? "on" : ""}`} title={on ? "Show all files again" : "Show which files this applies to"}
+                        onClick={() => {
+                          setHl(on ? null : { group: g, what: w });
+                          if (!on && !isOpen(g)) setOpenGroups((s) => new Set(s).add(g));
+                        }}>
+                        {n}× {w}
+                      </button>
+                    );
+                  })}
                 </div>
               );
             })()}
             {isOpen(g) && ops.map((o) => {
               const can = o.status === "ok";
               return (
-                <label key={o.from} className={`change ${can ? "" : "off"} ${live.get(o.from) ?? ""}`} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
+                <label key={o.from} className={`change ${can ? "" : "off"} ${live.get(o.from) ?? ""} ${hl?.group === g ? (can && explain(o, source).some((w) => short(w) === hl.what) ? "hl" : "dim") : ""}`} onContextMenu={(e) => openMenu(e, fileMenu(o))}>
                   <input type="checkbox" disabled={!can} checked={picked.has(o.from)} onChange={() => toggle(o.from)} />
                   <StepMark s={live.get(o.from)} />
                   <div className="names">
@@ -1253,10 +1268,12 @@ function BulkEdit({ status, onCheck }: { status: Status; onCheck: () => void }) 
 
 export default function Renamer({ status, onChanged, start, embedded }: {
   status: Status; onChanged: () => void; onNav: (v: View) => void;
-  start?: { folder?: string; item?: string }; embedded?: boolean;
+  start?: { folder?: string; item?: string; section?: string }; embedded?: boolean;
 }) {
   // A folder given (from Clean-up → Folders) opens that folder; a title selects it in the check.
-  const [mode, setMode] = useState<"check" | "bulk" | "folder">(start?.folder !== undefined && !start?.item ? "folder" : "check");
+  const [savedMode, setSavedMode] = usePageState<"check" | "bulk" | "folders">("renamer.mode", "check");
+  const [mode, setModeState] = useState<"check" | "bulk" | "folder" | "folders">(start?.section === "folders" ? "folders" : start?.folder !== undefined && !start?.item ? "folder" : start?.item ? "check" : savedMode);
+  const setMode = (m: "check" | "bulk" | "folder" | "folders") => { setModeState(m); if (m !== "folder") setSavedMode(m); };
   const [preset, setPreset] = useState<Preset | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
 
@@ -1297,6 +1314,7 @@ export default function Renamer({ status, onChanged, start, embedded }: {
           <Seg value={mode === "folder" ? "check" : mode} onChange={(m) => setMode(m)} options={[
             { id: "check", label: <><Icon name="check" size={13} /> Names to fix</> },
             { id: "bulk", label: <><Icon name="rename" size={13} /> Find &amp; replace</> },
+            { id: "folders", label: <><Icon name="folder" size={13} /> Folders</> },
           ]} />
         ) : undefined}
       />
@@ -1304,6 +1322,7 @@ export default function Renamer({ status, onChanged, start, embedded }: {
       {!status.libraryRoot ? <FolderFix status={status} onChanged={onChanged} />
         : mode === "check" ? <CheckList status={status} focus={start?.item} />
         : mode === "bulk" ? <BulkEdit status={status} onCheck={() => setMode("check")} />
+        : mode === "folders" ? <Structure status={status} />
         : (
           <>
             <p className="muted small"><button className="link" onClick={() => setMode("check")}>← Back to the list</button></p>

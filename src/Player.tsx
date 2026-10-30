@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { askConfirm } from "./confirm";
-import { api, cleanTitle, errorText, imageUrl, PlayInfo, ScoredSub, Status, SubTrack, toVtt } from "./api";
+import { api, cleanTitle, errorText, imageUrl, PlayInfo, ScoredSub, sortSubs, Status, SubTrack, toVtt } from "./api";
 import { autoDetectSeason, fmt } from "./Intros";
-import { DEFAULT_PREFS, prefs, setPrefs, subCss, usePrefs, type SubStyle, SUB_FONTS } from "./prefs";
+import { DEFAULT_PREFS, gotSub, markSubGot, prefs, setPrefs, subCss, usePrefs, type SubStyle, SUB_FONTS } from "./prefs";
 import { nav } from "./nav";
 import { Icon, openMenu, SettingsLink, type IconName } from "./ui";
 import { logProblem } from "./activity";
@@ -547,6 +547,25 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     }
   }
 
+  /** "This one is right": the other subtitle files in the same language go to the trash (undoable). */
+  async function keepOnly(t: SubTrack) {
+    const same = (a: string) => (a || "").toLowerCase().slice(0, 2);
+    const others = tracks.filter((x) => x.index !== t.index && x.path && same(x.language) === same(t.language));
+    if (!others.length) return say("It's the only subtitle in this language", 2000);
+    const ok = await askConfirm(`Keep “${t.title}” and remove the other ${others.length} subtitle file${others.length === 1 ? "" : "s"} in this language? ${others.length === 1 ? "It goes" : "They go"} to the trash folder, so History can put ${others.length === 1 ? "it" : "them"} back. Subtitles built into the video stay.`, { okLabel: "Keep this one" });
+    if (!ok) return;
+    try {
+      await api.removeSubtitleFiles(others.map((x) => ({ id, path: x.path! })));
+      const gone = new Set(others.map((x) => x.index));
+      setTracks((l) => l.filter((x) => !gone.has(x.index)));
+      setSubUrls((m) => { const n2 = { ...m }; gone.forEach((i) => delete n2[i]); return n2; });
+      setSub(t.index);
+      say(`Kept this one · ${others.length} removed`, 2200);
+    } catch (e) {
+      say(errorText(e), 3000);
+    }
+  }
+
   /** Shift+C: Off → each subtitle → Off. */
   function cycleSubtitles() {
     if (!loadedTracks.length) return void toggleMainSubs();
@@ -568,7 +587,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     setOnlineBusy("search");
     try {
       const r = await api.subtitleOptions(id, subLang);
-      setOnline(r.results.slice(0, 8));
+      setOnline(sortSubs(r.results, prefs().subSort).slice(0, 8));
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -582,6 +601,7 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
     setOnlineBusy(s.sub.Id);
     try {
       const d = await api.subtitleDownload(id, s.sub.Id, subLang, LANG_WORDS[subLang]?.filter((w) => w.length === 3) ?? [subLang], s.sub.Format ?? null);
+      markSubGot(id, s.sub.Id);
       const done = (pick: number) => {
         setSub(pick);
         say(`Subtitles on (match ${s.score})`);
@@ -819,6 +839,9 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
                       <span className="p-opt-check">{sub === t.index ? <Icon name="check" size={14} /> : loadingSubs.has(t.index) ? <span className="spinner small-spin" /> : null}</span>
                       <span className="ellipsis grow">{t.title}</span>
                       {t.default && <span className="small muted">Default</span>}
+                      {sub === t.index && t.path && !status?.readOnly && tracks.some((x) => x.index !== t.index && x.path && (x.language || "").slice(0, 2).toLowerCase() === (t.language || "").slice(0, 2).toLowerCase()) && (
+                        <button className="p-keep" title="This subtitle is right: remove the other subtitle files in this language" onClick={(e) => { e.stopPropagation(); void keepOnly(t); }}><Icon name="check" size={12} /> This one is right</button>
+                      )}
                       {!subUrls[t.index] && !loadingSubs.has(t.index) && <span className="small warn">Not loaded</span>}
                       {t.path && !status?.readOnly && (
                         <button className="p-sub-x" aria-label={`Remove ${t.title}`} title="Remove this subtitle file (it goes to the trash; can be undone in History)" onClick={(e) => { e.stopPropagation(); void removeTrack(t); }}><Icon name="x" size={12} /></button>
@@ -831,12 +854,20 @@ export default function Player({ id, onClose, status, onNext }: { id: string; on
                 ) : (
                   <>
                     {online.length === 0 && <div className="small muted">Nothing found online.</div>}
-                    {online.length > 0 && <div className="small muted p-sub-head">Online (best {Math.min(6, online.length)})</div>}
+                    {online.length > 0 && (
+                      <div className="small muted p-sub-head row">
+                        <span className="grow">Online</span>
+                        <button className={`link small ${p.subSort === "downloads" ? "strong" : ""}`} onClick={() => { setPrefs({ subSort: "downloads" }); setOnline(sortSubs(online, "downloads")); }}>Most downloaded</button>
+                        <button className={`link small ${p.subSort === "match" ? "strong" : ""}`} onClick={() => { setPrefs({ subSort: "match" }); setOnline(sortSubs(online, "match")); }}>Best match</button>
+                      </div>
+                    )}
                     <div className="p-sub-list">
                       {online.slice(0, 6).map((o) => (
                         <button key={o.sub.Id} className="p-opt" disabled={!!onlineBusy || status?.readOnly} onClick={() => void downloadOnline(o)} title={o.sub.Name}>
-                          <span className="p-opt-check"><Icon name="download" size={14} /></span>
+                          <span className="p-opt-check">{gotSub(p, id, o.sub.Id) ? <Icon name="check" size={14} /> : <Icon name="download" size={14} />}</span>
                           <span className="ellipsis grow">{o.sub.Name}</span>
+                          {gotSub(p, id, o.sub.Id) && <span className="small ok">Downloaded</span>}
+                          {o.sub.DownloadCount != null && <span className="small muted">{o.sub.DownloadCount.toLocaleString()}×</span>}
                           <span className={`small strong ${o.score >= 85 ? "ok" : o.score >= 60 ? "warn" : "bad"}`}>{onlineBusy === o.sub.Id ? "…" : `${o.score}${o.score === 100 ? " · Best" : ""}`}</span>
                         </button>
                       ))}

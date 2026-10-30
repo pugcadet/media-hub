@@ -122,6 +122,22 @@ async fn health_rows(app: &AppHandle, state: &AppState) -> Result<Vec<HealthRow>
     crate::cancel::begin("health");
     progress(app, 0, 3, "Reading shows and movies");
     let c = state.reader().await?;
+    // Both lists are asked for at once (they don't depend on each other).
+    let main_lang = state.settings()?.sub_langs.first().cloned().unwrap_or_else(|| "eng".into());
+    let c2 = c.clone();
+    let subs_task = tauri::async_runtime::spawn(async move {
+        c2.items_query(
+            vec![
+                ("IncludeItemTypes", "Episode,Movie".into()),
+                ("Recursive", "true".into()),
+                ("Fields", "SeriesId,MediaStreams".into()),
+                ("EnableImages", "false".into()),
+                ("EnableUserData", "false".into()),
+            ],
+            100_000,
+        )
+        .await
+    });
     let titles = c
         .items_query(
             vec![
@@ -138,20 +154,11 @@ async fn health_rows(app: &AppHandle, state: &AppState) -> Result<Vec<HealthRow>
     crate::cancel::check("health")?;
     progress(app, 1, 3, "Finding videos without subtitles in your language");
     // Counted for your first subtitle language; subtitles inside the video file count too.
-    let main_lang = state.settings()?.sub_langs.first().cloned().unwrap_or_else(|| "eng".into());
     let codes = crate::sub_cmds::lang_aliases(&main_lang);
-    let no_subs: Vec<serde_json::Value> = c
-        .items_query(
-            vec![
-                ("IncludeItemTypes", "Episode,Movie".into()),
-                ("Recursive", "true".into()),
-                ("Fields", "SeriesId,MediaStreams".into()),
-                ("EnableImages", "false".into()),
-                ("EnableUserData", "false".into()),
-            ],
-            100_000,
-        )
+    let no_subs: Vec<serde_json::Value> = subs_task
         .await
+        .ok()
+        .and_then(|r| r.ok())
         .unwrap_or_default()
         .into_iter()
         .filter(|v| !crate::sub_cmds::has_language(v, &codes))

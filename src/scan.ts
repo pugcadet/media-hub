@@ -207,27 +207,21 @@ export async function scanEverything(status: Status, opts: { force?: boolean } =
       await api.namingCheck(args[0], args[1], ids, args[2], args[3]);
     });
 
-    // 3. Missing episodes: changed shows, shows never checked, everything once a week.
-    next("Missing episodes");
-    await attempt("missing", async () => {
-      const saved = readSaved<Record<string, MissingReport | string>>("missing");
-      const cache = { ...(saved?.data ?? {}) };
-      const ignored = new Set(prefs().missingIgnored);
-      const shows = h.rows.filter((r) => r.kind === "series" && !ignored.has(r.id));
-      const weekly = stale(saved?.at);
-      const todo = shows.filter((r) => weekly || opts.force || changed.includes(r.id) || !(r.id in cache));
-      for (const [i, s] of todo.entries()) {
-        if (job.cancelled) break;
-        job.update(`Missing episodes · ${s.name}`, (step - 1 + i / Math.max(1, todo.length)) / steps);
-        try {
-          cache[s.id] = await api.missingEpisodes(s.id);
-        } catch (e) {
-          cache[s.id] = errorText(e);
+    // The rest in two lanes at once: what only asks Jellyfin/TMDB, and what reads the disk
+    // (the disk lane goes one step at a time, so the share and Finder keep up).
+    let parts_done = 0;
+    const lanePart = (label: string) => { parts_done++; job.update(label, (2 + parts_done) / steps); };
+
+    // A few shows at a time.
+    const pool = async <T,>(list: T[], n: number, f: (x: T, i: number) => Promise<void>) => {
+      let k = 0;
+      await Promise.all(Array.from({ length: Math.min(n, list.length) }, async () => {
+        while (k < list.length && !job.cancelled) {
+          const i = k++;
+          await f(list[i], i);
         }
-      }
-      const at = writeSaved("missing", cache).at;
-      savePart("missing", missingSummary(cache, at));
-    });
+      }));
+    };
 
     // 4–6. Whole-library checks: again only when something changed (or once a week).
     const whole = async (name: "duplicates" | "folders" | "storage", f: () => Promise<void>) => {
@@ -237,43 +231,70 @@ export async function scanEverything(status: Status, opts: { force?: boolean } =
       }
       await attempt(name, f);
     };
-    next("Duplicates");
-    await whole("duplicates", async () => {
-      const g = await api.findDuplicates();
-      const s = writeSaved("duplicates", g);
-      savePart("duplicates", duplicatesSummary(g, s.at));
-    });
-    next("Folders");
-    await whole("folders", async () => {
-      if (!status.libraryRoot) throw new Error("no library folder chosen");
-      const t = await api.structureScan();
-      const s = writeSaved("structure", t);
-      savePart("folders", foldersSummary(t, s.at));
-    });
-    next("Storage");
-    await whole("storage", async () => {
-      savePart("storage", storageSummary(await api.storageOverview(status.subLangs)));
-    });
 
-    // 7. Intro markers: shows not known yet, plus changed shows read again.
-    next("Intros and credits");
-    await attempt("intros", async () => {
-      const series = h.rows.filter((r) => r.kind === "series");
-      for (const id of changed.filter((id) => series.some((r) => r.id === id))) {
-        if (job.cancelled) break;
-        await api.segmentSummary(id, true).catch(() => undefined);
-      }
-      const cov = await api.segmentCoverage(series.map((r) => r.id), true);
-      const known = Object.values(cov);
-      savePart("intros", { at: Date.now(), shows: series.length, known: known.length, withoutIntro: known.filter((c) => c.episodes > 0 && c.intro < c.episodes * 0.8).length });
-    });
+    const online = (async () => {
+      // 3. Missing episodes: changed shows, shows never checked, everything once a week.
+      await attempt("missing", async () => {
+        const saved = readSaved<Record<string, MissingReport | string>>("missing");
+        const cache = { ...(saved?.data ?? {}) };
+        const ignored = new Set(prefs().missingIgnored);
+        const shows = h.rows.filter((r) => r.kind === "series" && !ignored.has(r.id));
+        const weekly = stale(saved?.at);
+        const todo = shows.filter((r) => weekly || opts.force || changed.includes(r.id) || !(r.id in cache));
+        let n = 0;
+        await pool(todo, 4, async (sh) => {
+          try {
+            cache[sh.id] = await api.missingEpisodes(sh.id);
+          } catch (e) {
+            cache[sh.id] = errorText(e);
+          }
+          n++;
+          job.update(`Missing episodes · ${n} of ${todo.length}`, (2 + parts_done + n / Math.max(1, todo.length)) / steps);
+        });
+        const at = writeSaved("missing", cache).at;
+        savePart("missing", missingSummary(cache, at));
+      });
+      lanePart("Missing episodes checked");
+      await whole("duplicates", async () => {
+        const g = await api.findDuplicates();
+        const sv = writeSaved("duplicates", g);
+        savePart("duplicates", duplicatesSummary(g, sv.at));
+      });
+      lanePart("Duplicates checked");
+      // 7. Intro markers: shows not known yet, plus changed shows read again.
+      await attempt("intros", async () => {
+        const series = h.rows.filter((r) => r.kind === "series");
+        await pool(changed.filter((id) => series.some((r) => r.id === id)), 4, async (id) => {
+          await api.segmentSummary(id, true).catch(() => undefined);
+        });
+        const cov = await api.segmentCoverage(series.map((r) => r.id), true);
+        const known = Object.values(cov);
+        savePart("intros", { at: Date.now(), shows: series.length, known: known.length, withoutIntro: known.filter((c) => c.episodes > 0 && c.intro < c.episodes * 0.8).length });
+      });
+      lanePart("Intro markers checked");
+      // 8. Episodes without a picture.
+      await attempt("pictures", async () => {
+        const eps = await api.episodesWithoutPicture();
+        savePart("pictures", { at: Date.now(), episodes: eps.length });
+      });
+      lanePart("Episode pictures checked");
+    })();
 
-    // 8. Episodes without a picture.
-    next("Episode pictures");
-    await attempt("pictures", async () => {
-      const eps = await api.episodesWithoutPicture();
-      savePart("pictures", { at: Date.now(), episodes: eps.length });
-    });
+    const disk = (async () => {
+      await whole("folders", async () => {
+        if (!status.libraryRoot) throw new Error("no library folder chosen");
+        const t = await api.structureScan();
+        const sv = writeSaved("structure", t);
+        savePart("folders", foldersSummary(t, sv.at));
+      });
+      lanePart("Folders checked");
+      await whole("storage", async () => {
+        savePart("storage", storageSummary(await api.storageOverview(status.subLangs)));
+      });
+      lanePart("Storage checked");
+    })();
+
+    await Promise.all([online, disk]);
 
     if (!job.cancelled) writeSaved("scan.sigs", sigs);
     job.update(out.problems.length ? `Done, ${out.problems.length} part${out.problems.length === 1 ? "" : "s"} failed` : "Done", 1);

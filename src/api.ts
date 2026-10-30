@@ -423,6 +423,13 @@ export interface LocalSub {
   linked: boolean;
 }
 
+/** Online subtitles, most downloaded first (or best match first). */
+export function sortSubs(list: ScoredSub[], by: "downloads" | "match"): ScoredSub[] {
+  return [...list].sort((a, b) => by === "match"
+    ? b.score - a.score || (b.sub.DownloadCount ?? 0) - (a.sub.DownloadCount ?? 0)
+    : (b.sub.DownloadCount ?? 0) - (a.sub.DownloadCount ?? 0) || b.score - a.score);
+}
+
 export interface SubOptions {
   file: string;
   current: SubStream[];
@@ -948,7 +955,7 @@ export const api = {
   setPlayed: (id: string, played: boolean) => invoke<void>("set_played", { id, played }),
   importPick: (folder: boolean) => invoke<ImportSource | null>("import_pick", { folder }),
   importRun: (dest: string, title: string, year: number | null, mode: "move" | "copy") =>
-    invoke<{ folder: string; moved: number; copied: number; skipped: string[] }>("import_run", { dest, title, year, mode }),
+    invoke<{ folder: string; moved: number; copied: number; skipped: string[]; trashed: boolean; keptBecause: string | null }>("import_run", { dest, title, year, mode }),
   clearResume: (id: string) => invoke<void>("clear_resume", { id }),
   inboxPick: () => invoke<string | null>("inbox_pick"),
   inboxList: () => invoke<[string | null, InboxEntry[]]>("inbox_list"),

@@ -3,7 +3,7 @@ import { api, cultures, Culture, errorText, LibraryLang, Status, Tuning, TuneRow
 import { askConfirm } from "./confirm";
 import { ToolsSettings } from "./Intros";
 import { UpdateSettings } from "./Updates";
-import type { View } from "./nav";
+import { nav, type View } from "./nav";
 import { ACCENTS, DEFAULT_PREFS, setPrefs, usePrefs } from "./prefs";
 import { SubStyleEditor } from "./Player";
 import { FolderPicker } from "./Picks";
@@ -297,12 +297,12 @@ function LookSettings() {
         {p.accent !== DEFAULT_PREFS.accent && <button className="link small" onClick={() => setPrefs({ accent: DEFAULT_PREFS.accent })}>Reset</button>}
       </div>
       <p className="muted small">Status colours don't change: green is fine, amber needs a look, red is a problem.</p>
-      <label className="wide-label">Size of everything · {Math.round((p.uiScale || 1) * 100)}%
+      <label className="wide-label">Size of everything · {Math.round((p.uiScale || 0.9) * 100)}%
         <div className="row">
           <button className="icon-btn" onClick={() => setPrefs({ uiScale: Math.max(0.75, Math.round((p.uiScale - 0.05) * 100) / 100) })} aria-label="Smaller">−</button>
-          <input type="range" min={0.75} max={1.4} step={0.05} value={p.uiScale || 1} onChange={(e) => setPrefs({ uiScale: Number(e.target.value) })} className="grow" />
+          <input type="range" min={0.75} max={1.4} step={0.05} value={p.uiScale || 0.9} onChange={(e) => setPrefs({ uiScale: Number(e.target.value) })} className="grow" />
           <button className="icon-btn" onClick={() => setPrefs({ uiScale: Math.min(1.4, Math.round((p.uiScale + 0.05) * 100) / 100) })} aria-label="Bigger">+</button>
-          <button className="link small" onClick={() => setPrefs({ uiScale: 1 })}>Reset</button>
+          <button className="link small" onClick={() => setPrefs({ uiScale: 0.9 })}>Reset</button>
         </div>
         <span className="muted small">Shortcut: ⌘+ and ⌘− (⌘0 for normal).</span>
       </label>
@@ -551,6 +551,8 @@ function BackendSettings({ status }: { status: Status }) {
       {error && <p className="error">{error}</p>}
       {!canEdit && <p className="note">Changing Jellyfin's settings needs changes switched on (above).</p>}
 
+      <KeepInPlace t={t} canEdit={canEdit} onChanged={load} />
+
       <div className="strong small">Your edits stay</div>
       <Switch checked={t?.lockEdits ?? true} onChange={(v) => void api.setLockEdits(v).then(load)}>
         Lock a title once I change its details or pictures, so Jellyfin's own refreshes never undo it (Refresh from internet and Identify unlock it again)
@@ -730,5 +732,42 @@ function ProblemsLog() {
         ))}
       </div>
     </Section>
+  );
+}
+
+/**
+ * "Keep it like this everywhere": the three things that make Jellyfin and Infuse show your
+ * library the same way, now and after a reset. Names Jellyfin and Infuse both read, your
+ * edits locked in Jellyfin, and details and pictures saved next to the video files (Infuse
+ * reads those .nfo files too when it opens the share directly).
+ */
+function KeepInPlace({ t, canEdit, onChanged }: { t: { rows: TuneRow[]; lockEdits: boolean } | null; canEdit: boolean; onChanged: () => void }) {
+  const [names, setNames] = useState<number | null>(null);
+  useEffect(() => {
+    api.namingCheckLast().then((r) => setNames(r ? r.rows.filter((x) => x.toRename + x.folders > 0).length : null)).catch(() => setNames(null));
+  }, []);
+  const files = t?.rows.filter((r) => r.scope === "library" && (r.key === "SaveLocalMetadata" || r.key === "MetadataSavers")) ?? [];
+  const filesOk = !!t && files.every((r) => r.ok);
+  const row = (ok: boolean | null, title: string, hint: string, action?: ReactNode) => (
+    <div className={`keep-row ${ok === null ? "" : ok ? "ok" : "warn"}`}>
+      <span className="keep-mark">{ok === null ? "–" : ok ? <Icon name="check" size={14} /> : "!"}</span>
+      <div className="grow"><div className="strong small">{title}</div><div className="muted small">{hint}</div></div>
+      {action}
+    </div>
+  );
+  return (
+    <div className="keep card-inner stack-s">
+      <div className="strong">Keep it like this everywhere</div>
+      <div className="muted small">So Jellyfin and Infuse show the same names, details and pictures, also after Jellyfin is reset or Infuse reads the folders directly.</div>
+      {row(names === null ? null : names === 0, "Names Jellyfin and Infuse both read", names === null ? "Not checked yet." : names === 0 ? "Every file and folder follows the standard names." : `${names} title${names === 1 ? "" : "s"} still have names to fix.`,
+        names !== 0 && <button onClick={() => nav.route({ view: "renamer" })}>Open the Renamer</button>)}
+      {row(t ? t.lockEdits : null, "Your edits are locked in Jellyfin", "Jellyfin's own refreshes never undo what you changed.",
+        t && !t.lockEdits && <button disabled={!canEdit} onClick={() => void api.setLockEdits(true).then(onChanged)}>Turn on</button>)}
+      {row(t ? filesOk : null, "Details and pictures saved next to the files", "Jellyfin writes .nfo files and pictures beside each video. They survive a reset, and Infuse uses them when it opens the share directly.",
+        t && !filesOk && <button className="primary" disabled={!canEdit} onClick={() => void track("Saving details next to the files", async () => {
+          for (const r of files.filter((x) => !x.ok)) await api.backendSet(r.scope, r.target, r.key, r.recommended);
+        }).then(onChanged).catch(() => undefined)}>Turn on</button>)}
+      {t && filesOk && <div className="muted small">Titles get their files the next time Jellyfin refreshes them or you edit them here.</div>}
+    </div>
   );
 }

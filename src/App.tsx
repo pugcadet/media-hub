@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, Attention, errorText, Library as Lib, Status } from "./api";
 import Setup from "./Setup";
 import LibraryView from "./LibraryView";
@@ -44,7 +45,14 @@ export default function App() {
   // Always open on the media manager's Home.
   useEffect(() => { if (prefs().mode !== "manage") setPrefs({ mode: "manage" }); }, []);
   // Size of the whole interface (Settings → Look, or ⌘+ / ⌘− / ⌘0).
-  useEffect(() => { (document.getElementById("root") as HTMLElement | null)?.style.setProperty("zoom", String(uiScale || 1)); }, [uiScale]);
+  // The window's own zoom (like ⌘− in a browser), so clicks and the mouse line up everywhere.
+  useEffect(() => {
+    const f = uiScale || 0.9;
+    const root = document.getElementById("root") as HTMLElement | null;
+    getCurrentWebview().setZoom(f)
+      .then(() => root?.style.removeProperty("zoom"))
+      .catch(() => root?.style.setProperty("zoom", String(f)));
+  }, [uiScale]);
 
   // Back and forward through the screens and titles you visited.
   const hist = useRef<{ r: Route; s: Open[] }[]>([]);
@@ -138,7 +146,7 @@ export default function App() {
       else if ((e.metaKey || e.ctrlKey) && e.key === "]") { e.preventDefault(); travel(1); }
       else if ((e.metaKey || e.ctrlKey) && (e.key === "=" || e.key === "+")) { e.preventDefault(); setPrefs((p) => ({ uiScale: Math.min(1.4, Math.round((p.uiScale + 0.05) * 100) / 100) })); }
       else if ((e.metaKey || e.ctrlKey) && e.key === "-") { e.preventDefault(); setPrefs((p) => ({ uiScale: Math.max(0.75, Math.round((p.uiScale - 0.05) * 100) / 100) })); }
-      else if ((e.metaKey || e.ctrlKey) && e.key === "0") { e.preventDefault(); setPrefs({ uiScale: 1 }); }
+      else if ((e.metaKey || e.ctrlKey) && e.key === "0") { e.preventDefault(); setPrefs({ uiScale: 0.9 }); }
       else if (!typing && e.altKey && e.key === "ArrowLeft") { e.preventDefault(); travel(-1); }
       else if (!typing && e.altKey && e.key === "ArrowRight") { e.preventDefault(); travel(1); }
     };
@@ -268,7 +276,7 @@ export default function App() {
         page = <AddMedia status={status} onChanged={refresh} />;
         break;
       case "renamer":
-        page = <Renamer key={`${route.folder ?? ""}-${route.item ?? ""}`} status={status} onChanged={refresh} onNav={navTo} start={route.folder !== undefined || route.item ? { folder: route.folder, item: route.item } : undefined} />;
+        page = <Renamer key={`${route.folder ?? ""}-${route.item ?? ""}-${route.section ?? ""}`} status={status} onChanged={refresh} onNav={navTo} start={route.folder !== undefined || route.item || route.section ? { folder: route.folder, item: route.item, section: route.section } : undefined} />;
         break;
       case "subtitles":
         page = <SubtitlesTool status={status} onOpen={(id) => open(id)} />;

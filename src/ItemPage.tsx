@@ -870,8 +870,34 @@ function ArtSearch({ id, kind, label, wide, canEdit, busy, title, onUse }: { id:
 
 /** Season posters (S1, S2 …): what each season has, pick per season or fill them all. */
 function SeasonArt({ seasons, canEdit }: { seasons: JfItem[]; canEdit: boolean }) {
+  const [over, setOver] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   if (!seasons.length) return null;
-  const pick = (s: JfItem) => void askArt(s.Id, cleanTitle(s.Name), ["Primary", "Backdrop", "Thumb"]).then((c) => c && track(`Artwork for ${s.Name}`, () => applyArt(s.Id, c).then(() => undefined), { items: [s.Id, s.SeriesId] }).catch(() => undefined));
+  const items = (s: JfItem) => [s.Id, s.SeriesId];
+  const name = (s: JfItem) => cleanTitle(s.Name);
+  const pick = (s: JfItem) => void askArt(s.Id, name(s), ["Primary", "Backdrop", "Thumb"]).then((c) => c && track(`Artwork for ${s.Name}`, () => applyArt(s.Id, c).then(() => undefined), { items: items(s) }).catch(() => undefined));
+  const upload = (s: JfItem) => void track(`Poster for ${s.Name}`, () => api.uploadImageFile(s.Id, "Primary").then(() => undefined), { items: items(s) }).catch((e) => setError(errorText(e)));
+  // The show's own posters (often the ones that fit best when the season has none online).
+  const fromShow = (s: JfItem) => s.SeriesId && void askArt(s.SeriesId, `${name(s)} (the show's posters)`, ["Primary"]).then((c) => c && track(`Poster for ${s.Name}`, () => applyArt(s.Id, c).then(() => undefined), { items: items(s) }).catch((e) => setError(errorText(e))));
+  const drop = async (s: JfItem, dt: DataTransfer) => {
+    const file = [...dt.files].find((f) => f.type.startsWith("image/"));
+    if (!file) {
+      const url = (dt.getData("text/uri-list") || dt.getData("text/plain") || "").split("\n")[0].trim();
+      if (/^https:\/\//i.test(url)) return void track(`Poster for ${s.Name}`, () => api.setImageFromLink(s.Id, "Primary", url), { items: items(s) }).catch((e) => setError(errorText(e)));
+      return setError("Drop a picture file or a picture from a web page.");
+    }
+    if (file.size > 20 * 1024 * 1024) return setError("That picture is larger than 20 MB.");
+    const data = await new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(file); });
+    const out = await askCrop(name(s), "Primary", [{ label: file.name, src: data }]);
+    if (out) void track(`Poster for ${s.Name}`, () => api.uploadImageBytes(s.Id, "Primary", out, "dropped"), { items: items(s) }).catch((e) => setError(errorText(e)));
+  };
+  const menu = (e: React.MouseEvent, s: JfItem) => openMenu(e, [
+    { label: "Pick one online…", run: () => pick(s) },
+    { label: "Upload your own picture…", run: () => upload(s) },
+    ...(s.SeriesId ? [{ label: "Use one of the show's posters…", run: () => fromShow(s) }] : []),
+    { sep: true },
+    { label: "Open the season", run: () => nav.open(s.Id, { tab: "art" }) },
+  ]);
   const fillAll = () => void track("Artwork for every season", async (job) => {
     for (const [i, s] of seasons.entries()) {
       if (job.cancelled) break;
@@ -885,12 +911,18 @@ function SeasonArt({ seasons, canEdit }: { seasons: JfItem[]; canEdit: boolean }
         <h2><Icon name="stack" /> Season artwork</h2>
         <button disabled={!canEdit} onClick={fillAll}><Icon name="wand" /> Fill in for every season</button>
       </div>
+      <p className="muted small">Click a season to pick one online, upload your own or use one of the show's posters. You can also drop a picture on it.</p>
+      {error && <p className="error small">{error}</p>}
       <div className="season-art">
         {seasons.map((s) => {
           const has = !!s.ImageTags?.Primary;
           return (
-            <button key={s.Id} className={`season-art-card ${has ? "" : "missing"}`} disabled={!canEdit} onClick={() => pick(s)} title={has ? "Change" : "Missing: pick one"}>
-              <div className="art">{has ? <img src={imageUrl(s.Id, "Primary", 240, 0, s.ImageTags!.Primary)} alt="" loading="lazy" /> : <div className="noart small">{cleanTitle(s.Name)}</div>}</div>
+            <button key={s.Id} className={`season-art-card ${has ? "" : "missing"} ${over === s.Id ? "drop" : ""}`} disabled={!canEdit}
+              onClick={(e) => menu(e, s)} onContextMenu={(e) => menu(e, s)}
+              onDragOver={(e) => { e.preventDefault(); setOver(s.Id); }} onDragLeave={() => setOver(null)}
+              onDrop={(e) => { e.preventDefault(); setOver(null); setError(null); void drop(s, e.dataTransfer); }}
+              title={has ? "Change" : "Missing: add one"}>
+              <div className="art">{has ? <img src={imageUrl(s.Id, "Primary", 240, 0, s.ImageTags!.Primary)} alt="" loading="lazy" /> : <div className="noart small">{name(s)}</div>}</div>
               <span className="small strong">{(s.IndexNumber ?? 0) === 0 ? "Specials" : `S${s.IndexNumber}`}</span>
               <span className="small muted">{has ? "Poster ✓" : "No poster"}</span>
             </button>

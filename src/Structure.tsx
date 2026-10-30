@@ -71,7 +71,8 @@ export default function Structure({ status }: { status: Status }) {
         if (rep.failed.length) throw `${rep.done} moved; ${rep.failed.length} failed: ${rep.failed[0]}`;
         job.update(`${rep.done} moved`, 1);
       });
-      await scan();
+      // Let the share settle before reading the folders again.
+      window.setTimeout(() => void scan(), 4000);
     } catch (e) {
       setError(errorText(e));
     } finally {

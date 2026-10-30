@@ -2107,3 +2107,24 @@ button.proc-row.on { background: var(--accent-soft); }
 .m-bar.empty { display: none; }
 .music .w-top .w-search { flex: 0 1 260px; min-width: 140px; }
 @media (max-width: 1250px) { .m-tabs button svg { display: none; } .m-tabs button { padding: 0 8px; } .music .w-top { gap: 10px; } }
+
+/* renamer: a clicked summary chip highlights its files */
+.change-summary .chip { cursor: pointer; }
+.change.hl { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.change.dim { opacity: .38; }
+.subrow.got { opacity: .8; }
+.sub-got { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; }
+.p-keep { border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent-on); font-size: 12px; padding: 3px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.p-sub-head.row { align-items: center; gap: 10px; }
+
+/* Library: the list and the details fill what's left of the window (an older fixed height made
+   the bottom unreachable); each column scrolls on its own. */
+.pg.studio-page.lib-page > .studio { flex: 1 1 auto; height: auto; min-height: 0; }
+.pg.studio-page { padding-bottom: 16px; }
+.studio-pane { overflow-y: auto; }
+.season-art-card.drop { outline: 2px dashed var(--accent); outline-offset: 2px; }
+.keep { padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel2, rgba(255,255,255,.03)); margin-bottom: 14px; }
+.keep-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+.keep-mark { width: 24px; height: 24px; flex: 0 0 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; background: var(--panel); color: var(--muted); }
+.keep-row.ok .keep-mark { background: rgba(34,197,94,.18); color: #4ade80; }
+.keep-row.warn .keep-mark { background: rgba(245,158,11,.18); color: #fbbf24; }

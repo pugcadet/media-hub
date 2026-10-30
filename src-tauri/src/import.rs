@@ -51,6 +51,10 @@ pub struct ImportDone {
     moved: usize,
     copied: usize,
     skipped: Vec<String>,
+    /// The original went to the system Trash (only after a move where everything arrived).
+    trashed: bool,
+    /// Why the original was left where it was, when it was.
+    kept_because: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -183,6 +187,60 @@ pub fn folder_name(title: &str, year: Option<i32>) -> Result<String> {
     }))
 }
 
+/// Whether what was added may go to the Trash afterwards. Only when every file arrived (same
+/// size), and only when it's clearly just this download: never a top folder like Downloads,
+/// never the library, and not when much else is left in it.
+fn trash_check(src: &Path, root: &Path, info: &ImportSource, all_ok: bool, target: &Path) -> std::result::Result<(), String> {
+    if !all_ok {
+        return Err("not everything was added".into());
+    }
+    if !src.exists() {
+        return Err("it's already gone".into());
+    }
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let (s, r) = (canon(src), canon(root));
+    if r.starts_with(&s) || s == r {
+        return Err("it holds your library".into());
+    }
+    let name = s.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+    const TOP: &[&str] = &["downloads", "desktop", "documents", "movies", "music", "videos", "pictures", "volumes", "users", "home", "media", "torrents", "complete", "incoming"];
+    if s.components().count() <= 3 || TOP.contains(&name.as_str()) || dirs_home().map(|h| h == s).unwrap_or(false) {
+        return Err("it's a main folder, not one download".into());
+    }
+    // Every added file must be there in full.
+    for f in &info.files {
+        let to = target.join(&f.rel);
+        let size = std::fs::metadata(&to).map(|m| m.len()).unwrap_or(u64::MAX);
+        if size != f.size {
+            return Err(format!("{} didn't arrive in full", f.rel));
+        }
+    }
+    // What else is left in the folder must be small (samples, .nfo, .txt …).
+    if s.is_dir() {
+        let mut left = 0u64;
+        let mut stack = vec![s.clone()];
+        let mut n = 0;
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).map_err(|e| e.to_string())?.flatten() {
+                n += 1;
+                if n > 5000 {
+                    return Err("there's a lot more in that folder".into());
+                }
+                let Ok(md) = e.metadata() else { continue };
+                if md.is_dir() { stack.push(e.path()); } else { left += md.len(); }
+            }
+        }
+        if left > 300 * 1024 * 1024 {
+            return Err("there's more in that folder than what was added".into());
+        }
+    }
+    Ok(())
+}
+
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
+}
+
 fn copy_with_progress(app: &AppHandle, from: &Path, to: &Path, done: &mut u64, total: u64, label: &str) -> Result<()> {
     let mut src = std::fs::File::open(from)?;
     // Write to a temporary name first, so a half copy never looks like a finished file.
@@ -289,7 +347,19 @@ pub async fn import_run(app: AppHandle, state: State<'_, AppState>, dest: String
             }
         }
         let _ = app2.emit("import-progress", Progress { done: total, total, file: String::new() });
-        Ok(ImportDone { folder: rel_folder, moved, copied, skipped })
+        // A move leaves the rest behind (and everything, when it had to copy to another disk):
+        // that goes to the system Trash, from where it can be put back.
+        let (mut trashed, mut kept_because) = (false, None);
+        if move_files {
+            match trash_check(&src, &root, &info, skipped.is_empty(), &target) {
+                Ok(()) => match trash::delete(&src) {
+                    Ok(()) => trashed = true,
+                    Err(e) => kept_because = Some(format!("it couldn't be moved to the Trash ({e})")),
+                },
+                Err(why) => kept_because = Some(why),
+            }
+        }
+        Ok(ImportDone { folder: rel_folder, moved, copied, skipped, trashed, kept_because })
     })
     .await
 }

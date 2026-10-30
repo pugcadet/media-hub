@@ -130,18 +130,21 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
           job.update(e.payload.file ? `Putting ${e.payload.file} in place` : "Files in place", e.payload.total ? e.payload.done / e.payload.total : null),
         );
         let folder: string;
+        let trashNote = "";
         try {
           const r = await api.importRun(dest, name, y, mode);
           folder = r.folder;
           if (r.skipped.length) job.update(`${r.skipped.length} skipped: ${r.skipped[0]}`);
-          if (mode === "move" && r.copied > 0) job.update(`Copied ${r.copied} file(s) to the NAS; the originals are still where they were.`);
+          if (r.trashed) job.update("The original is in the Trash (you can put it back from there).");
+          else if (mode === "move" && r.keptBecause) job.update(`The original stays where it was: ${r.keptBecause}.`);
+          trashNote = r.trashed ? " The original went to the Trash." : mode === "move" && r.keptBecause ? ` The original stays where it was (${r.keptBecause}).` : "";
         } finally {
           un();
         }
         if (kind === "music") {
           job.update("Asking Jellyfin to scan", null);
           await api.scanFolders([folder]).catch(() => undefined);
-          setDone(`Added to ${folder}. Jellyfin adds it to your music after its scan.`);
+          setDone(`Added to ${folder}. Jellyfin adds it to your music after its scan.${trashNote}`);
           return;
         }
         // Name the files inside, like the renamer would. Only names it's sure about are
@@ -168,7 +171,7 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
           found = hits.find((h) => h.name.toLowerCase().replace(/\s*\(\d{4}\)$/, "") === name.toLowerCase() && (!y || !h.year || h.year === y))?.id ?? hits[0]?.id ?? null;
         }
         if (!found) {
-          setDone(`Added to ${folder}. Jellyfin hasn't listed it yet; it will appear after its next scan.`);
+          setDone(`Added to ${folder}. Jellyfin hasn't listed it yet; it will appear after its next scan.${trashNote}`);
           return;
         }
         if (!status.readOnly) {
@@ -298,7 +301,7 @@ export default function AddMedia({ status, onChanged }: { status: Status; onChan
             </label>
             <label>How
               <select value={mode} onChange={(e) => setMode(e.target.value as "move" | "copy")}>
-                <option value="move">Move (copies when it's on another drive)</option>
+                <option value="move">Move (the rest goes to the Trash)</option>
                 <option value="copy">Copy, keep the original</option>
               </select>
             </label>

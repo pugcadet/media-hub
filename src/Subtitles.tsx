@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, AutoResult, codesFor, cultures, Culture, errorText, JfChild, languageName, LocalSub, SubOptions } from "./api";
+import { api, AutoResult, codesFor, cultures, Culture, errorText, JfChild, languageName, LocalSub, sortSubs, SubOptions } from "./api";
 import { track } from "./activity";
-import { prefs, setPrefs, subSkipped } from "./prefs";
+import { gotSub, markSubGot, prefs, setPrefs, subSkipped, usePrefs } from "./prefs";
+import { Seg } from "./kit";
 import { Icon, SettingsLink } from "./ui";
 import { askConfirm } from "./confirm";
 
@@ -36,6 +37,7 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [local, setLocal] = useState<LocalSub[]>([]);
+  const p = usePrefs();
 
   async function load() {
     setOpts(null);
@@ -76,6 +78,7 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
     try {
       const fmt = opts?.results.find((r) => r.sub.Id === subId)?.sub.Format ?? null;
       const d = await track("Downloading subtitle", () => api.subtitleDownload(id, subId, lang, codesFor(lang, list), fmt));
+      markSubGot(id, subId);
       setNote(d.file
         ? `Saved next to the video as ${d.file.split(/[\\/]/).pop()}. Jellyfin picks it up on its next look at the folder; you can undo it under Changes made here.`
         : d.index != null
@@ -151,9 +154,15 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
       {note && <p className="note">{note}</p>}
       {!opts && !error && <p className="muted">Searching…</p>}
       {opts && opts.results.length === 0 && <p className="muted">No subtitles found in this language.</p>}
+      {opts && opts.results.length > 1 && (
+        <div className="row">
+          <span className="muted small">Sort</span>
+          <Seg value={p.subSort} onChange={(v) => setPrefs({ subSort: v })} options={[{ id: "downloads", label: "Most downloaded" }, { id: "match", label: "Best match" }]} />
+        </div>
+      )}
       <div className="table">
-        {opts?.results.map((r) => (
-          <div className="op subrow" key={r.sub.Id}>
+        {opts && sortSubs(opts.results, p.subSort).map((r) => (
+          <div className={`op subrow ${gotSub(p, id, r.sub.Id) ? "got" : ""}`} key={r.sub.Id}>
             <span className={`score ${scoreClass(r.score)}`} title="Match score">{r.score}</span>
             <div className="names">
               <div className="mono">{r.sub.Name}</div>
@@ -164,7 +173,8 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
                 {r.reasons.length ? ` · ${r.reasons.join(", ")}` : ""}
               </div>
             </div>
-            <button disabled={!canEdit || !!busy} onClick={() => void download(r.sub.Id!)}>{busy === r.sub.Id ? "…" : "Download"}</button>
+            {gotSub(p, id, r.sub.Id) && <span className="ok small strong sub-got" title="You downloaded this one before"><Icon name="check" size={14} /> Downloaded</span>}
+            <button disabled={!canEdit || !!busy} onClick={() => void download(r.sub.Id!)}>{busy === r.sub.Id ? "…" : gotSub(p, id, r.sub.Id) ? "Again" : "Download"}</button>
           </div>
         ))}
       </div>

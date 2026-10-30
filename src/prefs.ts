@@ -117,6 +117,10 @@ export interface Prefs {
   playerMenu: string[];
   /** Order of the music tabs. */
   musicTabs: string[];
+  /** Subtitles already downloaded per video ("id" → subtitle ids), so they aren't fetched twice. */
+  subGot: Record<string, string[]>;
+  /** How online subtitles are sorted. */
+  subSort: "downloads" | "match";
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -152,7 +156,7 @@ export const DEFAULT_PREFS: Prefs = {
   folderTabs: {},
   tidy: "messy",
   sidebarSmall: false,
-  uiScale: 1,
+  uiScale: 0.9,
   libraryView: "list",
   tileSize: 150,
   detectIntro: true,
@@ -162,6 +166,8 @@ export const DEFAULT_PREFS: Prefs = {
   checksOff: {},
   playerMenu: [],
   musicTabs: [],
+  subGot: {},
+  subSort: "downloads",
 };
 
 /** Ready-made highlight colours for Settings → Look. */
@@ -225,6 +231,8 @@ function load(): Prefs {
       checksOff: p.checksOff ?? {},
       playerMenu: p.playerMenu ?? [],
       musicTabs: p.musicTabs ?? [],
+      subGot: p.subGot ?? {},
+      subSort: p.subSort ?? "downloads",
     };
   } catch {
     return DEFAULT_PREFS;
@@ -371,4 +379,24 @@ export function moveFolder(all: string[], name: string, before: string | null): 
   if (i < 0) cur.push(name);
   else cur.splice(i, 0, name);
   setPrefs({ folderOrder: cur });
+}
+
+const cleanSubKey = (id: string) => id.replace(/-/g, "").toLowerCase();
+
+/** Remembers a downloaded subtitle (the last 3000 videos are kept). */
+export function markSubGot(itemId: string, subId: string): void {
+  setPrefs((p) => {
+    const k = cleanSubKey(itemId);
+    const cur = p.subGot[k] ?? [];
+    if (cur.includes(subId)) return {};
+    const next: Record<string, string[]> = { ...p.subGot, [k]: [...cur, subId] };
+    const keys = Object.keys(next);
+    if (keys.length > 3000) delete next[keys[0]];
+    return { subGot: next };
+  });
+}
+
+/** Whether this subtitle was downloaded for this video before. */
+export function gotSub(p: Prefs, itemId: string, subId: string | undefined): boolean {
+  return !!subId && (p.subGot[cleanSubKey(itemId)] ?? []).includes(subId);
 }

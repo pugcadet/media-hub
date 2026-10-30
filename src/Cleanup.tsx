@@ -2,13 +2,12 @@
 // storage, episode pictures). Click a block to see the details and fix them below it.
 import { useEffect, useState } from "react";
 import { api, errorText, ImageKind, Status } from "./api";
-import type { View } from "./nav";
+import { nav, type View } from "./nav";
 import { track } from "./activity";
 import { Icon } from "./ui";
 import Duplicates from "./Duplicates";
 import Missing from "./Missing";
 import Storage from "./Storage";
-import Structure from "./Structure";
 import { cleanupBlocks } from "./Dashboard";
 import { KTabs, PageHead } from "./kit";
 import { savePart, scanEverything, useScanSummary } from "./scan";
@@ -16,12 +15,13 @@ import { rankImages } from "./ArtPicker";
 import { usePageState } from "./saved";
 
 export type CleanupTab = "duplicates" | "missing" | "folders" | "storage" | "pictures";
-const TABS: CleanupTab[] = ["duplicates", "missing", "folders", "storage", "pictures"];
+// Folder tidying lives in the Renamer (Renamer → Folders).
+const TABS: CleanupTab[] = ["duplicates", "missing", "storage", "pictures"];
 const asTab = (t?: string): CleanupTab | "" => (TABS.includes(t as CleanupTab) ? (t as CleanupTab) : "");
 
 export default function Cleanup({ status, tab, onNav }: { status: Status; tab?: string; onNav: (v: View) => void }) {
   const [saved, setSaved] = usePageState<CleanupTab | "">("cleanup.open", "");
-  const [t, setT] = useState<CleanupTab>(asTab(tab) || saved || "duplicates");
+  const [t, setT] = useState<CleanupTab>(asTab(tab) || asTab(saved) || "duplicates");
   useEffect(() => {
     if (asTab(tab)) setT(asTab(tab) as CleanupTab);
   }, [tab]);
@@ -29,24 +29,26 @@ export default function Cleanup({ status, tab, onNav }: { status: Status; tab?: 
     setT(k as CleanupTab);
     setSaved(k as CleanupTab);
   };
+  useEffect(() => {
+    if (tab === "folders") nav.route({ view: "renamer", section: "folders" });
+  }, [tab]);
   const sum = useScanSummary();
   const [scanning, setScanning] = useState(false);
   return (
     <div className="pg cleanup">
       <PageHead
         title="Clean-up"
-        sub="Duplicates, missing episodes, untidy folders, big files and episodes without a picture. The numbers come from the last scan."
+        sub="Duplicates, missing episodes, big files and episodes without a picture. The numbers come from the last scan."
         actions={
           <button className="primary" disabled={scanning} title="Runs every check on this page (and the library check) in one go" onClick={() => { setScanning(true); void scanEverything(status).catch(() => undefined).finally(() => setScanning(false)); }}>
             {scanning ? <span className="spinner" /> : <Icon name="search" />} {scanning ? "Scanning…" : "Run all checks"}
           </button>
         }
       />
-      <KTabs active={t} onChange={pick} tabs={cleanupBlocks(sum, status.series).map((b) => ({ id: b.key, label: b.title, icon: b.icon, count: b.count === null ? "–" : b.count === 0 ? "✓" : b.count.toLocaleString(), warn: !!b.count }))} />
+      <KTabs active={t} onChange={pick} tabs={cleanupBlocks(sum, status.series).filter((b) => b.key !== "folders").map((b) => ({ id: b.key, label: b.title, icon: b.icon, count: b.count === null ? "–" : b.count === 0 ? "✓" : b.count.toLocaleString(), warn: !!b.count }))} />
       <div className="cleanup-body" key={t}>
         {t === "duplicates" && <Duplicates status={status} />}
         {t === "missing" && <Missing status={status} />}
-        {t === "folders" && <Structure status={status} />}
         {t === "storage" && <Storage status={status} onNav={onNav} />}
         {t === "pictures" && <EpisodePictures status={status} />}
       </div>

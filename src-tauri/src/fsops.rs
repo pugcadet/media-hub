@@ -237,6 +237,11 @@ pub struct ApplyReport {
     pub stopped: bool,
 }
 
+/// Pause between moves, and a longer one every few, so a network share keeps up.
+const PACE_STEP: Duration = Duration::from_millis(if cfg!(test) { 0 } else { 60 });
+const PACE_REST: Duration = Duration::from_millis(if cfg!(test) { 0 } else { 1200 });
+const PACE_EVERY: usize = 20;
+
 fn reach_root(root: &Path) -> Result<PathBuf> {
     let r = root.to_path_buf();
     with_timeout(Duration::from_secs(15), move || {
@@ -270,11 +275,18 @@ pub fn apply_with(
     let mut stopped = false;
     let todo: Vec<&PlanOp> = ops.iter().filter(|o| o.status == "ok").collect();
     let total = todo.len();
+    // Folders left empty are tidied once at the end (not after every file).
+    let mut emptied: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // In the given order: files first, then season folders, then the show folder.
     for (index, op) in todo.into_iter().enumerate() {
         if stop(index) {
             stopped = true;
             break;
+        }
+        // Give the share room to breathe: a network drive (and Finder, which shares its
+        // connection) chokes on hundreds of moves in a row.
+        if index > 0 {
+            std::thread::sleep(if index % PACE_EVERY == 0 { PACE_REST } else { PACE_STEP });
         }
         let target = if op.step_to.is_empty() { &op.to } else { &op.step_to };
         let step = |state, error| Step { index, total, from: op.from.clone(), to: target.clone(), state, error };
@@ -286,11 +298,9 @@ pub fn apply_with(
                 done += 1;
                 progress(step("done", None));
                 if remove_empty && op.kind != "folder" {
-                    let (r, f) = (root.to_path_buf(), op.from.clone());
-                    let _ = with_timeout(Duration::from_secs(10), move || {
-                        remove_empty_parents(&r, &f);
-                        Ok(())
-                    });
+                    if let Some((dir, _)) = op.from.rsplit_once('/') {
+                        emptied.insert(dir.to_string());
+                    }
                 }
             }
             Err(e) => {
@@ -308,6 +318,18 @@ pub fn apply_with(
                 }
             }
         }
+    }
+    if !emptied.is_empty() {
+        // One folder at a time, deepest first; each check only removes a folder that is empty.
+        let mut dirs: Vec<String> = emptied.into_iter().map(|d| format!("{d}/x")).collect();
+        dirs.sort_by_key(|d| std::cmp::Reverse(d.matches('/').count()));
+        let r = root.to_path_buf();
+        let _ = with_timeout(Duration::from_secs(30), move || {
+            for d in &dirs {
+                remove_empty_parents(&r, d);
+            }
+            Ok(())
+        });
     }
     Ok(ApplyReport { batch: batch.to_string(), done, failed, stopped })
 }
