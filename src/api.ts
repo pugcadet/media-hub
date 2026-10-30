@@ -423,6 +423,19 @@ export interface LocalSub {
   linked: boolean;
 }
 
+export interface MovieFolder {
+  id: string;
+  title: string;
+  year: number | null;
+  video: string;
+  folder: string;
+  top: string;
+  kind: "own" | "shared" | "loose";
+  group: string | null;
+  expected: string;
+  ok: boolean;
+}
+
 /** Online subtitles, most downloaded first (or best match first). */
 export function sortSubs(list: ScoredSub[], by: "downloads" | "match"): ScoredSub[] {
   return [...list].sort((a, b) => by === "match"
@@ -854,6 +867,10 @@ export const api = {
   saveMetadata: (id: string, edits: ItemEdits) => invoke<void>("save_metadata", { id, edits }),
   identifySearch: (kind: "series" | "movie", name: string, year: number | null, ids: Record<string, string>) =>
     invoke<SearchResult[]>("identify_search", { kind, name, year, ids }),
+  /** Every movie and the folder its video is in (own / shared / loose, collection folder). */
+  movieFolders: () => invoke<MovieFolder[]>("movie_folders"),
+  movieFoldersPlan: (moves: { video: string; mode: "fix" | "out" }[], groups: { folder: string; name: string }[]) =>
+    invoke<{ planId: string; ops: PlanOp[] }>("movie_folders_plan", { moves, groups }),
   /** Puts the identified match into the folder name ("Heat (1995) [tmdbid-949]"), so it sticks. */
   pinIdentity: (id: string) => invoke<{ name: string; changed: boolean; note: string | null }>("pin_identity", { id }),
   identifyApply: (id: string, result: SearchResult, replaceImages: boolean) =>

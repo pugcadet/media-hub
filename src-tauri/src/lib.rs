@@ -31,6 +31,7 @@ mod rename_cmds;
 mod renumber;
 mod sublock;
 mod pin;
+mod moviefolders;
 mod secrets;
 mod seg_cmds;
 mod sources;
@@ -195,6 +196,8 @@ pub fn run() {
             renumber::episode_renumber,
             sublock::subtitle_lock,
             pin::pin_identity,
+            moviefolders::movie_folders,
+            moviefolders::movie_folders_plan,
             backend::intro_skipper_libraries,
             backend::set_intro_skipper_libraries,
             sub_cmds::local_subtitles,

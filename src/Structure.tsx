@@ -9,6 +9,7 @@ import { askConfirm } from "./confirm";
 import { Icon, TriCheck, useUndoableSet } from "./ui";
 import { agoText, useSaved } from "./saved";
 import { foldersSummary, savePart } from "./scan";
+import MovieFolders from "./MovieFolders";
 
 export interface LooseShow { folder: string; name: string; loose: number; seasons: number }
 export interface TopFolder { folder: string; kind: "tv" | "movies" | "mixed" | "empty"; shows: LooseShow[]; looseMovies: string[]; folderedMovies: string[] }
@@ -129,6 +130,7 @@ export default function Structure({ status }: { status: Status }) {
         </div>
       </div>
       {!status.libraryRoot && <p className="note">Choose your library folder in Settings first.</p>}
+      {status.libraryRoot && <MovieFolders readOnly={status.readOnly} />}
       {error && <p className="error">{error}</p>}
       {data && data.filter((t) => t.kind !== "empty").map((t) => (
         <section key={t.folder} className="card form struct-card">

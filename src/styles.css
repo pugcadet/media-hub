@@ -2136,3 +2136,9 @@ button.proc-row.on { background: var(--accent-soft); }
 .struct-mark { display: inline-flex; width: 16px; justify-content: center; margin-right: 4px; }
 .struct-mark.done { color: #4ade80; }
 .struct-mark.failed { color: #f87171; }
+.mf-row { display: flex !important; align-items: center; gap: 8px; min-width: 0; }
+.mf-row > .mono { flex: 1 1 0; min-width: 0; }
+.mf-row.right { opacity: .6; }
+.mf-group { border-top: 1px solid var(--line); padding-top: 12px; }
+.mf-rename { align-items: center; gap: 10px; }
+.mf-rename input { height: 32px; max-width: 360px; flex: 1; }

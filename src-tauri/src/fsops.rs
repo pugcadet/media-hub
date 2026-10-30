@@ -297,7 +297,8 @@ pub fn apply_with(
                 journal.set_state(id, "done")?;
                 done += 1;
                 progress(step("done", None));
-                if remove_empty && op.kind != "folder" {
+                // The folder it came from may be empty now (also after moving a whole folder).
+                if remove_empty {
                     if let Some((dir, _)) = op.from.rsplit_once('/') {
                         emptied.insert(dir.to_string());
                     }
