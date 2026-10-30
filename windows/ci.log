@@ -1,9 +1,38 @@
 
-added 75 packages in 6s
+added 75 packages in 4s
 [1m[92m    Updating[0m crates.io index
-[1m[92m   Compiling[0m media-hub v0.20.0 (D:\a\media-hub\media-hub\src-tauri)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 17s
-[1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-ceea76403099e714.exe)
+[1m[92m     Locking[0m 2 packages to highest compatible versions
+[1m[92m      Adding[0m trash v5.2.9
+[1m[92m      Adding[0m urlencoding v2.1.3
+[1m[92m Downloading[0m crates ...
+[1m[92m  Downloaded[0m trash v5.2.9
+[1m[92m   Compiling[0m scopeguard v1.2.0
+[1m[92m   Compiling[0m windows v0.62.2
+[1m[92m   Compiling[0m lock_api v0.4.14
+[1m[92m   Compiling[0m parking_lot v0.12.5
+[1m[92m   Compiling[0m string_cache v0.9.0
+[1m[92m   Compiling[0m web_atoms v0.2.6
+[1m[92m   Compiling[0m markup5ever v0.39.0
+[1m[92m   Compiling[0m html5ever v0.39.0
+[1m[92m   Compiling[0m dom_query v0.28.0
+[1m[92m   Compiling[0m tauri-utils v2.10.2
+[1m[92m   Compiling[0m tauri-build v2.7.4
+[1m[92m   Compiling[0m tauri-plugin v2.7.2
+[1m[92m   Compiling[0m tauri-codegen v2.7.4
+[1m[92m   Compiling[0m tauri v2.12.5
+[1m[92m   Compiling[0m tauri-plugin-fs v2.7.1
+[1m[92m   Compiling[0m tauri-macros v2.7.4
+[1m[92m   Compiling[0m tauri-plugin-dialog v2.8.3
+[1m[92m   Compiling[0m media-hub v0.21.0 (D:\a\media-hub\media-hub\src-tauri)
+[1m[92m   Compiling[0m webview2-com-sys v0.39.1
+[1m[92m   Compiling[0m tao v0.37.2
+[1m[92m   Compiling[0m trash v5.2.9
+[1m[92m   Compiling[0m webview2-com v0.39.1
+[1m[92m   Compiling[0m tauri-runtime v2.12.2
+[1m[92m   Compiling[0m wry v0.57.1
+[1m[92m   Compiling[0m tauri-runtime-wry v2.12.3
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 30s
+[1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-52c6cadabdbe04db.exe)
 
 running 157 tests
 test backend::tests::versions ... ok
@@ -22,8 +51,8 @@ test bulk::tests::removes_and_adds_episode_tags ... ok
 test detect::tests::windows_and_snapping ... ok
 test downloads::tests::audio_mode ... ok
 test downloads::tests::builds_safe_arguments ... ok
-test bulk::tests::drops_release_tags ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
+test bulk::tests::drops_release_tags ... ok
 test downloads::tests::plain_error_text ... ok
 test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
@@ -33,11 +62,11 @@ test downloads::tests::summarizes_playlists ... ok
 test bulk::tests::plans_files_sidecars_and_folder ... ok
 test fake_jellyfin::tests::a_missing_picture_is_none_not_an_error ... ok
 test fake_jellyfin::tests::missing_markers_plugin_is_not_called_a_missing_title ... ok
-test fake_jellyfin::tests::position_falls_back_to_the_older_route_when_the_new_one_keeps_nothing ... ok
 test fake_jellyfin::tests::position_is_saved_and_read_back ... ok
 test fingerprint::tests::fft_matches_a_plain_dft ... ok
-test fake_jellyfin::tests::subtitle_download_limit_is_reported_not_hidden ... ok
+test fake_jellyfin::tests::position_falls_back_to_the_older_route_when_the_new_one_keeps_nothing ... ok
 test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
+test fake_jellyfin::tests::subtitle_download_limit_is_reported_not_hidden ... ok
 test fingerprint::tests::silence_does_not_match ... ok
 test fingerprint::tests::survives_noise_like_a_different_encode ... ok
 test fsops::tests::apply_then_undo_restores_everything ... ok
@@ -164,9 +193,9 @@ test fingerprint::tests::unrelated_audio_has_no_match ... ok
 test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 157 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.23s
+test result: ok. 157 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.44s
 
-[1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-e0a56f468a2e77b3.exe)
+[1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-026b7409a60e1e36.exe)
 
 running 0 tests
 
@@ -176,23 +205,23 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 running 0 tests
 
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
         Info Looking up installed tauri packages to check mismatched versions...
      Running beforeBuildCommand `npm run build`
 
-> media-hub@0.20.0 build
+> media-hub@0.21.0 build
 > tsc && vite build
 
 [36mvite v5.4.21 [32mbuilding for production...[36m[39m
 transforming...
-[32m✓[39m 96 modules transformed.
+[32m✓[39m 97 modules transformed.
 [1m[33m[plugin:vite:reporter][39m[22m [33m[plugin vite:reporter] 
 (!) D:/a/media-hub/media-hub/src/Renamer.tsx is dynamically imported by D:/a/media-hub/media-hub/src/scan.ts but also statically imported by D:/a/media-hub/media-hub/src/App.tsx, dynamic import will not move module into another chunk.
 [39m
 rendering chunks...
 computing gzip size...
-[2mdist/[22m[32mindex.html                                                 [39m[1m[2m    0.41 kB[22m[1m[22m[2m │ gzip:   0.28 kB[22m
+[2mdist/[22m[32mindex.html                                                 [39m[1m[2m    0.41 kB[22m[1m[22m[2m │ gzip:   0.27 kB[22m
 [2mdist/[22m[32massets/jetbrains-mono-greek-400-normal-C190GLew.woff2      [39m[1m[2m    4.23 kB[22m[1m[22m
 [2mdist/[22m[32massets/manrope-vietnamese-500-normal-DCXiE_xi.woff2        [39m[1m[2m    4.32 kB[22m[1m[22m
 [2mdist/[22m[32massets/manrope-vietnamese-400-normal-DHb3EETF.woff2        [39m[1m[2m    4.46 kB[22m[1m[22m
@@ -249,26 +278,26 @@ computing gzip size...
 [2mdist/[22m[32massets/jetbrains-mono-latin-400-normal-6-qcROiO.woff       [39m[1m[2m   27.50 kB[22m[1m[22m
 [2mdist/[22m[32massets/inter-latin-wght-normal-Dx4kXJAl.woff2              [39m[1m[2m   48.26 kB[22m[1m[22m
 [2mdist/[22m[32massets/inter-latin-ext-wght-normal-DO1Apj_S.woff2          [39m[1m[2m   85.07 kB[22m[1m[22m
-[2mdist/[22m[35massets/index-CJYSbDr_.css                                  [39m[1m[2m  180.99 kB[22m[1m[22m[2m │ gzip:  50.10 kB[22m
-[2mdist/[22m[36massets/index-CR7dTHpO.js                                   [39m[1m[33m1,241.54 kB[39m[22m[2m │ gzip: 383.18 kB[22m
+[2mdist/[22m[35massets/index-CgL_hRRV.css                                  [39m[1m[2m  182.23 kB[22m[1m[22m[2m │ gzip:  50.33 kB[22m
+[2mdist/[22m[36massets/index-BtuTcBdw.js                                   [39m[1m[33m1,252.73 kB[39m[22m[2m │ gzip: 385.30 kB[22m
 [33m
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 4.86s[39m
-[1m[92m   Compiling[0m media-hub v0.20.0 (D:\a\media-hub\media-hub\src-tauri)
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 7m 07s
-       Built application at: D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe
-        Info Patching D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe with bundle type information: nsis
-        Info Verifying NSIS package
- Downloading https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip
-        Info validating hash
-        Info extracting NSIS
- Downloading https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll
-        Info validating hash
-        Info Target: x64
-     Running makensis to produce D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.20.0_x64-setup.exe
-    Finished 1 bundle at:
-        D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.20.0_x64-setup.exe (6.76 MiB)
-
+[32m✓ built in 2.77s[39m
+[1m[92m   Compiling[0m windows v0.62.2
+[1m[92m   Compiling[0m scopeguard v1.2.0
+[1m[92m   Compiling[0m media-hub v0.21.0 (D:\a\media-hub\media-hub\src-tauri)
+[1m[92m   Compiling[0m lock_api v0.4.14
+[1m[92m   Compiling[0m parking_lot v0.12.5
+[1m[92m   Compiling[0m webview2-com-sys v0.39.1
+[1m[92m   Compiling[0m tao v0.37.2
+[1m[92m   Compiling[0m trash v5.2.9
+[1m[92m   Compiling[0m webview2-com v0.39.1
+[1m[92m   Compiling[0m wry v0.57.1
+[1m[92m   Compiling[0m tauri-runtime v2.12.2
+[1m[92m   Compiling[0m tauri-runtime-wry v2.12.3
+[1m[92m   Compiling[0m tauri v2.12.5
+[1m[92m   Compiling[0m tauri-plugin-fs v2.7.1
+[1m[92m   Compiling[0m tauri-plugin-dialog v2.8.3
