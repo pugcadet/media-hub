@@ -1,8 +1,8 @@
 
-added 75 packages in 7s
+added 75 packages in 4s
 [1m[92m    Updating[0m crates.io index
 [1m[92m   Compiling[0m media-hub v0.25.1 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 2m 38s
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 01s
 [1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-f15a2732ba0edd2c)
 
 running 170 tests
@@ -19,12 +19,12 @@ test config::tests::rejects_bad_input ... ok
 test config::tests::strips_trailing_slash_query_and_fragment ... ok
 test detect::tests::chapters_with_names_are_used ... ok
 test bulk::tests::removes_and_adds_episode_tags ... ok
+test bulk::tests::drops_release_tags ... ok
 test detect::tests::windows_and_snapping ... ok
 test downloads::tests::audio_mode ... ok
 test downloads::tests::builds_safe_arguments ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
 test downloads::tests::plain_error_text ... ok
-test bulk::tests::drops_release_tags ... ok
 test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
 test downloads::tests::search_targets_and_results ... ok
@@ -177,7 +177,7 @@ test fingerprint::tests::unrelated_audio_has_no_match ... ok
 test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 170 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.24s
+test result: ok. 170 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.91s
 
 [1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-c1d045000cf279bd)
 
@@ -262,12 +262,29 @@ computing gzip size...
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-400-normal-6-qcROiO.woff       [39m[1m[2m   27.50 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32minter-latin-wght-normal-Dx4kXJAl.woff2              [39m[1m[2m   48.26 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32minter-latin-ext-wght-normal-DO1Apj_S.woff2          [39m[1m[2m   85.07 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[35mindex-C_t71wea.css                                  [39m[1m[2m  192.14 kB[22m[1m[22m[2m │ gzip:  52.05 kB[22m
-[2mdist/[22m[2massets/[22m[36mindex-Qijg_V4P.js                                   [39m[1m[33m1,184.36 kB[39m[22m[2m │ gzip: 363.64 kB[22m
+[2mdist/[22m[2massets/[22m[35mindex-BB8KVR16.css                                  [39m[1m[2m  192.17 kB[22m[1m[22m[2m │ gzip:  52.06 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-Cxd1ZI7d.js                                   [39m[1m[33m1,184.36 kB[39m[22m[2m │ gzip: 363.64 kB[22m
 [33m
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 7.64s[39m
+[32m✓ built in 3.18s[39m
 [1m[92m   Compiling[0m media-hub v0.25.1 (/Users/runner/work/media-hub/media-hub/src-tauri)
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 9m 01s
+       Built application at: /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/media-hub
+    Bundling Media Hub.app (/Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app)
+     Signing with identity "-"
+Signing with identity "-"
+Signing /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app/Contents/MacOS/media-hub
+/Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app/Contents/MacOS/media-hub: replacing existing signature
+Signing with identity "-"
+Signing /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app
+/Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app: replacing existing signature
+        Warn skipping app notarization, no APPLE_ID & APPLE_PASSWORD & APPLE_TEAM_ID or APPLE_API_KEY & APPLE_API_ISSUER & APPLE_API_KEY_PATH environment variables found
+    Bundling Media Hub_0.25.1_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Media Hub_0.25.1_aarch64.dmg)
+     Running bundle_dmg.sh
+    Finished 2 bundles at:
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app (16.66 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Media Hub_0.25.1_aarch64.dmg (7.89 MiB)
+
