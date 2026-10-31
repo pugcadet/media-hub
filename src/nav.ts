@@ -1,8 +1,8 @@
-// App-wide navigation, so menus and cards anywhere can open an item, play it or switch
+// App-wide navigation, so menus and cards anywhere can open an item or switch
 // screens without passing callbacks through every component.
 export type View =
   | "home" | "library" | "collections" | "renamer" | "metadata" | "subtitles" | "intros" | "add"
-  | "storage" | "downloads" | "settings" | "health" | "missing" | "duplicates" | "tags" | "history" | "cleanup";
+  | "storage" | "downloads" | "settings" | "health" | "missing" | "duplicates" | "tags" | "history" | "cleanup" | "jellyfin";
 
 export interface Route {
   view: View;
@@ -28,11 +28,10 @@ export interface OpenOpts {
 
 interface Nav {
   open: (id: string, opts?: OpenOpts) => void;
-  play: (id: string) => void;
   route: (r: Route) => void;
 }
 
-let impl: Nav = { open: () => undefined, play: () => undefined, route: () => undefined };
+let impl: Nav = { open: () => undefined, route: () => undefined };
 
 export function setNav(n: Nav): void {
   impl = n;
@@ -40,7 +39,6 @@ export function setNav(n: Nav): void {
 
 export const nav: Nav = {
   open: (id, opts) => impl.open(id, opts),
-  play: (id) => impl.play(id),
   route: (r) => impl.route(r),
 };
 

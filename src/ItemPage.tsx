@@ -8,7 +8,7 @@ import { IntrosTab, ShowIntros } from "./Intros";
 import { askConfirm } from "./confirm";
 import { reloadItems, track, useEpoch, useItemEpoch } from "./activity";
 import { nav, type View } from "./nav";
-import { askChoice, CardTile, Icon, type IconName, itemMenu, openMenu, playTitle, scanLibrary, showPicture, SettingsLink } from "./ui";
+import { askChoice, CardTile, Icon, type IconName, itemMenu, openMenu, scanLibrary, showPicture, SettingsLink } from "./ui";
 import { subSkipped, usePrefs } from "./prefs";
 import { artSkipped, CORE_ART, fixTitles, FixTarget, namesToFix, noSubsOf, safeFixes } from "./fixers";
 import { askFixes } from "./FixDialog";
@@ -291,8 +291,7 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
             {kind && <TitleHealth d={d} kind={kind} canEdit={d.canEdit} subLangs={subLangs} onTab={setTab} onIdentify={() => identify(d)} />}
             {!kind && !isBoxSet && (
               <div className="row bb-actions">
-                {playable && <button className="bb-play" onClick={() => nav.play(id)}><Icon name="play" size={20} /> {item.UserData?.PlaybackPositionTicks ? "Resume" : "Play"}</button>}
-                {isSeason && <button className="bb-play" onClick={() => void playTitle(id)}><Icon name="play" size={20} /> Play</button>}
+                {playable && <button className="bb-play" onClick={() => void api.openVideo(id).catch(() => undefined)} title="Opens the video in your own player (QuickTime, IINA, VLC …)"><Icon name="play" size={20} /> Open the video</button>}
               </div>
             )}
           </div>
@@ -485,9 +484,11 @@ function TitleHealth({ d, kind, canEdit, subLangs, onTab, onIdentify }: { d: Det
         ))}
       </div>
       <div className="row bb-actions">
-        <button className="bb-play" onClick={() => (kind === "movie" ? nav.play(item.Id) : void playTitle(item.Id))}>
-          <Icon name="play" size={20} /> {item.UserData?.PlaybackPositionTicks ? "Resume" : "Play"}
-        </button>
+        {kind === "movie" && (
+          <button className="bb-play" onClick={() => void api.openVideo(item.Id).catch(() => undefined)} title="Opens the video in your own player (QuickTime, IINA, VLC …)">
+            <Icon name="play" size={20} /> Open the video
+          </button>
+        )}
         {auto.length > 0 && canEdit && (
           <button className="bb-more" onClick={() => void fix()} title={`Does it for you: ${auto.map((a) => (a === "art" ? "artwork" : a === "subs" ? "subtitles" : "100% sure names")).join(", ")}. Can be undone.`}>
             <Icon name="wrench" size={18} /> Fix {auto.length} thing{auto.length === 1 ? "" : "s"}
@@ -1123,9 +1124,9 @@ function SeasonPanel({ season, canEdit, subLangs }: { season: JfItem; canEdit: b
               onKeyDown={(k) => k.key === "Enter" && nav.open(e.Id)}
               onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: "episode", title: e.Name, seriesId: e.SeriesId ?? season.SeriesId, seasonId: season.Id, played: e.UserData?.Played }, canEdit))}
             >
-              <div className="ep-thumb art wide cover" title="Play" onClick={(ev) => { ev.stopPropagation(); nav.play(e.Id); }}>
+              <div className="ep-thumb art wide cover" title="Open the video in your own player" onClick={(ev) => { ev.stopPropagation(); void api.openVideo(e.Id).catch(() => undefined); }}>
                 {e.ImageTags?.Primary ? <img src={imageUrl(e.Id, "Primary", 400, 0, e.ImageTags.Primary)} alt="" loading="lazy" /> : <div className="noart small">E{e.IndexNumber ?? "?"}</div>}
-                <button className="ep-play" aria-label="Play" onClick={(ev) => { ev.stopPropagation(); nav.play(e.Id); }}><Icon name="play" size={18} /></button>
+                <button className="ep-play" aria-label="Open the video" onClick={(ev) => { ev.stopPropagation(); void api.openVideo(e.Id).catch(() => undefined); }}><Icon name="play" size={18} /></button>
                 {pos > 0 && e.RunTimeTicks ? <span className="tile-progress"><span style={{ width: `${Math.min(100, (pos / e.RunTimeTicks) * 100)}%` }} /></span> : null}
               </div>
               <div className="ep-text">

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, AutoResult, codesFor, cultures, Culture, errorText, ExtraSub, imageUrl, Item, JfChild, languageName, Status } from "./api";
 import type { Route } from "./App";
 import { folderTabs, IconBtn, KTabs, PageHead, SearchBox, Toolbar } from "./kit";
@@ -8,6 +8,7 @@ import { prefs, setPrefs, subSkipped, usePrefs } from "./prefs";
 import { BulkSelect, Icon, itemMenu, openMenu, SettingsLink, TriCheck, useUndoableSet } from "./ui";
 import { foldersOf, tabFolder, useFolderMap } from "./folders";
 import { agoText, usePageState, useSaved } from "./saved";
+import { SubtitlesTab } from "./Subtitles";
 
 /** Metadata and art: titles that need a match or a poster. */
 export function MetadataTool({ onOpen, onRoute }: { onOpen: (id: string) => void; onRoute: (r: Route) => void }) {
@@ -127,6 +128,7 @@ const OUTCOME: Record<AutoResult["outcome"], string> = { has: "already has it", 
 /** Subtitles: every movie and episode without subtitles, with a bulk "get the best match". */
 export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id: string) => void }) {
   const [items, setItems] = useState<JfChild[]>([]);
+  const [pickId, setPickId] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [list, setList] = useState<Culture[]>([]);
@@ -217,14 +219,23 @@ export function SubtitlesTool({ status, onOpen }: { status: Status; onOpen: (id:
       ? `${e.SeriesName ?? ""} · S${String(e.ParentIndexNumber ?? 0).padStart(2, "0")}E${String(e.IndexNumber ?? 0).padStart(2, "0")} · ${e.Name}`
       : e.Name;
 
-  const row = (e: JfChild, movie: boolean) => {
+  const row = (e: JfChild, movie: boolean) => (
+    <Fragment key={e.Id}>
+      {rowLine(e, movie)}
+      {pickId === e.Id && <div className="sub-inline"><SubtitlesTab id={e.Id} canEdit={!status.readOnly} subLangs={[lang, ...status.subLangs.filter((l) => l !== lang)]} /></div>}
+    </Fragment>
+  );
+  const rowLine = (e: JfChild, movie: boolean) => {
     const st = results[e.Id];
     return (
       <div className={`tool-row sub-ep ${movie ? "movie" : ""}`} key={e.Id} onContextMenu={(ev) => openMenu(ev, itemMenu({ id: e.Id, kind: e.Type === "Episode" ? "Episode" : "Movie", title: label(e), played: false }))}>
-        <button className="link-plain names" onClick={() => onOpen(e.Id)}>
-          <div className={`title ${movie ? "" : "small"}`}>{e.Type === "Episode" ? `E${String(e.IndexNumber ?? 0).padStart(2, "0")} · ${e.Name}` : e.Name}</div>
+        <button className="link-plain names" title="Choose, preview and lock in a subtitle here" aria-expanded={pickId === e.Id} onClick={() => setPickId(pickId === e.Id ? null : e.Id)}>
+          <div className={`title ${movie ? "" : "small"}`}>
+            <span className={`chev ${pickId === e.Id ? "open" : ""}`}><Icon name="chevron" size={11} /></span> {e.Type === "Episode" ? `E${String(e.IndexNumber ?? 0).padStart(2, "0")} · ${e.Name}` : e.Name}
+          </div>
         </button>
         <SubState text={st} />
+        <IconBtn icon="external" title="Open its page" onClick={() => onOpen(e.Id)} />
         <GetBtn running={running} disabled={status.readOnly} p={progress} k={`ep:${e.Id}`} onClick={() => void fill([e], e.Name, `ep:${e.Id}`)} small />
       </div>
     );

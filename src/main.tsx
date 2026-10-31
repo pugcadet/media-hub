@@ -9,7 +9,6 @@ import { IdentifyHost } from "./IdentifyDialog";
 import { Hosts } from "./ui";
 import { RenumberHost } from "./Renumber";
 import { MusicEditHost } from "./MusicEdit";
-import { MiniPlayer } from "./MiniPlayer";
 import "@fontsource-variable/inter";
 import "@fontsource/manrope/400.css";
 import "@fontsource/manrope/500.css";
@@ -29,6 +28,5 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <Hosts />
     <RenumberHost />
     <MusicEditHost />
-    <MiniPlayer />
   </React.StrictMode>,
 );

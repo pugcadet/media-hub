@@ -32,6 +32,7 @@ mod renumber;
 mod sublock;
 mod pin;
 mod moviefolders;
+mod inbox;
 mod secrets;
 mod seg_cmds;
 mod sources;
@@ -41,6 +42,8 @@ mod store;
 mod sub_cmds;
 mod structure;
 mod subs;
+mod jfserver;
+mod subpreview;
 mod updater;
 
 use tauri::Manager;
@@ -76,9 +79,18 @@ pub fn run() {
             library::find_moved,
             structure::structure_scan,
             structure::structure_plan,
+            structure::music_artist_merges,
+            structure::music_merge_plan,
             bulk::bulk_plan,
             meta_cmds::make_thumb,
             backend::plugins_installed,
+            jfserver::server_overview,
+            subpreview::subtitle_preview,
+            subpreview::video_clip,
+            jfserver::server_task_run,
+            jfserver::server_task_stop,
+            jfserver::server_task_run_key,
+            jfserver::server_restart,
             backend::run_intro_skipper,
             collections::collection_folder_plan,
             collections::collection_relink,
@@ -159,8 +171,11 @@ pub fn run() {
             collections::collection_add,
             collections::collection_remove,
             collections::sync_picks_collection,
+            collections::picks_leftovers,
+            collections::picks_remove,
             local::reveal_item,
             local::reveal_rel,
+            local::open_video,
             local::item_folder,
             local::library_scan,
             backend::backend_tuning,
@@ -197,6 +212,10 @@ pub fn run() {
             sublock::subtitle_lock,
             pin::pin_identity,
             moviefolders::movie_folders,
+            inbox::inbox_scan,
+            inbox::inbox_resolve,
+            inbox::inbox_place,
+            inbox::inbox_trash,
             moviefolders::movie_folders_plan,
             backend::intro_skipper_libraries,
             backend::set_intro_skipper_libraries,

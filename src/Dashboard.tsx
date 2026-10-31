@@ -1,13 +1,13 @@
-// The manager's home: how healthy the library is, what the last scan found, and one button
-// that scans everything again (only the parts that changed). Watching lives on the Player side.
+// Home: new downloads waiting in the Inbox, what needs doing in the library, what was just
+// added and what changed. One button checks everything again (only what changed).
 import { useEffect, useState, type ReactNode } from "react";
-import { Alert, api, imageUrl, InboxEntry, JournalRow, Pick, Status, Tuning, localDate } from "./api";
+import { Alert, api, Card, imageUrl, InboxItem, JournalRow, Status, Tuning } from "./api";
 import { useEpoch } from "./activity";
 import { nav, type Route } from "./nav";
 import { Icon, scanLibrary, type IconName } from "./ui";
 import { KIND } from "./History";
-import { getPicks, PicksEditor } from "./Picks";
-import { SetupChecklist } from "./Home";
+import { setPrefs, usePrefs } from "./prefs";
+import { namesToFix } from "./fixers";
 import { scanEverything, useScanSummary, type ScanResult, type ScanSummary } from "./scan";
 import { agoText } from "./saved";
 
@@ -38,25 +38,75 @@ export interface Block {
   at?: number | null;
 }
 
+/** One-time setup steps, until they're done (or hidden). */
+function SetupChecklist({ status, inboxDir }: { status: Status; inboxDir: string | null | undefined }) {
+  const p = usePrefs();
+  const [alerts, setAlerts] = useState<Alert[] | null>(null);
+  useEffect(() => {
+    if (p.setupDone) return;
+    api.healthAlerts().then(setAlerts).catch(() => setAlerts([]));
+  }, [p.setupDone]);
+  if (p.setupDone || !alerts || inboxDir === undefined) return null;
+  const plugins = !alerts.some((a) => a.fix === "settings:plugins" && a.level !== "info");
+  const steps: { done: boolean; label: string; hint: string; go: () => void }[] = [
+    { done: !!status.libraryRoot, label: "Choose your library folder", hint: "The NAS share on this computer", go: () => nav.route({ view: "settings", section: "folder" }) },
+    { done: !status.readOnly, label: "Allow changes to Jellyfin", hint: "Everything stays undoable", go: () => nav.route({ view: "settings", section: "changes" }) },
+    { done: plugins, label: "Install the Jellyfin plugins", hint: "Skip markers and subtitles", go: () => nav.route({ view: "jellyfin" }) },
+    { done: status.hasTmdb, label: "Add a TMDB key", hint: "Better matching, missing episodes", go: () => nav.route({ view: "settings", section: "metadata" }) },
+    { done: !!inboxDir, label: "Choose your downloads folder", hint: "New downloads show up in the Inbox", go: () => nav.route({ view: "add" }) },
+  ];
+  const done = steps.filter((x) => x.done).length;
+  if (done === steps.length) return null;
+  return (
+    <section className="card form setup-card">
+      <div className="section-head">
+        <div>
+          <h2>Get Media Hub set up · {done} of {steps.length}</h2>
+          <div className="muted small">A few one-time steps; each opens the right place.</div>
+        </div>
+        <button className="link small" onClick={() => setPrefs({ setupDone: true })}>Hide this</button>
+      </div>
+      <div className="setup-steps">
+        {steps.map((x) => (
+          <button key={x.label} className={`setup-step ${x.done ? "done" : ""}`} onClick={x.go} disabled={x.done}>
+            <span className="setup-dot">{x.done ? <Icon name="check" size={14} /> : null}</span>
+            <span className="grow"><span className="strong small">{x.label}</span><br /><span className="muted small">{x.hint}</span></span>
+            {!x.done && <span className="accent">›</span>}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function Dashboard({ status }: { status: Status }) {
   const epoch = useEpoch();
   const sum = useScanSummary();
+  const p = usePrefs();
   const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [inbox, setInbox] = useState<InboxEntry[]>([]);
+  const [inbox, setInbox] = useState<{ dir: string | null; items: InboxItem[] } | undefined>(undefined);
   const [tuning, setTuning] = useState<Tuning | null>(null);
   const [journal, setJournal] = useState<JournalRow[]>([]);
-  const [picks, setPicks] = useState<Pick[]>([]);
-  const [editPicks, setEditPicks] = useState(false);
+  const [recent, setRecent] = useState<Card[]>([]);
+  const [names, setNames] = useState<{ toFix: number; sure: number } | null>(null);
   const [scanning, setScanning] = useState(false);
   const [last, setLast] = useState<ScanResult | null>(null);
 
   useEffect(() => {
     api.healthAlerts().then(setAlerts).catch(() => setAlerts([]));
-    api.inboxList().then(([, l]) => setInbox(l)).catch(() => setInbox([]));
+    api.inboxScan().then(([dir, items]) => setInbox({ dir, items })).catch(() => setInbox({ dir: null, items: [] }));
     api.backendTuning().then(setTuning).catch(() => setTuning(null));
     api.journalAll(6).then(setJournal).catch(() => setJournal([]));
-    getPicks(localDate()).then(setPicks).catch(() => setPicks([]));
+    api.homeFeed().then((f) => setRecent(f.recent.slice(0, 16))).catch(() => setRecent([]));
   }, [epoch]);
+  // Names to fix, leaving out what you skipped and folders you switched off.
+  useEffect(() => {
+    api.namingCheckLast().then((r) => {
+      if (!r) return setNames(null);
+      const todo = r.rows.filter((x) => namesToFix(x));
+      setNames({ toFix: todo.length, sure: todo.filter((x) => x.sure).length });
+    }).catch(() => setNames(null));
+  }, [epoch, p.renameSkip.length, p.renameOff.join("|")]);
 
   async function scan(force = false) {
     setScanning(true);
@@ -72,98 +122,97 @@ export default function Dashboard({ status }: { status: Status }) {
   const h = sum.health;
   const titles = h?.titles ?? 0;
   const share = (bad: number | null | undefined, of: number) => (bad == null || !of ? null : Math.max(0, 1 - bad / of));
-  const pct = h && titles ? Math.round((h.complete / titles) * 100) : 0;
   const series = status.series;
 
-  const health: Block[] = [
-    { key: "names", icon: "rename", count: sum.names?.toFix ?? null, ok: share(sum.names?.toFix, titles), title: "Names to fix", okTitle: "Names right", detail: sum.names ? `${sum.names.sure} are a 100% match and can be renamed in one go.` : "Not checked yet: Scan everything checks them.", tone: "info", go: { view: "library", flag: "names" }, at: sum.names?.at },
-    { key: "identified", icon: "search", count: h?.unidentified ?? null, ok: share(h?.unidentified, titles), title: "Not identified", okTitle: "All identified", detail: "No match with TMDB or TVDB yet, so names, art and episodes can't be checked.", tone: "bad", go: { view: "library", flag: "identified" }, at: h?.at },
+  const todo: Block[] = [
+    { key: "names", icon: "rename", count: names?.toFix ?? sum.names?.toFix ?? null, ok: share(names?.toFix, titles), title: "Names to fix", okTitle: "Names right", detail: names ? `${names.sure} can be renamed in one go.` : "Not checked yet: Check everything checks them.", tone: "info", go: { view: "renamer" }, at: sum.names?.at },
+    { key: "identified", icon: "search", count: h?.unidentified ?? null, ok: share(h?.unidentified, titles), title: "Not identified", okTitle: "All identified", detail: "No match with TMDB or TVDB yet.", tone: "bad", go: { view: "library", flag: "identified" }, at: h?.at },
     { key: "artwork", icon: "image", count: h?.noArt ?? null, ok: share(h?.noArt, titles), title: "Missing artwork", okTitle: "Artwork complete", detail: "A poster, background or logo is missing.", tone: "warn", go: { view: "library", flag: "artwork" }, at: h?.at },
-    { key: "subtitles", icon: "subtitles", count: h?.subsVideos ?? null, ok: share(h?.subsTitles, titles), title: "Videos without subtitles", okTitle: "Subtitles", detail: h ? `In ${h.subsTitles} title${h.subsTitles === 1 ? "" : "s"}, leaving out folders you don't check.` : "", tone: "warn", go: { view: "library", flag: "subtitles" }, at: h?.at },
-    { key: "intros", icon: "skip", count: sum.intros?.withoutIntro ?? null, ok: share(sum.intros?.withoutIntro, sum.intros?.known ?? 0), title: "Shows without intro markers", okTitle: "Intro markers", detail: sum.intros ? `${sum.intros.known} of ${sum.intros.shows} shows read. Markers let Infuse skip intros and credits.` : "Not read yet: Scan everything reads them.", tone: "info", go: { view: "library", flag: "intros" }, at: sum.intros?.at },
+    { key: "subtitles", icon: "subtitles", count: h?.subsVideos ?? null, ok: share(h?.subsTitles, titles), title: "No subtitles", okTitle: "Subtitles", detail: h ? `In ${h.subsTitles} title${h.subsTitles === 1 ? "" : "s"}, in your first language.` : "", tone: "warn", go: { view: "subtitles" }, at: h?.at },
+    { key: "intros", icon: "skip", count: sum.intros?.withoutIntro ?? null, ok: share(sum.intros?.withoutIntro, sum.intros?.known ?? 0), title: "No intro markers", okTitle: "Intro markers", detail: sum.intros ? `${sum.intros.known} of ${sum.intros.shows} shows read.` : "Not read yet.", tone: "info", go: { view: "intros" }, at: sum.intros?.at },
+    ...cleanupBlocks(sum, series),
   ];
-  const cleanup = cleanupBlocks(sum, series);
   const tuneTodo = tuning?.rows.filter((r) => r.scope === "library" && !r.ok).length ?? 0;
-  const other: Block[] = [
-    { key: "inbox", icon: "inbox", count: inbox.length, title: "New downloads", okTitle: "", detail: "Ready to add to the library with the right names.", tone: "info", go: { view: "add" } },
-    { key: "tune", icon: "server", count: tuneTodo, title: "Jellyfin settings", okTitle: "", detail: "Settings that let Jellyfin overwrite your edits or slow down scans.", tone: "warn", go: { view: "settings", section: "backend" } },
-  ].filter((b) => (b.count ?? 0) > 0) as Block[];
   const serious = alerts.filter((a) => a.level !== "info");
-  const lastScan = Math.max(0, ...[...health, ...cleanup].map((b) => b.at ?? 0));
+  const lastScan = Math.max(0, ...todo.map((b) => b.at ?? 0));
+  const waiting = inbox?.items.length ?? 0;
 
   return (
     <div className="pg dash">
-      <div className="dash-head">
-        <div>
+      <div className="dash-top">
+        <div className="stack-xs">
           <div className="dash-hello">{hour()}</div>
           <h1>Your library</h1>
-          <div className="muted">{status.series} shows · {status.movies} movies{lastScan ? ` · scanned ${agoText(lastScan)}` : ""}</div>
-          {last && <div className="small muted dash-lastscan">{last.changed ? `${last.changed} title${last.changed === 1 ? "" : "s"} changed since the scan before.` : "Nothing changed since the scan before."}{last.skipped.length ? ` Skipped (no changes): ${last.skipped.join(", ")}.` : ""}{last.problems.length ? ` Problems: ${last.problems.join(" · ")}` : ""}</div>}
-        </div>
-        <div className="dash-score" title="Titles with a match, every picture Infuse uses and subtitles">
-          <svg viewBox="0 0 36 36" width="92" height="92" aria-hidden="true">
-            <defs>
-              <linearGradient id="dash-ring" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="var(--accent)" />
-                <stop offset="100%" stopColor="var(--green)" />
-              </linearGradient>
-            </defs>
-            <circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--line)" strokeWidth="3" />
-            <circle cx="18" cy="18" r="15.9" fill="none" stroke="url(#dash-ring)" strokeWidth="3" strokeLinecap="round" strokeDasharray={`${pct} 100`} transform="rotate(-90 18 18)" />
-          </svg>
-          <div><div className="dash-pct">{h ? `${pct}%` : "–"}</div><div className="muted small">complete</div></div>
+          <div className="muted">{status.movies.toLocaleString()} movies · {status.series.toLocaleString()} shows{lastScan ? ` · checked ${agoText(lastScan)}` : ""}</div>
+          {last && <div className="small muted dash-lastscan">{last.changed ? `${last.changed} title${last.changed === 1 ? "" : "s"} changed since the check before.` : "Nothing changed since the check before."}{last.problems.length ? ` Problems: ${last.problems.join(" · ")}` : ""}</div>}
         </div>
         <div className="dash-scan">
-          <button className="primary dash-scan-btn" disabled={scanning} onClick={() => void scan(false)} title="Checks names, artwork, subtitles, intros, missing episodes, duplicates, folders and storage. Only what changed since the last scan is read again.">
-            {scanning ? <span className="spinner" /> : <Icon name="reload" size={18} />} {scanning ? "Scanning…" : "Scan everything"}
+          <button className="primary" disabled={scanning} onClick={() => void scan(false)} title="Checks names, artwork, subtitles, intros, missing episodes, duplicates, folders and storage. Only what changed since the last check is read again.">
+            {scanning ? <span className="spinner" /> : <Icon name="reload" size={16} />} {scanning ? "Checking…" : "Check everything"}
           </button>
           <div className="row">
-            <button className="link small" disabled={scanning} onClick={() => void scan(true)}>Full rescan</button>
+            <button className="link small" disabled={scanning} onClick={() => void scan(true)}>Check all again</button>
             <span className="muted small">·</span>
             <button className="link small" onClick={() => void scanLibrary()}>Ask Jellyfin to look for new files</button>
           </div>
         </div>
       </div>
 
-      <SetupChecklist status={status} />
+      <SetupChecklist status={status} inboxDir={inbox ? inbox.dir : undefined} />
 
-      {serious.length > 0 && (
+      {waiting > 0 && (
+        <button className="dash-inbox" onClick={() => nav.route({ view: "add" })}>
+          <span className="dash-inbox-ico"><Icon name="inbox" size={22} /></span>
+          <span className="grow stack-xs">
+            <span className="strong">{waiting} new download{waiting === 1 ? "" : "s"} in your Inbox</span>
+            <span className="muted small ellipsis">{inbox!.items.slice(0, 4).map((i) => i.title || i.key).join(" · ")}{waiting > 4 ? " …" : ""}</span>
+          </span>
+          <span className="dash-inbox-go">Open the Inbox <Icon name="chevron" size={12} /></span>
+        </button>
+      )}
+
+      {(serious.length > 0 || tuneTodo > 0) && (
         <section className="dash-alerts">
           {serious.map((a) => (
-            <button key={a.title} className={`dash-alert ${a.level}`} onClick={() => nav.route(a.fix.startsWith("settings:") ? { view: "settings", section: a.fix.slice(9) } : { view: a.fix as Route["view"] })}>
+            <button key={a.title} className={`dash-alert ${a.level}`} onClick={() => nav.route(a.fix.startsWith("settings:plugins") ? { view: "jellyfin" } : a.fix.startsWith("settings:") ? { view: "settings", section: a.fix.slice(9) } : { view: a.fix as Route["view"] })}>
               <Icon name="warn" /> <span className="grow"><span className="strong">{a.title}</span> <span className="muted small">{a.detail}</span></span> <Icon name="chevron" size={14} />
             </button>
           ))}
+          {tuneTodo > 0 && (
+            <button className="dash-alert" onClick={() => nav.route({ view: "settings", section: "backend" })}>
+              <Icon name="warn" /> <span className="grow"><span className="strong">{tuneTodo} Jellyfin setting{tuneTodo === 1 ? "" : "s"} to look at</span> <span className="muted small">They let Jellyfin overwrite your edits or slow down scans.</span></span> <Icon name="chevron" size={14} />
+            </button>
+          )}
         </section>
       )}
 
-      <BlockRow title="Library health" hint="Open the Library with that filter on" blocks={health} />
-      <BlockRow title="Clean-up" hint="What the last scan found" blocks={cleanup} />
-      {other.length > 0 && <BlockRow title="Waiting for you" blocks={other} />}
+      <BlockRow title="What needs doing" hint="Click one to fix it" blocks={todo} />
 
-      <div className="dash-cols">
-        <Panel title="Picks of the day" action={<button className="link small" onClick={() => setEditPicks(true)}>Edit</button>}>
-          <div className="dash-picks">
-            {picks.slice(0, 6).map((p) => (
-              <button key={p.id} className="dash-pick" onClick={() => nav.open(p.id)} title={`${p.title} · ${p.why}`}>
-                <img src={imageUrl(p.artId, "Primary", 160)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+      {recent.length > 0 && (
+        <section className="dash-section">
+          <div className="dash-section-head"><h2>Just added to Jellyfin</h2></div>
+          <div className="dash-recent">
+            {recent.map((c) => (
+              <button key={c.id} className="dash-recent-tile" onClick={() => nav.open(c.seriesId ?? c.id)} title={c.title}>
+                <span className="dash-recent-art"><img src={imageUrl(c.artId, "Primary", 240)} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /></span>
+                <span className="small strong ellipsis">{c.title}</span>
+                <span className="small muted ellipsis">{c.subtitle}</span>
               </button>
             ))}
-            {picks.length === 0 && <span className="muted small">No picks today.</span>}
           </div>
-        </Panel>
-        <Panel title="Recent changes" action={<button className="link small" onClick={() => nav.route({ view: "history" })}>History and undo</button>}>
-          {journal.length === 0 && <span className="muted small">Nothing changed yet.</span>}
-          {journal.map((j) => (
-            <div key={j.id} className={`dash-change ${j.undone ? "undone" : ""}`}>
-              <span className="strong small">{KIND[j.action] ?? j.action}</span>
-              <span className="small ellipsis grow">{j.title || "—"}</span>
-              <span className="muted small">{ago(j.at)}</span>
-            </div>
-          ))}
-        </Panel>
-      </div>
-      {editPicks && <PicksEditor onClose={() => setEditPicks(false)} />}
+        </section>
+      )}
+
+      <Panel title="Recent changes" action={<button className="link small" onClick={() => nav.route({ view: "history" })}>History and undo</button>}>
+        {journal.length === 0 && <span className="muted small">Nothing changed yet.</span>}
+        {journal.map((j) => (
+          <div key={j.id} className={`dash-change ${j.undone ? "undone" : ""}`}>
+            <span className="strong small">{KIND[j.action] ?? j.action}</span>
+            <span className="small ellipsis grow">{j.title || "—"}</span>
+            <span className="muted small">{ago(j.at)}</span>
+          </div>
+        ))}
+      </Panel>
     </div>
   );
 }

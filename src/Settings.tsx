@@ -5,9 +5,7 @@ import { ToolsSettings } from "./Intros";
 import { UpdateSettings } from "./Updates";
 import { nav, type View } from "./nav";
 import { ACCENTS, DEFAULT_PREFS, setPrefs, usePrefs } from "./prefs";
-import { SubStyleEditor } from "./Player";
-import { FolderPicker } from "./Picks";
-import { runDaily, syncPicks } from "./scheduler";
+import { runDaily } from "./scheduler";
 import { clearProblems, followEvent, track, useEpoch, useProblems } from "./activity";
 import { Icon, TriCheck, type IconName, type TriState } from "./ui";
 import { foldersOf, useFolderMap } from "./folders";
@@ -23,12 +21,9 @@ const SECTIONS: { id: string; label: string; icon: IconName }[] = [
   { id: "folder", label: "Library folder", icon: "folder" },
   { id: "folderorder", label: "Folder order", icon: "sort" },
   { id: "intros", label: "Intros", icon: "skip" },
-  { id: "player", label: "Player", icon: "play" },
   { id: "subtitles", label: "Subtitles", icon: "subtitles" },
   { id: "metadata", label: "Titles and art", icon: "image" },
-  { id: "picks", label: "Picks of the day", icon: "heart" },
   { id: "schedule", label: "Daily tasks", icon: "clock" },
-  { id: "plugins", label: "Jellyfin plugins", icon: "stack" },
   { id: "tools", label: "Tools", icon: "wrench" },
   { id: "updates", label: "Updates", icon: "download" },
   { id: "problems", label: "Problems log", icon: "warn" },
@@ -170,7 +165,6 @@ export default function Settings({ status, onChanged, section }: { status: Statu
 
           <FolderOrderSettings />
           <IntroSettings status={status} />
-          <PlayerSettings status={status} />
           <SubtitleSettings status={status} onChanged={onChanged} />
 
           <Section id="metadata" title="Titles and art" icon="image" hint="Where names, summaries and pictures come from.">
@@ -190,9 +184,7 @@ export default function Settings({ status, onChanged, section }: { status: Statu
             <LibraryLanguages canEdit={!status.readOnly} />
           </Section>
 
-          <PicksSettings status={status} />
           <ScheduleSettings status={status} />
-          <PluginSettings />
           <div id="set-tools"><ToolsSettings /></div>
           <div id="set-updates"><UpdateSettings /></div>
           <ProblemsLog />
@@ -255,9 +247,11 @@ function IntroSettings({ status }: { status: Status }) {
     }
   }
   const on = (n: string) => !!info && (info.all || info.selected.includes(n));
+  const p = usePrefs();
   return (
     <Section id="intros" title="Intros" icon="skip" hint="Which libraries Jellyfin's Intro Skipper scans for intros and credits. Media Hub's own detection works on any show you open.">
       {error && <p className="error">{error}</p>}
+      <Switch checked={p.recapsOff} onChange={(v) => setPrefs({ recapsOff: v })}>Leave recaps out (no recap markers in the intros tool)</Switch>
       {!info && !error && <p className="muted small">Reading Intro Skipper's settings…</p>}
       {info && !info.installed && <p className="muted small">The Intro Skipper plugin isn't installed in Jellyfin. Media Hub can still find intros itself (Intros and credits).</p>}
       {info?.installed && (
@@ -321,27 +315,6 @@ function WatchSyncTest() {
       {res && <span className={`small ${res.ok ? "ok-text" : "error-text"}`}>{res.text}</span>}
     </div>
   );
-}
-
-function PlayerSettings({ status }: { status: Status }) {
-  const p = usePrefs();
-  return (
-    <Section id="player" title="Player" icon="play" hint="How watching works in Media Hub.">
-      <Switch checked={p.autoSkipIntro} onChange={(v) => setPrefs({ autoSkipIntro: v })}>Skip intros by themselves (3-second countdown on the button; “Watch it” stays)</Switch>
-      <Switch checked={p.autoSkipCredits} onChange={(v) => setPrefs({ autoSkipCredits: v })}>Skip credits: go to the next episode after 5 seconds</Switch>
-      <Switch checked={p.upNextAutoplay} onChange={(v) => setPrefs({ upNextAutoplay: v })}>Play the next episode by itself when the credits start</Switch>
-      <Switch checked={p.recapsOff} onChange={(v) => setPrefs({ recapsOff: v })}>Turn recaps off completely (no recap markers in the player or the intros tool)</Switch>
-      <Switch checked={p.autoDetectIntros} onChange={(v) => setPrefs({ autoDetectIntros: v })} disabled={status.readOnly}>Find intros and credits in the background when I play a season without markers (needs ffmpeg; only sure finds are saved)</Switch>
-      <RandomFolders />
-      <div className="strong small">Subtitle look</div>
-      <SubStyleEditor />
-    </Section>
-  );
-}
-
-/** Which folders "Play something" picks from. */
-function RandomFolders() {
-  return <FolderPicker label="“Play something” picks from" pref="randomFolders" />;
 }
 
 /* ---------------------------------------------------------- subtitles */
@@ -458,66 +431,6 @@ function SubtitleSettings({ status, onChanged }: { status: Status; onChanged: ()
   );
 }
 
-/* ---------------------------------------------------- library languages */
-
-function LibraryLanguages({ canEdit }: { canEdit: boolean }) {
-  const epoch = useEpoch();
-  const [libs, setLibs] = useState<LibraryLang[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    api.libraryLanguages().then(setLibs).catch((e) => setError(errorText(e)));
-  }, [epoch]);
-  if (error) return <p className="muted small">Library languages: {error}</p>;
-  if (!libs) return null;
-  return (
-    <div className="stack-s">
-      <div className="strong small">Language per library</div>
-      <p className="muted small">For example Dutch titles and summaries for Kids, English for the rest. Changing it fetches the texts again for that library (pictures stay).</p>
-      {libs.filter((l) => l.kind !== "music" && l.kind !== "boxsets" && l.kind !== "playlists").map((l) => {
-        const cur = META_LANGS.find(([lang]) => lang === l.language)?.[0] ?? l.language;
-        return (
-          <div key={l.id} className="lang-row">
-            <span className="strong">{l.name}</span>
-            <select value={cur} disabled={!canEdit} onChange={(e) => {
-              const pick = META_LANGS.find(([lang]) => lang === e.target.value);
-              if (!pick) return;
-              void askConfirm(`Use ${pick[2]} for titles and summaries in “${l.name}” and fetch them again now? This can take a while on a big library.`, { okLabel: "Change and refresh" }).then((ok) => {
-                if (ok) void track(`${l.name}: ${pick[2]} titles`, () => api.setLibraryLanguage(l.id, pick[0], pick[1], true));
-              });
-            }}>
-              {META_LANGS.map(([lang, , label]) => <option key={lang} value={lang}>{label}</option>)}
-              {!META_LANGS.some(([lang]) => lang === l.language) && <option value={l.language}>{l.language}</option>}
-            </select>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------- picks */
-
-function PicksSettings({ status }: { status: Status }) {
-  const p = usePrefs();
-  return (
-    <Section id="picks" title="Picks of the day" icon="heart" hint="Twelve suggestions a day, also in Jellyfin so other apps see them.">
-      <p className="muted small">
-        Infuse's home screen only has its own rows (Up Next, Favourites, Recently Added) plus folders you pin. Jellyfin home-screen add-ons such as KefinTweaks only change Jellyfin's own app, not Infuse. So there are two ways to see the picks in Infuse:
-      </p>
-      <ol className="muted small steps-ol">
-        <li><b>A pinned row (recommended).</b> Media Hub keeps a collection called “Picks of the day” and changes it every day. In Infuse: your Jellyfin share → <b>Collections</b> → long-press <b>Picks of the day</b> → <b>Pin to Home Screen</b>. It's listed first.</li>
-        <li><b>Favourites.</b> Switch on the option below: today's picks show in Infuse's Favourites row. Your own favourites are never touched.</li>
-      </ol>
-      <p className="muted small">The picks change when Media Hub runs that day (it does this by itself in the background). Infuse can take a while to notice the change.</p>
-      <Switch checked={p.picksAsFavorites} disabled={status.readOnly} onChange={(v) => { setPrefs({ picksAsFavorites: v }); void syncPicks(); }}>
-        Also mark today's picks as favourites (yesterday's are unmarked again; your own favourites are never touched)
-      </Switch>
-      <FolderPicker label="Picks come from" pref="picksFolders" />
-      <div className="row"><button disabled={status.readOnly} onClick={() => void syncPicks()}><Icon name="reload" /> Update in Jellyfin now</button></div>
-    </Section>
-  );
-}
-
 /* ------------------------------------------------- Jellyfin as backend */
 
 /** Whether a library option is "on", and the value that switches it on or off. */
@@ -628,7 +541,7 @@ function BackendSettings({ status }: { status: Status }) {
           </li>
           <li>Add the server in Infuse under Settings → Shares → Add → Jellyfin, signed in as the same user Media Hub watches as.</li>
           <li><b>Direct mode</b> is the fast one: Infuse browses Jellyfin live, nothing to sync. Library mode copies everything into Infuse first.</li>
-          <li>Picks of the day, your collections and playlists: pin them to Infuse's home screen under Settings → Shares → your Jellyfin server → Add Favorite.</li>
+          <li>Your collections and playlists: pin them to Infuse's home screen under Settings → Shares → your Jellyfin server → Add Favorite.</li>
           <li>Infuse shows what Media Hub set: titles, summaries, posters, backgrounds and logos come from Jellyfin, so edit them here, not in Infuse.</li>
           <li>Watched status and where you stopped sync both ways through Jellyfin.</li>
         </ul>
@@ -637,7 +550,42 @@ function BackendSettings({ status }: { status: Status }) {
   );
 }
 
-/* ---------------------------------------------------------- schedule */
+/* ---------------------------------------------------- library languages */
+
+function LibraryLanguages({ canEdit }: { canEdit: boolean }) {
+  const epoch = useEpoch();
+  const [libs, setLibs] = useState<LibraryLang[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.libraryLanguages().then(setLibs).catch((e) => setError(errorText(e)));
+  }, [epoch]);
+  if (error) return <p className="muted small">Library languages: {error}</p>;
+  if (!libs) return null;
+  return (
+    <div className="stack-s">
+      <div className="strong small">Language per library</div>
+      <p className="muted small">For example Dutch titles and summaries for Kids, English for the rest. Changing it fetches the texts again for that library (pictures stay).</p>
+      {libs.filter((l) => l.kind !== "music" && l.kind !== "boxsets" && l.kind !== "playlists").map((l) => {
+        const cur = META_LANGS.find(([lang]) => lang === l.language)?.[0] ?? l.language;
+        return (
+          <div key={l.id} className="lang-row">
+            <span className="strong">{l.name}</span>
+            <select value={cur} disabled={!canEdit} onChange={(e) => {
+              const pick = META_LANGS.find(([lang]) => lang === e.target.value);
+              if (!pick) return;
+              void askConfirm(`Use ${pick[2]} for titles and summaries in “${l.name}” and fetch them again now? This can take a while on a big library.`, { okLabel: "Change and refresh" }).then((ok) => {
+                if (ok) void track(`${l.name}: ${pick[2]} titles`, () => api.setLibraryLanguage(l.id, pick[0], pick[1], true));
+              });
+            }}>
+              {META_LANGS.map(([lang, , label]) => <option key={lang} value={lang}>{label}</option>)}
+              {!META_LANGS.some(([lang]) => lang === l.language) && <option value={l.language}>{l.language}</option>}
+            </select>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function ScheduleSettings({ status }: { status: Status }) {
   const p = usePrefs();
@@ -653,58 +601,11 @@ function ScheduleSettings({ status }: { status: Status }) {
       </div>
       <div className="fields2">
         <label className="check small"><input type="checkbox" checked={s.scan} onChange={(e) => set({ scan: e.target.checked })} />Scan the library</label>
-        <label className="check small"><input type="checkbox" checked={s.picks} onChange={(e) => set({ picks: e.target.checked })} />Update “Picks of the day”</label>
         <label className="check small"><input type="checkbox" checked={s.art} onChange={(e) => set({ art: e.target.checked })} />Fill in missing artwork (newest titles first)</label>
         <label className="check small"><input type="checkbox" checked={s.subtitles} onChange={(e) => set({ subtitles: e.target.checked })} />Get missing subtitles (your Subtitles settings)</label>
       </div>
       <div className="row"><button onClick={() => void runDaily(status, true)}><Icon name="play" /> Run now</button></div>
-      {status.readOnly && <p className="muted small">Artwork, subtitles and picks need changes switched on.</p>}
-    </Section>
-  );
-}
-
-/* ------------------------------------------------------------ plugins */
-
-function PluginSettings() {
-  const epoch = useEpoch();
-  const [installed, setInstalled] = useState<{ name: string; version: string; status: string }[] | null>(null);
-  useEffect(() => {
-    api.pluginsInstalled().then(setInstalled).catch(() => setInstalled([]));
-  }, [epoch]);
-  const has = (...names: string[]) => installed?.find((p) => names.some((n) => p.name.toLowerCase().replace(/\s/g, "").includes(n.toLowerCase().replace(/\s/g, ""))));
-  const rows: { names: string[]; label: string; why: string; need: boolean }[] = [
-    { names: ["MediaSegments"], label: "MediaSegments API", why: "Saving intro, credits and recap markers (Infuse's Skip buttons).", need: true },
-    { names: ["Open Subtitles", "OpenSubtitles"], label: "Open Subtitles", why: "Subtitles. Sign in in the plugin's settings; free accounts get a few downloads a day.", need: true },
-    { names: ["subbuzz"], label: "SubBuzz (optional)", why: "More free subtitle sites (several providers in one plugin, by josdion on GitHub). Media Hub uses every subtitle plugin Jellyfin has, so it finds more matches and isn't stuck at one site's daily limit.", need: false },
-    { names: ["Intro Skipper"], label: "Intro Skipper (optional)", why: "Lets Jellyfin find intros and credits itself, on the server. Media Hub can start it from Intros and credits; its markers show up in Infuse like Media Hub's.", need: false },
-    { names: ["Fanart"], label: "Fanart", why: "Logos, banners, clear art and disc pictures.", need: true },
-    { names: ["TheTVDB", "TVDB"], label: "TheTVDB", why: "Banners and episode data for shows.", need: true },
-    { names: ["MusicBrainz"], label: "MusicBrainz / AudioDB (built in)", why: "Album covers and artist pictures for music in Jellyfin. Switch them on in the music library's settings.", need: false },
-  ];
-  const webOnly = (installed ?? []).filter((p) => /enhanced|home ?screen|sections|custom ?tabs|file ?transformation|plugin ?pages|media ?bar/i.test(p.name));
-  return (
-    <Section id="plugins" title="Jellyfin plugins" icon="stack" hint="Installed in Jellyfin: Dashboard → Plugins → Catalog, then restart Jellyfin.">
-      {rows.map((r) => {
-        const p = has(...r.names);
-        const state = installed === null ? "…" : p ? "ok" : r.need ? "warn" : "muted";
-        return (
-          <div key={r.label} className="plugin-row">
-            <span className={state === "…" ? "muted" : state}><Icon name={installed === null ? "clock" : p ? "check" : r.need ? "warn" : "plus"} /></span>
-            <div className="grow"><div className="strong small">{r.label}</div><div className="muted small">{r.why}</div></div>
-            <span className={`small ${p ? "ok" : r.need ? "warn" : "muted"}`}>{installed === null ? "Checking…" : p ? `Installed · ${p.version}` : r.need ? "Not installed" : "Not installed (optional)"}</span>
-          </div>
-        );
-      })}
-      {webOnly.length > 0 && (
-        <p className="muted small">
-          {webOnly.map((p) => p.name).join(", ")}: these change Jellyfin's own web app (home sections, player extras). Infuse builds its own screens from your library, so they don't show there; Media Hub's Player home has similar rows (Because you watched, genres, picks).
-        </p>
-      )}
-      {installed && installed.length > 0 && (
-        <details className="small"><summary className="muted">All {installed.length} installed plugins</summary>
-          <div className="plugin-all">{installed.map((p) => <span key={p.name} className="chip static">{p.name} <span className="muted">{p.version}</span></span>)}</div>
-        </details>
-      )}
+      {status.readOnly && <p className="muted small">Artwork and subtitles need changes switched on.</p>}
     </Section>
   );
 }

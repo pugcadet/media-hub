@@ -5,6 +5,7 @@ import { gotSub, markSubGot, prefs, setPrefs, subSkipped, usePrefs } from "./pre
 import { Seg } from "./kit";
 import { Icon, SettingsLink } from "./ui";
 import { askConfirm } from "./confirm";
+import SubPreview from "./SubPreview";
 
 function useCultures(): Culture[] {
   const [list, setList] = useState<Culture[]>([]);
@@ -37,6 +38,7 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [local, setLocal] = useState<LocalSub[]>([]);
+  const [preview, setPreview] = useState<{ path: string; lang: string } | null>(null);
   const p = usePrefs();
 
   async function load() {
@@ -114,6 +116,9 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
   }
 
   const listed = new Set((opts?.current ?? []).map((c) => c.path).filter(Boolean));
+  const canPreview = (path: string | null | undefined) => !!path && /\.(srt|vtt)$/i.test(path);
+  const sameLang = (a: string | null | undefined, b: string) => !!a && languageName(a, list) === languageName(b, list);
+  const previewOthers = preview ? local.filter((l) => l.path !== preview.path && sameLang(l.lang, preview.lang)).length : 0;
   const notListed = local.filter((l) => l.linked && !listed.has(l.path));
   const loose = local.filter((l) => !l.linked);
   return (
@@ -131,6 +136,7 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
             {opts.current.map((s) => (
               <span className="chip static sub-have" key={s.index}>
                 <Icon name="subtitles" size={13} /> {languageName(s.language, list) || "Unknown"}{s.forced ? " (forced)" : ""}{s.external ? " · file" : " · built in"}{/sdh|hearing/i.test(s.title) ? " · SDH" : ""}
+                {s.external && canPreview(s.path) && <button className="link small" title="Watch short clips with this subtitle, adjust the timing and lock it in" onClick={() => setPreview({ path: s.path, lang: s.language || lang })}>Preview</button>}
                 {s.external && canEdit && <button className="link small" title="Line it up with the speech in the video (needs ffmpeg)" onClick={() => void fixTiming(s.index)}>Fix timing</button>}
                 {s.external && canEdit && s.path && <button className="chip-x" aria-label="Remove this subtitle" title="Remove (goes to the trash, can be undone)" onClick={() => void remove(s.path, languageName(s.language, list) || "")}><Icon name="x" size={12} /></button>}
               </span>
@@ -138,6 +144,7 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
             {notListed.map((l) => (
               <span className="chip static sub-have pending" key={l.path} title="Saved next to the video. Jellyfin lists it after its next look at the folder.">
                 <Icon name="subtitles" size={13} /> {l.lang ? languageName(l.lang, list) : l.name} · file · new
+                {canPreview(l.path) && <button className="link small" onClick={() => setPreview({ path: l.path, lang: l.lang || lang })}>Preview</button>}
                 {canEdit && <button className="chip-x" aria-label="Remove this subtitle" onClick={() => void remove(l.path, l.lang ? languageName(l.lang, list) : l.name)}><Icon name="x" size={12} /></button>}
               </span>
             ))}
@@ -149,6 +156,15 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
             </div>
           )}
         </>
+      )}
+      {preview && (
+        <SubPreview
+          key={preview.path}
+          id={id} path={preview.path} lang={preview.lang} label={languageName(preview.lang, list) || "this language"}
+          others={previewOthers} canEdit={canEdit}
+          onClose={() => setPreview(null)}
+          onDone={(n) => { setPreview(null); setNote(n); void load(); }}
+        />
       )}
       {error && <p className="error">{error}</p>}
       {note && <p className="note">{note}</p>}

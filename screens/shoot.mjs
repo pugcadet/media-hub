@@ -8,7 +8,7 @@ fs.mkdirSync(out, { recursive: true });
 const kinds = fs.readFileSync(new URL("./kinds.json", import.meta.url), "utf8");
 const mock = fs.readFileSync(new URL("./mock.js", import.meta.url), "utf8");
 
-const views = ["home", "library", "renamer", "subtitles", "intros", "cleanup", "missing", "duplicates", "tags", "history", "collections", "add", "settings", "health", "metadata"];
+const views = ["home", "library", "renamer", "subtitles", "intros", "cleanup", "missing", "duplicates", "tags", "history", "add", "jellyfin", "settings"];
 const log = [];
 const browser = await chromium.launch();
 for (const [w, h] of [[1440, 900], [1100, 760]]) {
@@ -65,42 +65,42 @@ for (const [w, h] of [[1440, 900], [1100, 760]]) {
   } catch (e) {
     log.push(`[${w}] item: ${e.message}`);
   }
-  // Renamer → Folders → Movie folders.
-  try {
-    await page.evaluate(() => window.__mhNav?.route({ view: "renamer", section: "folders", n: Date.now() }));
-    await page.waitForTimeout(800);
-    await page.click("text=Check movie folders", { timeout: 2000 });
-    await page.waitForTimeout(800);
-    await page.click("text=Move them to", { timeout: 2000 }).catch(() => undefined);
-    await page.waitForTimeout(300);
-    await page.screenshot({ path: `${out}/${w}-movie-folders.png` });
-  } catch (e) {
-    log.push(`[${w}] movie folders: ${e.message}`);
+  // Renamer → Folders; Library → Music.
+  for (const [name, route] of [["folders", { view: "renamer", section: "folders" }]]) {
+    try {
+      await page.evaluate((r) => window.__mhNav?.route({ ...r, n: Date.now() }), route);
+      await page.waitForTimeout(1200);
+      await page.screenshot({ path: `${out}/${w}-${name}.png` });
+    } catch (e) {
+      log.push(`[${w}] ${name}: ${e.message}`);
+    }
   }
-  // Music: tiles, list, manage (through the hub switcher, like a person would).
+  // Library → Music tab.
   try {
-    await page.click(".hub-btn");
-    await page.click(".hub-menu >> text=Music");
-    await page.waitForTimeout(1000);
-    await page.click(".m-tabs >> text=Albums");
-    await page.waitForTimeout(700);
-    await page.screenshot({ path: `${out}/${w}-music.png` });
-    await page.click(".w-top [title=List]");
-    await page.waitForTimeout(500);
-    await page.screenshot({ path: `${out}/${w}-music-list.png` });
-    await page.click(".m-tabs >> text=Manage");
+    await page.evaluate(() => window.__mhNav?.route({ view: "library", n: Date.now() }));
     await page.waitForTimeout(900);
-    await page.click(".m-manage .studio-item", { timeout: 1500 }).catch(() => undefined);
-    await page.waitForTimeout(700);
-    await page.screenshot({ path: `${out}/${w}-music-manage.png` });
-    await page.click(".m-manage >> text=Source");
-    await page.waitForTimeout(500);
-    await page.screenshot({ path: `${out}/${w}-music-source.png` });
-    await page.click(".hub-btn");
-    await page.click(".hub-menu >> text=Media manager");
-    await page.waitForTimeout(600);
+    await page.click('[role=tab]:has-text("Music")', { timeout: 2000 });
+    await page.waitForTimeout(1200);
+    await page.screenshot({ path: `${out}/${w}-music.png` });
   } catch (e) {
     log.push(`[${w}] music: ${e.message}`);
+  }
+  // Subtitles: open one video's picker inline.
+  try {
+    await page.evaluate(() => window.__mhNav?.route({ view: "subtitles", n: Date.now() }));
+    await page.waitForTimeout(900);
+    await page.click(".sub-show .sub-toggle", { timeout: 2000 });
+    await page.waitForTimeout(300);
+    await page.click(".sub-season .sub-toggle", { timeout: 2000 });
+    await page.waitForTimeout(300);
+    await page.click(".sub-ep .names", { timeout: 2000 });
+    await page.waitForTimeout(1200);
+    await page.screenshot({ path: `${out}/${w}-subtitle-pick.png` });
+    await page.click(".sub-inline >> text=Preview", { timeout: 2000 });
+    await page.waitForTimeout(1200);
+    await page.screenshot({ path: `${out}/${w}-subtitle-preview.png` });
+  } catch (e) {
+    log.push(`[${w}] subtitle pick: ${e.message}`);
   }
   // Collapsed sidebar.
   try {

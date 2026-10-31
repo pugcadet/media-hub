@@ -7,14 +7,15 @@ import { applyArt, askArt } from "./ArtPicker";
 import { api, titleYear, Card, CheckRow, Details, errorText, HealthRow, imageUrl, SegSummary, Status } from "./api";
 import { followEvent, onItemsChanged, track, useEpoch } from "./activity";
 import { nav, type Route } from "./nav";
-import { artSkipped, fixTitles, FixKind, noSubsOf, targetOf } from "./fixers";
+import { artSkipped, fixTitles, FixKind, namesToFix, noSubsOf, targetOf } from "./fixers";
 import { askFixes } from "./FixDialog";
 import { Studio, StudioItem } from "./Studio";
 import ItemPage from "./ItemPage";
 import { askChoice, Icon, type IconName, Img, itemMenu, openMenu, SettingsLink, type MenuItem } from "./ui";
 import { askIdentify } from "./IdentifyDialog";
-import { prefs, setPrefs, usePrefs } from "./prefs";
+import { namingLeftAlone, prefs, setPrefs, usePrefs } from "./prefs";
 import { folderTabs, IconBtn, KTabs, PageHead, SearchBox, Seg, StatusIcons, Toolbar } from "./kit";
+import MusicManage from "./MusicManage";
 
 type Check = "naming" | "identified" | "artwork" | "subtitles" | "intros";
 
@@ -40,7 +41,7 @@ function state(r: Row, c: Check): boolean | null {
   // Checks you switched off for this title (no subtitles or intros needed) count as fine.
   if ((prefs().checksOff[clean(r.id)] ?? []).includes(c)) return null;
   switch (c) {
-    case "naming": return r.check ? !r.check.error && r.check.toRename + r.check.folders + r.check.problems === 0 : null;
+    case "naming": return !r.check || r.check.stale || namingLeftAlone(r.check) ? null : !namesToFix(r.check) && !r.check.error;
     case "identified": return r.identified;
     case "artwork": return ART.every((a) => r[a.key] || artSkipped(r.id).includes(a.kind));
     case "subtitles": return noSubsOf(r) === 0;
@@ -94,6 +95,17 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
         : await api.libraryHealth(false);
       const seg = await api.segmentCoverage(h.rows.filter((r) => r.kind === "series").map((r) => r.id), false).catch(() => ({} as Record<string, SegSummary>));
       setRows(h.rows.map((r) => ({ ...r, check: byId.get(clean(r.id)) ?? null, seg: seg[clean(r.id)] ?? null })));
+      // Titles renamed since their naming check (Inbox, Identify, Folders …): checked again quietly.
+      const stale = (nc?.rows ?? []).filter((x) => x.stale && !namingLeftAlone(x)).map((x) => x.id);
+      if (stale.length) {
+        void import("./Renamer").then((m) => {
+          const args = m.namingArgs();
+          return api.namingCheck(args[0], args[1], stale.slice(0, 40), args[2], args[3]);
+        }).then((res) => {
+          const fresh = new Map(res.rows.map((x) => [clean(x.id), x]));
+          setRows((rs) => rs?.map((x) => (fresh.has(clean(x.id)) ? { ...x, check: fresh.get(clean(x.id)) ?? x.check } : x)) ?? null);
+        }).catch(() => undefined);
+      }
       if (!fresh && Date.now() / 1000 - h.at > 86_400) void load(true);
     } catch (e) {
       setError(errorText(e));
@@ -170,9 +182,14 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
     }, { items: [r.id] }).catch(() => undefined));
   }
 
-  // Selecting in the list keeps the first title selected when nothing is.
+  // A tab you click starts at its first title; a list that updates by itself (after new
+  // artwork, a rename …) keeps the title you had selected.
+  const lastFolder = useRef(folder);
   useEffect(() => {
-    if (libraryView === "list" && folder !== "@collections" && shown.length && (!sel || !shown.some((r) => r.id === sel))) setSel(shown[0].id);
+    if (libraryView !== "list" || folder.startsWith("@c") || folder === "@music" || !shown.length) return;
+    const switched = lastFolder.current !== folder;
+    lastFolder.current = folder;
+    if (switched || !sel || !shown.some((r) => r.id === sel)) setSel(shown[0].id);
   }, [libraryView, folder, shown.length, sel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** The open title's page loaded fresh details: update its dots right away. */
@@ -199,6 +216,7 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
       tabs={[
         ...folderTabs(folders, (f) => (f === null ? rows?.length ?? null : (rows ?? []).filter((r) => r.libraryFolder === f).length)),
         { id: "@collections", label: "Collections", icon: "heart" },
+        { id: "@music", label: "Music", icon: "music" },
       ]}
     />
   );
@@ -210,9 +228,19 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
         {checking ? "Checking the library…" : rows ? `${perfect} of ${inFolder.length} titles complete.` : "Reading the library…"}
         {folders.length === 0 && rows && <> Folder tabs appear once your library folder is set (<SettingsLink section="library">Settings</SettingsLink>).</>}
       </>}
-      actions={<button className="primary" disabled={!canEdit || !rows} onClick={() => void fixAll()}><Icon name="wand" /> Fix what's safe ({shown.filter((r) => score(r) < 1).length})</button>}
+      actions={folder === "@music" ? undefined : <button className="primary" disabled={!canEdit || !rows} onClick={() => void fixAll()}><Icon name="wand" /> Fix what's safe ({shown.filter((r) => score(r) < 1).length})</button>}
     />
   );
+
+  if (folder === "@music") {
+    return (
+      <div className="pg studio-page lib-page">
+        {head}
+        {tabs}
+        <MusicManage embedded onChanged={() => undefined} />
+      </div>
+    );
+  }
 
   if (folder === "@collections") {
     return (

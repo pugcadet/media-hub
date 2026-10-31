@@ -5,12 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 import { api, errorText, MusicItem } from "./api";
 import { followEvent, track } from "./activity";
 import { usePageState } from "./saved";
-import { IconBtn, KTabs, SearchBox, Seg, StatusIcons, Toolbar, type StatusIcon } from "./kit";
+import { KTabs, SearchBox, Seg, StatusIcons, Toolbar, type StatusIcon } from "./kit";
 import { Studio, type StudioItem } from "./Studio";
 import { Icon } from "./ui";
-import { Art } from "./Music";
-import { chooseMusicArt, editMusicInfo } from "./MusicEdit";
-import { useMusicPlayer } from "./musicPlayer";
+import { Art, chooseMusicArt, editMusicInfo } from "./MusicEdit";
 import { fmt } from "./Intros";
 
 type MTab = "albums" | "artists" | "source";
@@ -25,7 +23,7 @@ const CHECKS: { id: Check; label: string; icon: "image" | "clock" | "music" }[] 
 ];
 const ok = (a: MusicItem, c: Check) => (c === "cover" ? a.hasArt : c === "year" ? !!a.year : !unknownArtist(a.artist));
 
-export default function MusicManage({ onChanged }: { onChanged: () => void }) {
+export default function MusicManage({ onChanged, embedded }: { onChanged: () => void; embedded?: boolean }) {
   const [tab, setTab] = usePageState<MTab>("music.manage", "albums");
   const [source, setSource] = useState<{ folder: string | null; source: "jellyfin" | "folder" } | null>(null);
   const [albums, setAlbums] = useState<MusicItem[] | null>(null);
@@ -44,16 +42,18 @@ export default function MusicManage({ onChanged }: { onChanged: () => void }) {
   }, [n]);
   const todo = (albums ?? []).filter((a) => CHECKS.some((c) => !ok(a, c.id))).length;
   return (
-    <div className="pg studio-page m-manage">
-      <div className="pg-head">
-        <h1>Manage music</h1>
-        <span className="muted">{source?.source === "folder" ? `From your music folder${source.folder ? `: ${source.folder}` : ""}` : "From Jellyfin"}</span>
-      </div>
+    <div className={embedded ? "m-manage m-embedded grow-col" : "pg studio-page m-manage"}>
+      {!embedded && (
+        <div className="pg-head">
+          <h1>Music</h1>
+          <span className="muted">{source?.source === "folder" ? `From your music folder${source.folder ? `: ${source.folder}` : ""}` : "From Jellyfin"}</span>
+        </div>
+      )}
       <KTabs
         tabs={[
           { id: "albums", label: "Albums", icon: "stack", count: todo || null, warn: todo > 0 },
           { id: "artists", label: "Artists", icon: "music", count: artists?.length ?? null },
-          { id: "source", label: "Source", icon: "settings" },
+          { id: "source", label: "Pictures", icon: "image" },
         ]}
         active={tab}
         onChange={(t) => setTab(t as MTab)}
@@ -94,6 +94,8 @@ function AlbumsPane({ albums, changed }: { albums: MusicItem[] | null; changed: 
     warn: !a.hasArt,
   }));
   const selected = list.find((a) => a.id === sel) ?? null;
+  // Like the other Library tabs: the first one is open when nothing (that still shows) is picked.
+  useEffect(() => { if (shown.length && !shown.some((a) => a.id === sel)) setSel(shown[0].id); }, [shown, sel]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
       <div className="lib-filters">
@@ -123,7 +125,6 @@ function AlbumsPane({ albums, changed }: { albums: MusicItem[] | null; changed: 
 interface Draft { name: string; artist: string; index: string; disc: string }
 
 function AlbumDetail({ album, changed }: { album: MusicItem; changed: () => void }) {
-  const player = useMusicPlayer();
   const [f, setF] = useState({ name: album.name, artist: album.artist, year: album.year ? String(album.year) : "" });
   const [tracks, setTracks] = useState<MusicItem[] | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -201,7 +202,6 @@ function AlbumDetail({ album, changed }: { album: MusicItem; changed: () => void
             <button className="primary" disabled={!dirty || busy} onClick={() => void save()}>{busy ? <span className="spinner" /> : dirty ? `Save${changedTracks.length ? ` (${changedTracks.length} song${changedTracks.length === 1 ? "" : "s"})` : ""}` : "Saved"}</button>
             {dirty && <button disabled={busy} onClick={() => { setF({ name: album.name, artist: album.artist, year: album.year ? String(album.year) : "" }); setN((x) => x + 1); }}>Cancel</button>}
             <span className="spacer" />
-            <IconBtn icon="play" title="Play the album" onClick={() => tracks && player.playList(tracks, 0)} disabled={!tracks?.length} />
             {isLocal(album.id) && <button className="link small" disabled={busy} onClick={() => void reset()} title="Forget your changes to this album and its songs">Back to the files</button>}
           </div>
           <p className="muted small">{isLocal(album.id) ? "Media Hub keeps your changes itself; the music files are not changed." : "Saved in Jellyfin; History can undo it."}</p>
@@ -246,6 +246,7 @@ function ArtistsPane({ artists, changed }: { artists: MusicItem[] | null; change
     warn: !a.hasArt,
   }));
   const selected = list.find((a) => a.id === sel) ?? null;
+  useEffect(() => { if (shown.length && !shown.some((a) => a.id === sel)) setSel(shown[0].id); }, [shown.length, shown[0]?.id, sel]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
       <div className="lib-filters">

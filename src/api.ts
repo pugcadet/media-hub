@@ -423,6 +423,45 @@ export interface LocalSub {
   linked: boolean;
 }
 
+export interface InboxFile {
+  rel: string;
+  size: number;
+  video: boolean;
+  season: number | null;
+  episodes: number[];
+}
+export interface InboxItem {
+  key: string;
+  isFolder: boolean;
+  size: number;
+  modified: number;
+  kind: "tv" | "movie" | "music" | "other";
+  title: string;
+  year: number | null;
+  files: InboxFile[];
+  music: { artist: string; album: string; year: number | null } | null;
+}
+export interface InboxTarget {
+  kind: "tv" | "movie" | "music" | "other";
+  itemId: string | null;
+  top: string;
+  title: string;
+  year: number | null;
+  season: number | null;
+  artist: string | null;
+  album: string | null;
+}
+export interface InboxMove {
+  from: string;
+  to: string;
+  have: boolean;
+}
+export interface InboxPlan {
+  folder: string;
+  existing: boolean;
+  moves: InboxMove[];
+}
+
 export interface MovieFolder {
   id: string;
   title: string;
@@ -434,6 +473,8 @@ export interface MovieFolder {
   group: string | null;
   expected: string;
   ok: boolean;
+  /** Its Jellyfin collection as a folder name, when that holds 2+ of your movies. */
+  collection: string | null;
 }
 
 /** Online subtitles, most downloaded first (or best match first). */
@@ -525,6 +566,9 @@ export interface CheckRow {
   reasons: string[];
   example: [string, string] | null;
   error: string | null;
+  /** Renamed in its folder since it was checked: needs a fresh look. */
+  stale?: boolean;
+  checked?: number;
 }
 
 export interface CheckResult {
@@ -869,7 +913,7 @@ export const api = {
     invoke<SearchResult[]>("identify_search", { kind, name, year, ids }),
   /** Every movie and the folder its video is in (own / shared / loose, collection folder). */
   movieFolders: () => invoke<MovieFolder[]>("movie_folders"),
-  movieFoldersPlan: (moves: { video: string; mode: "fix" | "out" }[], groups: { folder: string; name: string }[]) =>
+  movieFoldersPlan: (moves: { video: string; mode: "fix" | "out" | "collect" }[], groups: { folder: string; name: string }[]) =>
     invoke<{ planId: string; ops: PlanOp[] }>("movie_folders_plan", { moves, groups }),
   /** Puts the identified match into the folder name ("Heat (1995) [tmdbid-949]"), so it sticks. */
   pinIdentity: (id: string) => invoke<{ name: string; changed: boolean; note: string | null }>("pin_identity", { id }),
@@ -935,8 +979,17 @@ export const api = {
   imagesRevalidate: () => invoke<void>("images_revalidate"),
   /** A title whose id changed (folder renamed): its new id, found by name and year. */
   makeThumb: (id: string) => artChange(id, invoke<boolean>("make_thumb", { id })),
-  structureScan: () => invoke<import("./Structure").TopFolder[]>("structure_scan"),
+  structureScan: () => invoke<import("./Folders").TopFolder[]>("structure_scan"),
+  musicArtistMerges: (top: string) => invoke<{ from: string; to: string; albums: string[] }[]>("music_artist_merges", { top }),
+  musicMergePlan: (top: string, from: string[]) => invoke<{ planId: string; ops: PlanOp[] }>("music_merge_plan", { top, from }),
   structurePlan: (actions: { kind: string; path: string }[]) => invoke<{ planId: string; ops: PlanOp[] }>("structure_plan", { actions }),
+  serverOverview: () => invoke<ServerOverview>("server_overview"),
+  serverTaskRun: (id: string) => invoke<void>("server_task_run", { id }),
+  serverTaskStop: (id: string) => invoke<void>("server_task_stop", { id }),
+  serverTaskRunKey: (key: string) => invoke<void>("server_task_run_key", { key }),
+  serverRestart: () => invoke<void>("server_restart"),
+  picksLeftovers: () => invoke<number>("picks_leftovers"),
+  picksRemove: () => invoke<number>("picks_remove"),
   pluginsInstalled: () => invoke<{ name: string; version: string; status: string }[]>("plugins_installed"),
   runIntroSkipper: () => invoke<string>("run_intro_skipper"),
   findMoved: (id: string) => invoke<string | null>("find_moved", { id }),
@@ -953,6 +1006,8 @@ export const api = {
   syncPicksCollection: (ids: string[], date?: string) => invoke<string>("sync_picks_collection", { ids, date: date ?? null }),
   revealItem: (id: string) => invoke<void>("reveal_item", { id }),
   revealRel: (rel: string) => invoke<void>("reveal_rel", { rel }),
+  /** Opens the video in the computer's own player (QuickTime, IINA, VLC …). */
+  openVideo: (id: string) => invoke<void>("open_video", { id }),
   itemFolder: (id: string) => invoke<string>("item_folder", { id }),
   libraryScan: () => invoke<void>("library_scan"),
   namingCheck: (tvTemplate: string, movieTemplate: string, ids: string[] | null = null, yearOptional = true, minimal = true) =>
@@ -977,6 +1032,10 @@ export const api = {
     invoke<{ folder: string; moved: number; copied: number; skipped: string[]; trashed: boolean; keptBecause: string | null }>("import_run", { dest, title, year, mode }),
   clearResume: (id: string) => invoke<void>("clear_resume", { id }),
   inboxPick: () => invoke<string | null>("inbox_pick"),
+  inboxScan: () => invoke<[string | null, InboxItem[]]>("inbox_scan"),
+  inboxResolve: (key: string, target: InboxTarget) => invoke<InboxPlan>("inbox_resolve", { key, target }),
+  inboxPlace: (key: string, moves: InboxMove[]) => invoke<{ placed: string[]; skipped: number; failed: string[]; trashed: boolean }>("inbox_place", { key, moves }),
+  inboxTrash: (key: string) => invoke<void>("inbox_trash", { key }),
   inboxList: () => invoke<[string | null, InboxEntry[]]>("inbox_list"),
   inboxSelect: (name: string) => invoke<ImportSource>("inbox_select", { name }),
   libraryHealth: (fresh: boolean) => invoke<{ at: number; rows: HealthRow[] }>("library_health", { fresh }),
@@ -989,6 +1048,10 @@ export const api = {
   /** Keeps one subtitle: its timing into the file, the others in its language to the trash, named after the video. */
   subtitleLock: (id: string, path: string, lang: string, offset: number, removeOthers: boolean) =>
     invoke<{ shifted: number; removed: number; file: string; renamed: boolean }>("subtitle_lock", { id, path, lang, offset, removeOthers }),
+  subtitlePreview: (id: string, path: string) =>
+    invoke<{ duration: number; lines: { s: number; e: number; t: string }[]; spots: number[]; file: string }>("subtitle_preview", { id, path }),
+  /** A short clip of the video with sound, as base64 MP4. */
+  videoClip: (id: string, start: number, seconds: number) => invoke<string>("video_clip", { id, start, seconds }),
   musicRescan: () => invoke<number>("music_rescan"),
   musicFetchArt: (again = false) => invoke<{ covers: number; artists: number; missingCovers: number }>("music_fetch_art", { again }),
   musicLocalEdit: (id: string, edit: MusicEdit) => invoke<void>("music_local_edit", { id, edit }),
@@ -1114,4 +1177,15 @@ export function titleYear(name: string, year?: number | null): string {
 /** Wraps a promise so the "open in Finder" style one-liners don't need their own error handling. */
 export function quiet(p: Promise<unknown>): void {
   p.catch(() => undefined);
+}
+
+export interface ServerTask {
+  id: string; name: string; category: string; key: string; state: string;
+  progress: number | null; lastStatus: string | null; lastEnd: string | null; lastError: string | null;
+}
+export interface ServerOverview {
+  name: string; version: string; os: string; pendingRestart: boolean; latest: string | null; updateAvailable: boolean;
+  plugins: { name: string; version: string; status: string; update: string | null }[];
+  tasks: ServerTask[];
+  events: { name: string; overview: string; severity: string; date: string }[];
 }

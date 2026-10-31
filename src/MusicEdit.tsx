@@ -2,7 +2,7 @@
 // Music from a folder: the changes are kept by Media Hub (the music files are never written to)
 // and can be reset. Music from Jellyfin: saved in Jellyfin like any other edit (History can undo).
 import { useEffect, useState } from "react";
-import { api, ArtOption, errorText, MusicItem, remoteImageUrl } from "./api";
+import { api, ArtOption, errorText, imageUrl, MusicItem, remoteImageUrl } from "./api";
 import { track } from "./activity";
 import { Icon, makeStore } from "./ui";
 
@@ -206,5 +206,18 @@ export function MusicEditHost() {
       <EditHost />
       <ArtHost />
     </>
+  );
+}
+
+/** An album cover or artist picture (a music note when there's none). */
+export function Art({ item, size, round }: { item: MusicItem; size: number; round?: boolean }) {
+  const v = artVersion.use();
+  const [ok, setOk] = useState(item.hasArt);
+  useEffect(() => setOk(item.hasArt), [item.hasArt, item.artUrl, v]);
+  const src = item.artUrl ? `${item.artUrl}${v ? `?v=${v}` : ""}` : imageUrl(item.artId, "Primary", size);
+  return (
+    <div className={`m-art ${round ? "round" : ""}`}>
+      {ok ? <img src={src} alt="" loading="lazy" onError={() => setOk(false)} /> : <div className="m-noart"><Icon name="music" size={28} /></div>}
+    </div>
   );
 }

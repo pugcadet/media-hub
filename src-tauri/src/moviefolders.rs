@@ -41,6 +41,9 @@ pub struct MovieFolder {
     pub expected: String,
     /// Already in a folder of its own with the right name.
     pub ok: bool,
+    /// The Jellyfin collection it's in, as a folder name ("Alien Collection"), when that
+    /// collection holds two or more of your movies.
+    pub collection: Option<String>,
 }
 
 fn tag_re() -> &'static Regex {
@@ -92,7 +95,7 @@ pub fn classify(movies: Vec<(String, String, Option<i64>, String)>) -> Vec<Movie
             continue;
         }
         let ok = kind == "own" && last(&folder) == expected;
-        out.push(MovieFolder { id, title, year, video, folder, top, kind, group, expected, ok });
+        out.push(MovieFolder { id, title, year, video, folder, top, kind, group, expected, ok, collection: None });
     }
     out.sort_by(|a, b| a.video.to_lowercase().cmp(&b.video.to_lowercase()));
     out
@@ -125,14 +128,48 @@ pub async fn movie_folders(state: State<'_, AppState>) -> Result<Vec<MovieFolder
         let Some(rel) = local::rel_to_root(&root, &local_path) else { continue };
         movies.push((id, title.to_string(), v.get("ProductionYear").and_then(Value::as_i64), rel));
     }
-    Ok(classify(movies))
+    let mut list = classify(movies);
+    // Which collection each movie is in (the smallest one, when it's in several).
+    if let Ok(colls) = c.collections().await {
+        let tasks: Vec<_> = colls
+            .iter()
+            .filter_map(|x| {
+                let id = x.get("Id").and_then(Value::as_str)?.replace('-', "");
+                let name = x.get("Name").and_then(Value::as_str)?.to_string();
+                if !valid_item_id(&id) || name == crate::collections::PICKS_NAME {
+                    return None;
+                }
+                let c2 = c.clone();
+                Some(tauri::async_runtime::spawn(async move { (name, c2.collection_items(&id).await.unwrap_or_default()) }))
+            })
+            .collect();
+        let mut member: HashMap<String, (String, usize)> = HashMap::new();
+        for t in tasks {
+            let Ok((name, items)) = t.await else { continue };
+            let ids: Vec<String> = items.iter().filter(|v| v.get("Type").and_then(Value::as_str) == Some("Movie")).filter_map(|v| v.get("Id").and_then(Value::as_str).map(|i| i.replace('-', ""))).collect();
+            if ids.len() < 2 {
+                continue;
+            }
+            for id in ids {
+                let e = member.entry(id).or_insert((name.clone(), usize::MAX));
+                if items.len() < e.1 {
+                    *e = (name.clone(), items.len());
+                }
+            }
+        }
+        for m in &mut list {
+            m.collection = member.get(&m.id).map(|(n, _)| sanitize(n)).filter(|n| !n.is_empty());
+        }
+    }
+    Ok(list)
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MovieMove {
     pub video: String,
-    /// "fix" (stays where it is, in a folder of its own with the right name) | "out" (into the main folder)
+    /// "fix" (stays where it is, in a folder of its own with the right name) | "out" (into the
+    /// main folder) | "collect" (into its collection's folder in the main folder)
     pub mode: String,
 }
 
@@ -191,16 +228,20 @@ pub fn plan(root: &Path, movies: &[MovieFolder], moves: &[MovieMove], groups: &[
         let Some(m) = by_video.get(mv.video.as_str()) else { continue };
         fsops::safe_rel(&m.video)?;
         let out = mv.mode == "out";
+        let collect = match (mv.mode.as_str(), &m.collection) {
+            ("collect", Some(c)) => Some(format!("{}/{c}", m.top)),
+            _ => None,
+        };
         if m.kind == "own" {
             // The whole folder moves (or is renamed): extras and posters inside go along.
-            let to_parent = if out { m.top.clone() } else { parent(&m.folder).to_string() };
+            let to_parent = collect.clone().unwrap_or_else(|| if out { m.top.clone() } else { parent(&m.folder).to_string() });
             let to = format!("{to_parent}/{}", m.expected);
             if to != m.folder {
                 folders.push(op(m.folder.clone(), to, "folder", Some(m.title.clone()), &mut taken, root));
             }
         } else {
             // A loose video: into a new folder of its own, with its subtitles.
-            let to_parent = if out || m.kind == "loose" { m.top.clone() } else { m.folder.clone() };
+            let to_parent = collect.clone().unwrap_or_else(|| if out || m.kind == "loose" { m.top.clone() } else { m.folder.clone() });
             let to_dir = format!("{to_parent}/{}", m.expected);
             files.push(op(m.video.clone(), format!("{to_dir}/{}", last(&m.video)), "video", Some(m.title.clone()), &mut taken, root));
             for s in sidecars(root, &m.video) {
@@ -289,6 +330,13 @@ mod tests {
             MovieMove { video: "Movies/Pixar/Coco.mkv".into(), mode: "out".into() },
         ];
         let groups = vec![GroupRename { folder: "Movies/Alien Collection".into(), name: "Alien".into() }];
+        // Collected: into the collection's folder in the main folder.
+        let mut coll = movies.clone();
+        for m in &mut coll {
+            m.collection = Some("Pixar Collection".into());
+        }
+        let c_ops = plan(&root, &coll, &[MovieMove { video: "Movies/Pixar/Coco.mkv".into(), mode: "collect".into() }], &[]).unwrap();
+        assert_eq!(c_ops[0].to, "Movies/Pixar Collection/Coco (2017)/Coco.mkv");
         let ops = plan(&root, &movies, &moves, &groups).unwrap();
         let pairs: Vec<(&str, &str)> = ops.iter().map(|o| (o.from.as_str(), o.to.as_str())).collect();
         assert!(pairs.contains(&("Movies/Pixar/Up.mkv", "Movies/Pixar/Up (2009)/Up.mkv")));

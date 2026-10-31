@@ -1,8 +1,7 @@
-// Daily jobs that run by themselves while Media Hub is open: scan the library, update the
-// "Picks of the day" collection, fill in missing artwork and fetch missing subtitles.
+// Daily jobs that run by themselves while Media Hub is open: scan the library, fill in
+// missing artwork and fetch missing subtitles.
 import { api, localDate, Status } from "./api";
 import { track } from "./activity";
-import { getPicks } from "./Picks";
 import { scanLibrary } from "./ui";
 import { prefs, setPrefs, subPlan, subSkipped } from "./prefs";
 
@@ -20,9 +19,6 @@ export async function runDaily(status: Status, force = false): Promise<void> {
   try {
     if (s.scan) {
       await scanLibrary().catch(() => undefined);
-    }
-    if (s.picks && canEdit) {
-      await syncPicks(today);
     }
     if (s.art && canEdit) {
       await track("Daily: missing artwork", async (job) => {
@@ -70,44 +66,18 @@ export async function runDaily(status: Status, force = false): Promise<void> {
   }
 }
 
-/**
- * Today's picks as a Jellyfin collection and playlist (and, if you like, as favourites, which
- * Infuse shows on its home screen), so Infuse and other apps see them.
- */
-export async function syncPicks(today: string = localDate()): Promise<void> {
-  await track("“Picks of the day” in Jellyfin", async (job) => {
-    const picks = await getPicks(today);
-    if (!picks.length) return;
-    const ids = picks.map((x) => x.id);
-    await api.syncPicksCollection(ids, today).catch(() => undefined);
-    const n = await api.syncPicksPlaylist(ids);
-    let favs = 0;
-    if (prefs().picksAsFavorites) {
-      // Unmark yesterday's picks that Media Hub marked, then mark today's (not ones you had already).
-      for (const id of prefs().pickFavs.filter((x) => !ids.includes(x))) await api.setFavorite(id, false).catch(() => undefined);
-      const mine = prefs().pickFavs.filter((x) => ids.includes(x));
-      for (const id of ids) {
-        if (mine.includes(id)) continue;
-        const d = await api.details(id).catch(() => null);
-        if (!d || d.item.UserData?.IsFavorite) continue;
-        await api.setFavorite(id, true).then(() => { mine.push(id); favs++; }).catch(() => undefined);
-      }
-      setPrefs({ pickFavs: mine });
-    } else if (prefs().pickFavs.length) {
-      for (const id of prefs().pickFavs) await api.setFavorite(id, false).catch(() => undefined);
-      setPrefs({ pickFavs: [] });
-    }
-    job.update(`${n} videos in the playlist${favs ? ` · ${favs} favourites` : ""}`, 1);
-  }, { reload: false }).catch(() => undefined);
-  setPrefs((cur) => ({ lastRun: { ...cur.lastRun, picks: today } }));
+/** Picks of the day are gone: favourites Media Hub marked for them are unmarked once. */
+async function retirePicks(): Promise<void> {
+  const mine = prefs().pickFavs;
+  if (!mine.length) return;
+  for (const id of mine) await api.setFavorite(id, false).catch(() => undefined);
+  setPrefs({ pickFavs: [] });
 }
 
 /** Checks every few minutes whether today's run is due. Returns a stop function. */
 export function startScheduler(status: Status): () => void {
-  // Picks change every day: keep them in Jellyfin even without the daily schedule.
   const picksTimer = window.setTimeout(() => {
-    const today = localDate();
-    if (!status.readOnly && prefs().lastRun.picks !== today) void syncPicks(today);
+    if (!status.readOnly) void retirePicks();
   }, 20_000);
   const tick = () => {
     const p = prefs();

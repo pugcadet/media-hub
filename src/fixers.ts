@@ -3,7 +3,7 @@
 // is journaled by the backend, so it can be undone in History.
 import { api, applyPlan, CheckRow, errorText, HealthRow, ImageKind, PlanOp, scanAround } from "./api";
 import type { JobHandle } from "./activity";
-import { prefs, subPlan, subSkipped, withShowYear, yearOptional, minimalNames } from "./prefs";
+import { namingLeftAlone, prefs, subPlan, subSkipped, withShowYear, yearOptional, minimalNames } from "./prefs";
 
 export type FixKind = "art" | "subs" | "rename";
 
@@ -57,7 +57,7 @@ export function describeFixes(t: FixTarget, what: FixKind[]): string[] {
 
 /** True when the names need changing (and the check knows it). */
 export function namesToFix(c: CheckRow | null): boolean {
-  return !!c && !c.error && c.toRename + c.folders + c.problems > 0;
+  return !!c && !c.error && !c.stale && !namingLeftAlone(c) && c.toRename + c.folders + c.problems > 0;
 }
 
 /** What `fixTitles` would do for this title, in words ("2 pictures", "subtitles", "names"). */

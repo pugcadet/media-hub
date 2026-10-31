@@ -425,6 +425,16 @@ impl Store {
         Ok(())
     }
 
+    /// Files and folders renamed since a moment (seconds): (when, from, to), library-relative.
+    pub fn renames_since(&self, since: i64) -> Result<Vec<(i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT CAST(at AS INTEGER), old_value, new_value FROM undo_journal
+             WHERE action='rename' AND CAST(at AS INTEGER) >= ?1 ORDER BY id DESC LIMIT 20000",
+        )?;
+        let rows = stmt.query_map(params![since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Renames that were started but never confirmed (the app was closed in the middle).
     pub fn journal_pending(&self) -> Result<Vec<JournalEntry>> {
         let mut stmt = self.conn.prepare(

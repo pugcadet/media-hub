@@ -259,6 +259,35 @@ pub async fn sync_picks_collection(state: State<'_, AppState>, ids: Vec<String>,
     Ok(cid)
 }
 
+/// Picks of the day are gone: is the old collection or playlist still in Jellyfin?
+#[tauri::command]
+pub async fn picks_leftovers(state: State<'_, AppState>) -> Result<usize> {
+    let c = state.reader().await?;
+    let colls = c.collections().await?.into_iter().filter(|x| s(x, "Name") == PICKS_NAME).count();
+    let lists = c.playlists().await.unwrap_or_default().into_iter().filter(|x| s(x, "Name") == PICKS_NAME).count();
+    Ok(colls + lists)
+}
+
+/// Removes the "Picks of the day" collection and playlist Media Hub made (the titles stay).
+#[tauri::command]
+pub async fn picks_remove(state: State<'_, AppState>) -> Result<usize> {
+    let w = state.writer().await?;
+    let mut n = 0;
+    for x in w.reader().collections().await?.into_iter().filter(|x| s(x, "Name") == PICKS_NAME) {
+        let id = clean_id(s(&x, "Id"));
+        if valid_item_id(&id) && w.collection_delete(&id).await.is_ok() {
+            n += 1;
+        }
+    }
+    for x in w.reader().playlists().await.unwrap_or_default().into_iter().filter(|x| s(x, "Name") == PICKS_NAME) {
+        let id = clean_id(s(&x, "Id"));
+        if valid_item_id(&id) && w.playlist_delete(&id).await.is_ok() {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 /// "Today's picks, 28 October 2026. Media Hub changes them every day."
 pub fn picks_summary(date: &str) -> String {
     const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
