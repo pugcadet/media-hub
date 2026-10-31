@@ -138,7 +138,7 @@ export default function Folders({ status }: { status: Status }) {
 
   if (!status.libraryRoot) return <p className="note">Choose your library folder in Settings first.</p>;
   return (
-    <div className="folders">
+    <div className="folders-page">
       <div className="row between">
         <span className="muted small">One tidy layout: every movie in its own folder, every episode in a season folder.{structure ? ` Checked ${agoText(structure.at)}.` : ""}</span>
         <button className="primary" disabled={checking} onClick={() => void look()}>{checking ? <span className="spinner" /> : <Icon name="search" />} Look again</button>

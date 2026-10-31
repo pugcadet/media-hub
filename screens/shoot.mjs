@@ -66,7 +66,7 @@ for (const [w, h] of [[1440, 900], [1100, 760]]) {
     log.push(`[${w}] item: ${e.message}`);
   }
   // Renamer → Folders; Library → Music.
-  for (const [name, route] of [["folders", { view: "renamer", section: "folders" }], ["music", { view: "library", folder: "@music" }], ["subtitle-preview", { view: "subtitles", section: "preview" }]]) {
+  for (const [name, route] of [["folders", { view: "renamer", section: "folders" }]]) {
     try {
       await page.evaluate((r) => window.__mhNav?.route({ ...r, n: Date.now() }), route);
       await page.waitForTimeout(1200);
@@ -74,6 +74,29 @@ for (const [w, h] of [[1440, 900], [1100, 760]]) {
     } catch (e) {
       log.push(`[${w}] ${name}: ${e.message}`);
     }
+  }
+  // Library → Music tab.
+  try {
+    await page.evaluate(() => window.__mhNav?.route({ view: "library", n: Date.now() }));
+    await page.waitForTimeout(900);
+    await page.click('[role=tab]:has-text("Music")', { timeout: 2000 });
+    await page.waitForTimeout(1200);
+    await page.screenshot({ path: `${out}/${w}-music.png` });
+  } catch (e) {
+    log.push(`[${w}] music: ${e.message}`);
+  }
+  // Subtitles: open one video's picker inline.
+  try {
+    await page.evaluate(() => window.__mhNav?.route({ view: "subtitles", n: Date.now() }));
+    await page.waitForTimeout(900);
+    await page.click(".sub-ep .names", { timeout: 2000 });
+    await page.waitForTimeout(1200);
+    await page.screenshot({ path: `${out}/${w}-subtitle-pick.png` });
+    await page.click(".sub-inline >> text=Preview", { timeout: 2000 });
+    await page.waitForTimeout(1200);
+    await page.screenshot({ path: `${out}/${w}-subtitle-preview.png` });
+  } catch (e) {
+    log.push(`[${w}] subtitle pick: ${e.message}`);
   }
   // Collapsed sidebar.
   try {
