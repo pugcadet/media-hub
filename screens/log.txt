@@ -1,1 +1,8 @@
+[1440] subtitle pick: page.click: Timeout 2000ms exceeded.
+Call log:
+  - waiting for locator('.sub-ep .names')
+
+[1100] subtitle pick: page.click: Timeout 2000ms exceeded.
+Call log:
+  - waiting for locator('.sub-ep .names')
 
