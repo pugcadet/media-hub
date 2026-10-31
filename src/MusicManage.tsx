@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, errorText, MusicItem } from "./api";
 import { followEvent, track } from "./activity";
 import { usePageState } from "./saved";
-import { IconBtn, KTabs, SearchBox, Seg, StatusIcons, Toolbar, type StatusIcon } from "./kit";
+import { KTabs, SearchBox, Seg, StatusIcons, Toolbar, type StatusIcon } from "./kit";
 import { Studio, type StudioItem } from "./Studio";
 import { Icon } from "./ui";
 import { Art, chooseMusicArt, editMusicInfo } from "./MusicEdit";

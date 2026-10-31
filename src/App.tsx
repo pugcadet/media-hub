@@ -12,6 +12,7 @@ import { SubtitlesTool } from "./Tools";
 import IntrosTool from "./IntrosTool";
 import Dashboard from "./Dashboard";
 import Inbox from "./Inbox";
+import Server from "./Server";
 import { ActivityBar, Icon, reloadData } from "./ui";
 import { UpdateToast } from "./Updates";
 import { setNav, type OpenOpts, type Route, type View } from "./nav";
@@ -258,6 +259,9 @@ export default function App() {
         break;
       case "downloads":
         page = <Downloads onNav={navTo} />;
+        break;
+      case "jellyfin":
+        page = <Server status={status} />;
         break;
       case "settings":
         page = <Settings status={status} onChanged={refresh} onNav={navTo} section={route.section} />;

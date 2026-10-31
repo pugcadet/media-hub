@@ -983,6 +983,13 @@ export const api = {
   musicArtistMerges: (top: string) => invoke<{ from: string; to: string; albums: string[] }[]>("music_artist_merges", { top }),
   musicMergePlan: (top: string, from: string[]) => invoke<{ planId: string; ops: PlanOp[] }>("music_merge_plan", { top, from }),
   structurePlan: (actions: { kind: string; path: string }[]) => invoke<{ planId: string; ops: PlanOp[] }>("structure_plan", { actions }),
+  serverOverview: () => invoke<ServerOverview>("server_overview"),
+  serverTaskRun: (id: string) => invoke<void>("server_task_run", { id }),
+  serverTaskStop: (id: string) => invoke<void>("server_task_stop", { id }),
+  serverTaskRunKey: (key: string) => invoke<void>("server_task_run_key", { key }),
+  serverRestart: () => invoke<void>("server_restart"),
+  picksLeftovers: () => invoke<number>("picks_leftovers"),
+  picksRemove: () => invoke<number>("picks_remove"),
   pluginsInstalled: () => invoke<{ name: string; version: string; status: string }[]>("plugins_installed"),
   runIntroSkipper: () => invoke<string>("run_intro_skipper"),
   findMoved: (id: string) => invoke<string | null>("find_moved", { id }),
@@ -1041,6 +1048,10 @@ export const api = {
   /** Keeps one subtitle: its timing into the file, the others in its language to the trash, named after the video. */
   subtitleLock: (id: string, path: string, lang: string, offset: number, removeOthers: boolean) =>
     invoke<{ shifted: number; removed: number; file: string; renamed: boolean }>("subtitle_lock", { id, path, lang, offset, removeOthers }),
+  subtitlePreview: (id: string, path: string) =>
+    invoke<{ duration: number; lines: { s: number; e: number; t: string }[]; spots: number[]; file: string }>("subtitle_preview", { id, path }),
+  /** A short clip of the video with sound, as base64 MP4. */
+  videoClip: (id: string, start: number, seconds: number) => invoke<string>("video_clip", { id, start, seconds }),
   musicRescan: () => invoke<number>("music_rescan"),
   musicFetchArt: (again = false) => invoke<{ covers: number; artists: number; missingCovers: number }>("music_fetch_art", { again }),
   musicLocalEdit: (id: string, edit: MusicEdit) => invoke<void>("music_local_edit", { id, edit }),
@@ -1166,4 +1177,15 @@ export function titleYear(name: string, year?: number | null): string {
 /** Wraps a promise so the "open in Finder" style one-liners don't need their own error handling. */
 export function quiet(p: Promise<unknown>): void {
   p.catch(() => undefined);
+}
+
+export interface ServerTask {
+  id: string; name: string; category: string; key: string; state: string;
+  progress: number | null; lastStatus: string | null; lastEnd: string | null; lastError: string | null;
+}
+export interface ServerOverview {
+  name: string; version: string; os: string; pendingRestart: boolean; latest: string | null; updateAvailable: boolean;
+  plugins: { name: string; version: string; status: string; update: string | null }[];
+  tasks: ServerTask[];
+  events: { name: string; overview: string; severity: string; date: string }[];
 }

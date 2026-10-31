@@ -42,6 +42,8 @@ mod store;
 mod sub_cmds;
 mod structure;
 mod subs;
+mod jfserver;
+mod subpreview;
 mod updater;
 
 use tauri::Manager;
@@ -82,6 +84,13 @@ pub fn run() {
             bulk::bulk_plan,
             meta_cmds::make_thumb,
             backend::plugins_installed,
+            jfserver::server_overview,
+            subpreview::subtitle_preview,
+            subpreview::video_clip,
+            jfserver::server_task_run,
+            jfserver::server_task_stop,
+            jfserver::server_task_run_key,
+            jfserver::server_restart,
             backend::run_intro_skipper,
             collections::collection_folder_plan,
             collections::collection_relink,

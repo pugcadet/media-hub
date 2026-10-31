@@ -24,7 +24,6 @@ const SECTIONS: { id: string; label: string; icon: IconName }[] = [
   { id: "subtitles", label: "Subtitles", icon: "subtitles" },
   { id: "metadata", label: "Titles and art", icon: "image" },
   { id: "schedule", label: "Daily tasks", icon: "clock" },
-  { id: "plugins", label: "Jellyfin plugins", icon: "stack" },
   { id: "tools", label: "Tools", icon: "wrench" },
   { id: "updates", label: "Updates", icon: "download" },
   { id: "problems", label: "Problems log", icon: "warn" },
@@ -186,7 +185,6 @@ export default function Settings({ status, onChanged, section }: { status: Statu
           </Section>
 
           <ScheduleSettings status={status} />
-          <PluginSettings />
           <div id="set-tools"><ToolsSettings /></div>
           <div id="set-updates"><UpdateSettings /></div>
           <ProblemsLog />
@@ -433,6 +431,125 @@ function SubtitleSettings({ status, onChanged }: { status: Status; onChanged: ()
   );
 }
 
+/* ------------------------------------------------- Jellyfin as backend */
+
+/** Whether a library option is "on", and the value that switches it on or off. */
+const TUNE_SWITCH: Record<string, { on: (v: unknown) => boolean; value: (on: boolean, s: Status) => unknown; recommendedOn: boolean }> = {
+  AutomaticRefreshIntervalDays: { on: (v) => Number(v ?? 0) > 0, value: (on) => (on ? 30 : 0), recommendedOn: false },
+  EnableRealtimeMonitor: { on: (v) => v === true, value: (on) => on, recommendedOn: true },
+  ExtractChapterImagesDuringLibraryScan: { on: (v) => v !== false, value: (on) => on, recommendedOn: false },
+  ExtractTrickplayImagesDuringLibraryScan: { on: (v) => v !== false, value: (on) => on, recommendedOn: false },
+  SaveLocalMetadata: { on: (v) => v === true, value: (on) => on, recommendedOn: true },
+  MetadataSavers: { on: (v) => Array.isArray(v) && v.includes("Nfo"), value: (on) => (on ? ["Nfo"] : []), recommendedOn: true },
+  SubtitleDownloadLanguages: { on: (v) => Array.isArray(v) && v.length > 0, value: (on, s) => (on ? s.subLangs : []), recommendedOn: false },
+};
+
+function BackendSettings({ status }: { status: Status }) {
+  const epoch = useEpoch();
+  const [t, setT] = useState<Tuning | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [openLib, setOpenLib] = useState<string | null>(null);
+  const canEdit = !status.readOnly;
+  const load = () => api.backendTuning().then((x) => { setT(x); setError(null); }).catch((e) => setError(errorText(e)));
+  useEffect(() => void load(), [epoch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const libs = new Map<string, TuneRow[]>();
+  for (const r of t?.rows.filter((x) => x.scope === "library") ?? []) libs.set(r.target, [...(libs.get(r.target) ?? []), r]);
+  const tasks = t?.rows.filter((x) => x.scope === "task") ?? [];
+  const todo = t?.rows.filter((x) => x.scope === "library" && !x.ok).length ?? 0;
+  const set = (r: TuneRow, value: unknown, what: string) => void track(what, () => api.backendSet(r.scope, r.target, r.key, value)).catch((e) => setError(errorText(e)));
+
+  return (
+    <Section id="backend" title="Jellyfin as the backend" icon="server" hint="Media Hub decides details, art and skip markers. Jellyfin keeps them and hands them to Infuse.">
+      {error && <p className="error">{error}</p>}
+      {!canEdit && <p className="note">Changing Jellyfin's settings needs changes switched on (above).</p>}
+
+      <KeepInPlace t={t} canEdit={canEdit} onChanged={load} />
+
+      <div className="strong small">Your edits stay</div>
+      <Switch checked={t?.lockEdits ?? true} onChange={(v) => void api.setLockEdits(v).then(load)}>
+        Lock a title once I change its details or pictures, so Jellyfin's own refreshes never undo it (Refresh from internet and Identify unlock it again)
+      </Switch>
+      <div className="row">
+        <button disabled={!canEdit} onClick={() => void askConfirm("Lock every show and movie? Jellyfin then never changes their details or pictures by itself. Each title can be undone in History.", { okLabel: "Lock all" }).then((ok) => { if (ok) void track("Locking every title", async (job) => { const un = await followEvent(job, "bulk-progress"); try { const n = await api.lockAll(true); job.update(`${n} titles locked`, 1); } finally { un(); } }, { stop: "bulk" }).catch((e) => setError(errorText(e))); })}><Icon name="lock" /> Lock every title</button>
+        <button disabled={!canEdit} onClick={() => void track("Unlocking every title", async (job) => { const un = await followEvent(job, "bulk-progress"); try { const n = await api.lockAll(false); job.update(`${n} titles unlocked`, 1); } finally { un(); } }, { stop: "bulk" }).catch((e) => setError(errorText(e)))}>Unlock every title</button>
+      </div>
+
+      <div className="row between">
+        <div>
+          <div className="strong small">Library settings</div>
+          <div className="muted small">{t ? (todo ? `${todo} setting${todo === 1 ? "" : "s"} differ from what works best with Media Hub and Infuse.` : "Every library is set up the way Media Hub works best.") : "Reading Jellyfin's settings…"}</div>
+        </div>
+        {todo > 0 && <button className="primary" disabled={!canEdit} onClick={() => void track("Setting up Jellyfin", () => api.backendApplyRecommended().then(() => undefined)).catch((e) => setError(errorText(e)))}>Use the recommended settings</button>}
+      </div>
+      <div className="tune-libs">
+        {[...libs.entries()].map(([id, rows]) => {
+          const off = rows.filter((r) => !r.ok).length;
+          const open = openLib === id;
+          return (
+            <div key={id} className={`tune-lib ${open ? "open" : ""}`}>
+              <button className="tune-lib-head link-plain" onClick={() => setOpenLib(open ? null : id)}>
+                <span className={`chev ${open ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
+                <span className="strong">{rows[0].targetName}</span>
+                <span className={`small ${off ? "warn" : "ok"}`}>{off ? `${off} to change` : "✓ all good"}</span>
+              </button>
+              {open && rows.map((r) => {
+                const sw = TUNE_SWITCH[r.key];
+                const on = sw ? sw.on(r.current) : false;
+                return (
+                  <div key={r.key} className={`tune-row ${r.ok ? "" : "differs"}`}>
+                    <div className="grow">
+                      <div>{r.label} <span className="muted small">· recommended {sw?.recommendedOn ? "on" : "off"}</span></div>
+                      <div className="muted small">{r.detail}</div>
+                    </div>
+                    {sw && <input type="checkbox" className="switch" checked={on} disabled={!canEdit} onChange={(e) => set(r, sw.value(e.target.checked, status), `${r.targetName}: ${r.label.toLowerCase()} ${e.target.checked ? "on" : "off"}`)} />}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+
+      {tasks.length > 0 && (
+        <>
+          <div className="strong small">Jellyfin's scheduled tasks</div>
+          <p className="muted small">Heavy tasks slow down the NAS and Infuse's library sync while they run. Best at night, or off when you don't need them.</p>
+          <div className="tune-libs">
+            {tasks.map((r) => {
+              const isOff = Array.isArray(r.current) && r.current.length === 0;
+              return (
+                <div key={r.target} className="tune-row">
+                  <div className="grow">
+                    <div>{r.targetName} <span className={`small ${isOff ? "muted" : ""}`}>· {r.label}</span></div>
+                    <div className="muted small">{r.detail}</div>
+                  </div>
+                  <button className="link small" disabled={!canEdit} onClick={() => void track(`Running “${r.targetName}”`, () => api.backendRunTask(r.target), { reload: false })}>Run now</button>
+                  <input type="checkbox" className="switch" title={isOff ? "Off" : "On a schedule"} checked={!isOff} disabled={!canEdit} onChange={(e) => set(r, e.target.checked, `${r.targetName} ${e.target.checked ? "on" : "off"}`)} />
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      <div className="strong small">Infuse</div>
+      <div className={`why-box ${t?.markersOk ? "sure" : ""}`}>
+        <ul>
+          <li className={t?.markersOk ? "ok" : "warn"}>
+            {t ? (t.markersOk ? `Skip intro, credits and recap: Jellyfin ${t.version} hands Media Hub's markers to Infuse (Infuse 8.0.4 or newer).` : `Jellyfin ${t.version || "(unknown)"} is older than 10.10, so Infuse can't read skip markers from it. Update Jellyfin.`) : "Checking the Jellyfin version…"}
+          </li>
+          <li>Add the server in Infuse under Settings → Shares → Add → Jellyfin, signed in as the same user Media Hub watches as.</li>
+          <li><b>Direct mode</b> is the fast one: Infuse browses Jellyfin live, nothing to sync. Library mode copies everything into Infuse first.</li>
+          <li>Your collections and playlists: pin them to Infuse's home screen under Settings → Shares → your Jellyfin server → Add Favorite.</li>
+          <li>Infuse shows what Media Hub set: titles, summaries, posters, backgrounds and logos come from Jellyfin, so edit them here, not in Infuse.</li>
+          <li>Watched status and where you stopped sync both ways through Jellyfin.</li>
+        </ul>
+      </div>
+    </Section>
+  );
+}
+
 /* ---------------------------------------------------- library languages */
 
 function LibraryLanguages({ canEdit }: { canEdit: boolean }) {
@@ -489,52 +606,6 @@ function ScheduleSettings({ status }: { status: Status }) {
       </div>
       <div className="row"><button onClick={() => void runDaily(status, true)}><Icon name="play" /> Run now</button></div>
       {status.readOnly && <p className="muted small">Artwork and subtitles need changes switched on.</p>}
-    </Section>
-  );
-}
-
-/* ------------------------------------------------------------ plugins */
-
-function PluginSettings() {
-  const epoch = useEpoch();
-  const [installed, setInstalled] = useState<{ name: string; version: string; status: string }[] | null>(null);
-  useEffect(() => {
-    api.pluginsInstalled().then(setInstalled).catch(() => setInstalled([]));
-  }, [epoch]);
-  const has = (...names: string[]) => installed?.find((p) => names.some((n) => p.name.toLowerCase().replace(/\s/g, "").includes(n.toLowerCase().replace(/\s/g, ""))));
-  const rows: { names: string[]; label: string; why: string; need: boolean }[] = [
-    { names: ["MediaSegments"], label: "MediaSegments API", why: "Saving intro, credits and recap markers (Infuse's Skip buttons).", need: true },
-    { names: ["Open Subtitles", "OpenSubtitles"], label: "Open Subtitles", why: "Subtitles. Sign in in the plugin's settings; free accounts get a few downloads a day.", need: true },
-    { names: ["subbuzz"], label: "SubBuzz (optional)", why: "More free subtitle sites (several providers in one plugin, by josdion on GitHub). Media Hub uses every subtitle plugin Jellyfin has, so it finds more matches and isn't stuck at one site's daily limit.", need: false },
-    { names: ["Intro Skipper"], label: "Intro Skipper (optional)", why: "Lets Jellyfin find intros and credits itself, on the server. Media Hub can start it from Intros and credits; its markers show up in Infuse like Media Hub's.", need: false },
-    { names: ["Fanart"], label: "Fanart", why: "Logos, banners, clear art and disc pictures.", need: true },
-    { names: ["TheTVDB", "TVDB"], label: "TheTVDB", why: "Banners and episode data for shows.", need: true },
-    { names: ["MusicBrainz"], label: "MusicBrainz / AudioDB (built in)", why: "Album covers and artist pictures for music in Jellyfin. Switch them on in the music library's settings.", need: false },
-  ];
-  const webOnly = (installed ?? []).filter((p) => /enhanced|home ?screen|sections|custom ?tabs|file ?transformation|plugin ?pages|media ?bar/i.test(p.name));
-  return (
-    <Section id="plugins" title="Jellyfin plugins" icon="stack" hint="Installed in Jellyfin: Dashboard → Plugins → Catalog, then restart Jellyfin.">
-      {rows.map((r) => {
-        const p = has(...r.names);
-        const state = installed === null ? "…" : p ? "ok" : r.need ? "warn" : "muted";
-        return (
-          <div key={r.label} className="plugin-row">
-            <span className={state === "…" ? "muted" : state}><Icon name={installed === null ? "clock" : p ? "check" : r.need ? "warn" : "plus"} /></span>
-            <div className="grow"><div className="strong small">{r.label}</div><div className="muted small">{r.why}</div></div>
-            <span className={`small ${p ? "ok" : r.need ? "warn" : "muted"}`}>{installed === null ? "Checking…" : p ? `Installed · ${p.version}` : r.need ? "Not installed" : "Not installed (optional)"}</span>
-          </div>
-        );
-      })}
-      {webOnly.length > 0 && (
-        <p className="muted small">
-          {webOnly.map((p) => p.name).join(", ")}: these change Jellyfin's own web app (home sections, player extras). Infuse builds its own screens from your library, so they don't show there; Media Hub's Player home has similar rows (Because you watched, genres, picks).
-        </p>
-      )}
-      {installed && installed.length > 0 && (
-        <details className="small"><summary className="muted">All {installed.length} installed plugins</summary>
-          <div className="plugin-all">{installed.map((p) => <span key={p.name} className="chip static">{p.name} <span className="muted">{p.version}</span></span>)}</div>
-        </details>
-      )}
     </Section>
   );
 }

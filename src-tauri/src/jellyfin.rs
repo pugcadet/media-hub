@@ -1653,3 +1653,39 @@ impl Writer {
         self.post(&format!("/ScheduledTasks/Running/{task_id}"), &[], None).await
     }
 }
+
+// ------------------------------------------------------------- 0.25 server page
+
+impl Client {
+    /// The full /System/Info answer (version, pending restart, update available …).
+    pub async fn system_info_raw(&self) -> Result<serde_json::Value> {
+        self.get_json("/System/Info", &[]).await
+    }
+
+    /// Everything the plugin catalogues offer (used to see which installed plugins have a newer version).
+    pub async fn packages(&self) -> Result<Vec<serde_json::Value>> {
+        let v: serde_json::Value = self.get_json("/Packages", &[]).await?;
+        Ok(v.as_array().cloned().unwrap_or_default())
+    }
+
+    /// The server's recent activity (scans, errors, logins …), newest first.
+    pub async fn activity(&self, limit: u32) -> Result<Vec<serde_json::Value>> {
+        let v: serde_json::Value = self.get_json("/System/ActivityLog/Entries", &[("limit", limit.min(100).to_string())]).await?;
+        Ok(v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default())
+    }
+}
+
+impl Writer {
+    pub async fn stop_task(&self, task_id: &str) -> Result<()> {
+        if !task_id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') || task_id.is_empty() || task_id.len() > 40 {
+            return Err(Error::msg("bad task"));
+        }
+        let req = self.c.http.delete(self.c.url(&format!("/ScheduledTasks/Running/{task_id}")));
+        self.c.send(req).await.map(|_| ())
+    }
+
+    /// Restarts Jellyfin (needed after plugin updates). Nothing is lost; it is back in a minute.
+    pub async fn restart_server(&self) -> Result<()> {
+        self.post("/System/Restart", &[], None).await
+    }
+}
