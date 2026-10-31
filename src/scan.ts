@@ -7,7 +7,7 @@ import { api, DupGroup, HealthRow, MissingReport, OverviewRow, Status, errorText
 import { track, useEpoch, type JobHandle } from "./activity";
 import { folderOff, prefs } from "./prefs";
 import { readSaved, writeSaved } from "./saved";
-import type { TopFolder } from "./Folders";
+import type { TopFolder } from "./FolderTidy";
 import { artSkipped, CORE_ART, namesToFix, noSubsOf } from "./fixers";
 
 /** Counts per part, with when each part last ran (ms). */

@@ -979,7 +979,7 @@ export const api = {
   imagesRevalidate: () => invoke<void>("images_revalidate"),
   /** A title whose id changed (folder renamed): its new id, found by name and year. */
   makeThumb: (id: string) => artChange(id, invoke<boolean>("make_thumb", { id })),
-  structureScan: () => invoke<import("./Folders").TopFolder[]>("structure_scan"),
+  structureScan: () => invoke<import("./FolderTidy").TopFolder[]>("structure_scan"),
   musicArtistMerges: (top: string) => invoke<{ from: string; to: string; albums: string[] }[]>("music_artist_merges", { top }),
   musicMergePlan: (top: string, from: string[]) => invoke<{ planId: string; ops: PlanOp[] }>("music_merge_plan", { top, from }),
   structurePlan: (actions: { kind: string; path: string }[]) => invoke<{ planId: string; ops: PlanOp[] }>("structure_plan", { actions }),

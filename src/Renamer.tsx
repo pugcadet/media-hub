@@ -9,7 +9,7 @@ import { BulkSelect, Icon, itemMenu, openMenu, TriCheck, useUndoableSet } from "
 import { folderTabs, IconBtn, KTabs, PageHead, SearchBox, Seg } from "./kit";
 import { usePageState } from "./saved";
 import { Studio, StudioItem } from "./Studio";
-import Folders from "./Folders";
+import Folders from "./FolderTidy";
 import { folderOff, setPrefs, usePrefs, withShowYear, yearOptional, minimalNames, type Prefs } from "./prefs";
 
 type Source = PlanArgs["source"];
