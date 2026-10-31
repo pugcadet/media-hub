@@ -1,0 +1,5 @@
+src/MusicManage.tsx(8,10): error TS6133: 'IconBtn' is declared but its value is never read.
+src/Settings.tsx(2,66): error TS6133: 'Tuning' is declared but its value is never read.
+src/Settings.tsx(9,25): error TS6133: 'followEvent' is declared but its value is never read.
+src/Settings.tsx(160,12): error TS2304: Cannot find name 'BackendSettings'.
+src/Settings.tsx(574,10): error TS6133: 'KeepInPlace' is declared but its value is never read.
