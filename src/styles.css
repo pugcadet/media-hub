@@ -1534,7 +1534,7 @@ button.health-stat:disabled { opacity: .7; cursor: default; }
 .confirm .confirm-text, .confirm p { white-space: pre-line; }
 .steps-ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 /* Subtitles: state per video, progress per group */
-.sub-ep { display: grid !important; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; }
+.sub-ep { display: grid !important; grid-template-columns: 1fr auto auto auto; gap: 10px; align-items: center; }
 .sub-ep.movie { padding-left: 16px !important; }
 .sub-ep button.names { text-align: left; cursor: pointer; min-width: 0; }
 .sub-state { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
@@ -2257,3 +2257,4 @@ button.dash-recent-tile:hover .dash-recent-art { border-color: var(--accent); tr
 .sub-inline > .card { box-shadow: none; }
 .folders-card > .row { flex-wrap: wrap; }
 .folders-card > .row > b.grow { min-width: 220px; }
+.sub-inline { padding-left: 58px; }
