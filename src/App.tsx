@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, Attention, errorText, Library as Lib, Status } from "./api";
 import Setup from "./Setup";
@@ -11,15 +11,12 @@ import Sidebar from "./Sidebar";
 import { SubtitlesTool } from "./Tools";
 import IntrosTool from "./IntrosTool";
 import Dashboard from "./Dashboard";
-import AddMedia from "./AddMedia";
-import Watch from "./Watch";
-import Player from "./Player";
+import Inbox from "./Inbox";
 import { ActivityBar, Icon, reloadData } from "./ui";
 import { UpdateToast } from "./Updates";
-import Music from "./Music";
 import { setNav, type OpenOpts, type Route, type View } from "./nav";
-import { reloadAll, useEpoch } from "./activity";
-import { prefs, setPrefs, usePrefs } from "./prefs";
+import { useEpoch } from "./activity";
+import { setPrefs, usePrefs } from "./prefs";
 import { startScheduler } from "./scheduler";
 import Cleanup from "./Cleanup";
 import History from "./History";
@@ -39,11 +36,9 @@ export default function App() {
   const [itemStack, setItemStack] = useState<Open[]>([]);
   const [libraries, setLibraries] = useState<Lib[]>([]);
   const [attention, setAttention] = useState<Attention | null>(null);
-  const [playId, setPlayId] = useState<string | null>(null);
   const epoch = useEpoch();
-  const { mode, uiScale } = usePrefs();
+  const { uiScale } = usePrefs();
   // Always open on the media manager's Home.
-  useEffect(() => { if (prefs().mode !== "manage") setPrefs({ mode: "manage" }); }, []);
   // Size of the whole interface (Settings → Look, or ⌘+ / ⌘− / ⌘0).
   // The window's own zoom (like ⌘− in a browser), so clicks and the mouse line up everywhere.
   useEffect(() => {
@@ -80,15 +75,13 @@ export default function App() {
   const go = useCallback((r: Route) => {
     setItemStack([]);
     setRoute({ ...r, n: Date.now() });
-    // A link to a manager screen (e.g. "Turn them on" in the player) switches to the manager.
-    if (prefs().mode !== "manage") setPrefs({ mode: "manage" });
   }, []);
 
   // ⌘, (Ctrl+, on Windows) opens Settings, like every Mac app.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement)?.tagName ?? "");
-      if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "r" || e.key === "R") && !document.querySelector(".player")) {
+      if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "r" || e.key === "R")) {
         e.preventDefault();
         void reloadData();
         return;
@@ -112,7 +105,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    setNav({ open, play: (id) => setPlayId(id), route: go });
+    setNav({ open, route: go });
   }, [open, go]);
 
   useEffect(() => {
@@ -134,7 +127,6 @@ export default function App() {
     if (!h) return;
     pos.current = to;
     travelling.current = true;
-    if (prefs().mode !== "manage") setPrefs({ mode: "manage" });
     setRoute(h.r);
     setItemStack(h.s);
     setHistTick((x) => x + 1);
@@ -166,7 +158,7 @@ export default function App() {
       return false;
     };
     const onWheel = (e: WheelEvent) => {
-      if (document.querySelector(".player") || Math.abs(e.deltaX) <= Math.abs(e.deltaY) * 1.5 || e.ctrlKey) return;
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY) * 1.5 || e.ctrlKey) return;
       const now = Date.now();
       if (now < cooldown || sideways(e.target as HTMLElement)) return;
       if (now - swipeAt > 300) swipe = 0;
@@ -214,32 +206,9 @@ export default function App() {
   });
   const back = useCallback(() => setItemStack((s) => s.slice(0, -1)), []);
 
-  const player = useMemo(
-    () => playId && status ? <Player key={playId} id={playId} status={status} onClose={() => { setPlayId(null); window.setTimeout(reloadAll, 900); }} onNext={(n) => setPlayId(n)} /> : null,
-    [playId, status],
-  );
-
   if (fatal) return <div className="center"><p className="error">{fatal}</p></div>;
   if (!status) return <div className="center"><p className="muted">Starting…</p></div>;
   if (!status.connected) return <Setup status={status} onDone={refresh} />;
-
-  if (mode === "watch") {
-    return (
-      <>
-        <Watch status={status} libraries={libraries} item={top ?? null} onBack={back} />
-        {player}
-        <UpdateToast />
-      </>
-    );
-  }
-  if (mode === "music") {
-    return (
-      <>
-        <Music status={status} />
-        <UpdateToast />
-      </>
-    );
-  }
 
   // The list page stays loaded under an open title, so Back returns to it exactly as it was
   // (selection, filters, scroll position).
@@ -273,7 +242,7 @@ export default function App() {
         page = <History status={status} />;
         break;
       case "add":
-        page = <AddMedia status={status} onChanged={refresh} />;
+        page = <Inbox status={status} />;
         break;
       case "renamer":
         page = <Renamer key={`${route.folder ?? ""}-${route.item ?? ""}-${route.section ?? ""}`} status={status} onChanged={refresh} onNav={navTo} start={route.folder !== undefined || route.item || route.section ? { folder: route.folder, item: route.item, section: route.section } : undefined} />;
@@ -307,7 +276,6 @@ export default function App() {
         <div className="page" key={`${route.view}-${route.n ?? 0}`} ref={listRef} hidden={!!top} onScroll={(e) => { if (!top) listScroll.current = (e.target as HTMLDivElement).scrollTop; }}>{page}</div>
         {top && <div className="page" key={`item-${top.id}-${top.n ?? 0}`}>{itemPage}</div>}
       </div>
-      {player}
       <UpdateToast />
     </div>
   );

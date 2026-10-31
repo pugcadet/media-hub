@@ -132,7 +132,7 @@ export default function Duplicates({ status }: { status: Status }) {
               </div>
               <div className="row end">
                 <button className="icon-btn" title="Open folder" onClick={() => void api.revealItem(d.id).catch(() => undefined)}><Icon name="folder" /></button>
-                <button onClick={() => nav.play(d.id)}>Play</button>
+                <button onClick={() => void api.openVideo(d.id).catch(() => undefined)} title="Opens this copy in your own player, to compare">Open</button>
                 <button className="danger-outline" disabled={!canEdit} onClick={() => void trash([d], "Moving to trash")}>Trash</button>
               </div>
             </div>

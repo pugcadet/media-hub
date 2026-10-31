@@ -5,9 +5,9 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { api, DupGroup, HealthRow, MissingReport, OverviewRow, Status, errorText } from "./api";
 import { track, useEpoch, type JobHandle } from "./activity";
-import { prefs } from "./prefs";
+import { folderOff, prefs } from "./prefs";
 import { readSaved, writeSaved } from "./saved";
-import type { TopFolder } from "./Structure";
+import type { TopFolder } from "./Folders";
 import { artSkipped, CORE_ART, namesToFix, noSubsOf } from "./fixers";
 
 /** Counts per part, with when each part last ran (ms). */
@@ -238,7 +238,7 @@ export async function scanEverything(status: Status, opts: { force?: boolean } =
         const saved = readSaved<Record<string, MissingReport | string>>("missing");
         const cache = { ...(saved?.data ?? {}) };
         const ignored = new Set(prefs().missingIgnored);
-        const shows = h.rows.filter((r) => r.kind === "series" && !ignored.has(r.id));
+        const shows = h.rows.filter((r) => r.kind === "series" && !ignored.has(r.id) && !folderOff(r.libraryFolder));
         const weekly = stale(saved?.at);
         const todo = shows.filter((r) => weekly || opts.force || changed.includes(r.id) || !(r.id in cache));
         let n = 0;

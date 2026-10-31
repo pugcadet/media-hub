@@ -62,13 +62,25 @@ async fn reader(state: &AppState) -> Result<crate::jellyfin::Client> {
 pub async fn segments_overview(state: State<'_, AppState>, season_id: String) -> Result<Overview> {
     let c = reader(&state).await?;
     let children = c.children(&season_id).await?;
+    let eps: Vec<&Value> = children.iter().filter(|e| e.get("Type").and_then(Value::as_str) == Some("Episode")).collect();
+    // Every episode's markers asked for at once (one at a time made a season slow to open).
+    let tasks: Vec<_> = eps
+        .iter()
+        .map(|e| {
+            let id = e.get("Id").and_then(Value::as_str).unwrap_or("").to_string();
+            let c2 = c.clone();
+            tauri::async_runtime::spawn(async move {
+                if !valid_item_id(&id) {
+                    return None;
+                }
+                Some(read_segs(&c2.segments(&id).await.unwrap_or_default()))
+            })
+        })
+        .collect();
     let mut episodes = Vec::new();
-    for e in children.iter().filter(|e| e.get("Type").and_then(Value::as_str) == Some("Episode")) {
+    for (e, task) in eps.iter().zip(tasks) {
         let id = e.get("Id").and_then(Value::as_str).unwrap_or("").to_string();
-        if !valid_item_id(&id) {
-            continue;
-        }
-        let segments = read_segs(&c.segments(&id).await.unwrap_or_default());
+        let Some(segments) = task.await.ok().flatten() else { continue };
         episodes.push(EpisodeRow {
             name: e.get("Name").and_then(Value::as_str).unwrap_or("").to_string(),
             index: e.get("IndexNumber").and_then(Value::as_i64),

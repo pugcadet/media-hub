@@ -125,6 +125,14 @@ export interface Prefs {
   pinIds: boolean;
   /** Titles you skipped in the Renamer (left out of "to fix" and "rename all"). */
   renameSkip: string[];
+  /** Top folders the Renamer, the naming checks and the episode checks leave alone (e.g. "YouTube"). */
+  renameOff: string[];
+  /** Inbox: the main folder new things go to, per kind ("tv" → "TV"). */
+  inboxTop: Record<string, string>;
+  /** Inbox: remembered main folder per show title ("bluey" → "Kids"). */
+  inboxShowTop: Record<string, string>;
+  /** Folders: movies of one collection share a folder ("Movies/Alien Collection/Alien (1979)"). */
+  keepCollections: boolean;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -174,6 +182,10 @@ export const DEFAULT_PREFS: Prefs = {
   subSort: "downloads",
   pinIds: true,
   renameSkip: [],
+  renameOff: [],
+  inboxTop: {},
+  inboxShowTop: {},
+  keepCollections: false,
 };
 
 /** Ready-made highlight colours for Settings → Look. */
@@ -241,6 +253,10 @@ function load(): Prefs {
       subSort: p.subSort ?? "downloads",
       pinIds: p.pinIds ?? true,
       renameSkip: p.renameSkip ?? [],
+      renameOff: p.renameOff ?? [],
+      inboxTop: p.inboxTop ?? {},
+      inboxShowTop: p.inboxShowTop ?? {},
+      keepCollections: p.keepCollections ?? false,
     };
   } catch {
     return DEFAULT_PREFS;
@@ -407,4 +423,20 @@ export function markSubGot(itemId: string, subId: string): void {
 /** Whether this subtitle was downloaded for this video before. */
 export function gotSub(p: Prefs, itemId: string, subId: string | undefined): boolean {
   return !!subId && (p.subGot[cleanSubKey(itemId)] ?? []).includes(subId);
+}
+
+/** The top folder of a library-relative path ("TV/Bluey" → "TV"). */
+export function topOf(rel: string | null | undefined): string {
+  return (rel ?? "").split("/")[0] ?? "";
+}
+
+/** A folder you switched renaming off for (Folders page): left alone everywhere. */
+export function folderOff(rel: string | null | undefined, p: Prefs = prefs()): boolean {
+  const t = topOf(rel).toLowerCase();
+  return !!t && p.renameOff.some((f) => f.toLowerCase() === t);
+}
+
+/** Skipped in the Renamer, or in a folder that's left alone. */
+export function namingLeftAlone(r: { id: string; folder: string }, p: Prefs = prefs()): boolean {
+  return p.renameSkip.includes(r.id) || folderOff(r.folder, p);
 }

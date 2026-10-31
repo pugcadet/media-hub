@@ -236,14 +236,15 @@ impl Client {
             401 | 403 => Err(Error::Unauthorized),
             404 => Err(Error::msg(not_found_text(resp.url().path()))),
             s => {
+                let path = resp.url().path().to_string();
                 // Jellyfin usually says why in the body; show a short, single-line version.
                 let body = resp.text().await.unwrap_or_default();
                 let why: String = body.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
-                Err(Error::msg(if why.is_empty() {
-                    format!("The server answered with status {s}.")
-                } else {
-                    format!("The server answered with status {s}: {why}")
-                }))
+                // "Error processing request" says nothing: say what Jellyfin was doing.
+                if why.is_empty() || why.to_lowercase().contains("error processing request") {
+                    return Err(Error::msg(format!("Jellyfin ran into an error while {} (status {s}, “Error processing request”). {}", what_failed(&path), where_to_look(&path))));
+                }
+                Err(Error::msg(format!("The server answered with status {s}: {why}")))
             }
         }
     }
@@ -1051,6 +1052,43 @@ impl Writer {
         let req = self.c.http.delete(self.c.url(&format!("/Items/{id}")));
         self.c.send(req).await.map(|_| ())
     }
+
+    /// Removes a playlist Media Hub made (only a playlist; the videos in it stay).
+    pub async fn playlist_delete(&self, id: &str) -> Result<()> {
+        let item = self.c.item_json(id).await?;
+        if item.get("Type").and_then(|t| t.as_str()) != Some("Playlist") {
+            return Err(Error::msg("That is not a playlist."));
+        }
+        let req = self.c.http.delete(self.c.url(&format!("/Items/{id}")));
+        self.c.send(req).await.map(|_| ())
+    }
+}
+
+/// What a Jellyfin address was for, in words (for errors).
+pub fn what_failed(path: &str) -> &'static str {
+    let p = path.to_lowercase();
+    if p.contains("/mediasegments") { "reading or saving intro and credits markers" }
+    else if p.contains("introskipper") || (p.contains("/episode/") && p.contains("intro")) { "running Intro Skipper" }
+    else if p.contains("subtitle") { "fetching subtitles" }
+    else if p.contains("/remoteimages") || p.contains("/images") { "fetching pictures" }
+    else if p.contains("/remotesearch") { "looking the title up online" }
+    else if p.contains("/refresh") { "refreshing details" }
+    else if p.contains("/library") { "scanning the library" }
+    else if p.contains("/scheduledtasks") { "running a scheduled task" }
+    else if p.contains("/plugins") || p.contains("/packages") { "managing plugins" }
+    else if p.contains("/items") { "saving the title's details" }
+    else { "doing that" }
+}
+
+fn where_to_look(path: &str) -> &'static str {
+    let p = path.to_lowercase();
+    if p.contains("/mediasegments") || p.contains("introskipper") {
+        "Usually the MediaSegments API or Intro Skipper plugin is missing, out of date, or needs Jellyfin restarted (Media Hub → Jellyfin → Plugins)."
+    } else if p.contains("subtitle") {
+        "Usually the subtitle plugin's login or daily limit (Jellyfin → Dashboard → Plugins)."
+    } else {
+        "Jellyfin → Dashboard → Logs says what went wrong."
+    }
 }
 
 /// For fields that can be "leave as is" (missing), "clear" (null) or "set" (value).
@@ -1364,20 +1402,52 @@ mod tests {
 impl Client {
     /// Any /Items query as the chosen user (all pages up to `max`).
     pub async fn items_query(&self, mut q: Vec<(&'static str, String)>, max: usize) -> Result<Vec<serde_json::Value>> {
-        let mut out = Vec::new();
         let page = 1000usize.min(max.max(1));
         q.push(("Limit", page.to_string()));
+        // The first page says how many there are; the rest are fetched four pages at a time
+        // (one after another was slow on big libraries).
+        let mut first_q = q.clone();
+        first_q.push(("EnableTotalRecordCount", "true".to_string()));
+        first_q.push(("StartIndex", "0".to_string()));
+        let first: serde_json::Value = self.get_json("/Items", &self.with_user(first_q)).await?;
+        let total = first.get("TotalRecordCount").and_then(|t| t.as_u64()).map(|t| t as usize);
+        let mut out = Self::items_of(first);
+        if out.len() < page || out.len() >= max {
+            out.truncate(max);
+            return Ok(out);
+        }
         q.push(("EnableTotalRecordCount", "false".to_string()));
-        loop {
-            let mut qq = q.clone();
-            qq.push(("StartIndex", out.len().to_string()));
-            let v: serde_json::Value = self.get_json("/Items", &self.with_user(qq)).await?;
-            let items = Self::items_of(v);
-            let n = items.len();
-            out.extend(items);
-            if n < page || out.len() >= max {
-                break;
+        match total {
+            Some(total) => {
+                let want = total.min(max);
+                let starts: Vec<usize> = (out.len()..want).step_by(page).collect();
+                for chunk in starts.chunks(4) {
+                    let tasks: Vec<_> = chunk
+                        .iter()
+                        .map(|start| {
+                            let c = self.clone();
+                            let mut qq = q.clone();
+                            qq.push(("StartIndex", start.to_string()));
+                            tauri::async_runtime::spawn(async move { c.get_json::<serde_json::Value>("/Items", &c.with_user(qq)).await })
+                        })
+                        .collect();
+                    for t in tasks {
+                        let v = t.await.map_err(|e| Error::msg(e.to_string()))??;
+                        out.extend(Self::items_of(v));
+                    }
+                }
             }
+            None => loop {
+                let mut qq = q.clone();
+                qq.push(("StartIndex", out.len().to_string()));
+                let v: serde_json::Value = self.get_json("/Items", &self.with_user(qq)).await?;
+                let items = Self::items_of(v);
+                let n = items.len();
+                out.extend(items);
+                if n < page || out.len() >= max {
+                    break;
+                }
+            },
         }
         out.truncate(max);
         Ok(out)

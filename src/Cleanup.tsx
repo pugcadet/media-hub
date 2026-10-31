@@ -89,22 +89,27 @@ function EpisodePictures({ status }: { status: Status }) {
     if (!items.length) return;
     await track(`Pictures for ${items.length} episode${items.length === 1 ? "" : "s"}`, async (job) => {
       let fromTmdb = 0;
+      let doneN = 0;
       const left = new Set<string>();
-      for (const [i, e] of items.entries()) {
-        if (job.cancelled) break;
-        job.update(`TMDB · ${e.name}`, (i / items.length) * (useFrames ? 0.7 : 1));
-        try {
-          const best = rankImages(await api.remoteImages(e.id, "Primary" as ImageKind), "Primary", status.titleLang || "en")[0];
-          if (best?.Url) {
-            await api.setImage(e.id, "Primary", best.Url);
-            fromTmdb++;
-            continue;
+      // Four episodes at a time; each one leaves the list as soon as it has a picture.
+      let k = 0;
+      await Promise.all(Array.from({ length: 4 }, async () => {
+        while (k < items.length && !job.cancelled) {
+          const e = items[k++];
+          try {
+            const best = rankImages(await api.remoteImages(e.id, "Primary" as ImageKind), "Primary", status.titleLang || "en")[0];
+            if (best?.Url) {
+              await api.setImage(e.id, "Primary", best.Url);
+              fromTmdb++;
+              setEps((l) => l?.filter((x) => x.id !== e.id) ?? null);
+            } else left.add(e.seriesId);
+          } catch {
+            left.add(e.seriesId); // falls back to a frame
           }
-        } catch {
-          /* falls back to a frame */
+          doneN++;
+          job.update(`TMDB · ${e.name}`, (doneN / items.length) * (useFrames ? 0.7 : 1));
         }
-        left.add(e.seriesId);
-      }
+      }));
       let frames = 0;
       if (useFrames && left.size && !job.cancelled) {
         const ids = [...left];
@@ -112,11 +117,13 @@ function EpisodePictures({ status }: { status: Status }) {
           if (job.cancelled) break;
           job.update(`Frames from the video · ${shows.get(sid)?.name ?? ""}`, 0.7 + (i / ids.length) * 0.3);
           frames += await api.makeEpisodeStills(sid).catch(() => 0);
+          setEps((l) => l?.filter((x) => x.seriesId !== sid) ?? null);
         }
       }
       job.update(`${fromTmdb} from TMDB${useFrames ? `, ${frames} from the video` : ""}`, 1);
     }, { cancellable: true, reload: false }).catch(() => undefined);
-    load();
+    // Jellyfin needs a moment to list the new pictures.
+    window.setTimeout(load, 2500);
   }
 
   return (

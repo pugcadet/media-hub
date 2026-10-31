@@ -5,9 +5,7 @@ import { ToolsSettings } from "./Intros";
 import { UpdateSettings } from "./Updates";
 import { nav, type View } from "./nav";
 import { ACCENTS, DEFAULT_PREFS, setPrefs, usePrefs } from "./prefs";
-import { SubStyleEditor } from "./Player";
-import { FolderPicker } from "./Picks";
-import { runDaily, syncPicks } from "./scheduler";
+import { runDaily } from "./scheduler";
 import { clearProblems, followEvent, track, useEpoch, useProblems } from "./activity";
 import { Icon, TriCheck, type IconName, type TriState } from "./ui";
 import { foldersOf, useFolderMap } from "./folders";
@@ -23,10 +21,8 @@ const SECTIONS: { id: string; label: string; icon: IconName }[] = [
   { id: "folder", label: "Library folder", icon: "folder" },
   { id: "folderorder", label: "Folder order", icon: "sort" },
   { id: "intros", label: "Intros", icon: "skip" },
-  { id: "player", label: "Player", icon: "play" },
   { id: "subtitles", label: "Subtitles", icon: "subtitles" },
   { id: "metadata", label: "Titles and art", icon: "image" },
-  { id: "picks", label: "Picks of the day", icon: "heart" },
   { id: "schedule", label: "Daily tasks", icon: "clock" },
   { id: "plugins", label: "Jellyfin plugins", icon: "stack" },
   { id: "tools", label: "Tools", icon: "wrench" },
@@ -170,7 +166,6 @@ export default function Settings({ status, onChanged, section }: { status: Statu
 
           <FolderOrderSettings />
           <IntroSettings status={status} />
-          <PlayerSettings status={status} />
           <SubtitleSettings status={status} onChanged={onChanged} />
 
           <Section id="metadata" title="Titles and art" icon="image" hint="Where names, summaries and pictures come from.">
@@ -190,7 +185,6 @@ export default function Settings({ status, onChanged, section }: { status: Statu
             <LibraryLanguages canEdit={!status.readOnly} />
           </Section>
 
-          <PicksSettings status={status} />
           <ScheduleSettings status={status} />
           <PluginSettings />
           <div id="set-tools"><ToolsSettings /></div>
@@ -255,9 +249,11 @@ function IntroSettings({ status }: { status: Status }) {
     }
   }
   const on = (n: string) => !!info && (info.all || info.selected.includes(n));
+  const p = usePrefs();
   return (
     <Section id="intros" title="Intros" icon="skip" hint="Which libraries Jellyfin's Intro Skipper scans for intros and credits. Media Hub's own detection works on any show you open.">
       {error && <p className="error">{error}</p>}
+      <Switch checked={p.recapsOff} onChange={(v) => setPrefs({ recapsOff: v })}>Leave recaps out (no recap markers in the intros tool)</Switch>
       {!info && !error && <p className="muted small">Reading Intro Skipper's settings…</p>}
       {info && !info.installed && <p className="muted small">The Intro Skipper plugin isn't installed in Jellyfin. Media Hub can still find intros itself (Intros and credits).</p>}
       {info?.installed && (
@@ -321,27 +317,6 @@ function WatchSyncTest() {
       {res && <span className={`small ${res.ok ? "ok-text" : "error-text"}`}>{res.text}</span>}
     </div>
   );
-}
-
-function PlayerSettings({ status }: { status: Status }) {
-  const p = usePrefs();
-  return (
-    <Section id="player" title="Player" icon="play" hint="How watching works in Media Hub.">
-      <Switch checked={p.autoSkipIntro} onChange={(v) => setPrefs({ autoSkipIntro: v })}>Skip intros by themselves (3-second countdown on the button; “Watch it” stays)</Switch>
-      <Switch checked={p.autoSkipCredits} onChange={(v) => setPrefs({ autoSkipCredits: v })}>Skip credits: go to the next episode after 5 seconds</Switch>
-      <Switch checked={p.upNextAutoplay} onChange={(v) => setPrefs({ upNextAutoplay: v })}>Play the next episode by itself when the credits start</Switch>
-      <Switch checked={p.recapsOff} onChange={(v) => setPrefs({ recapsOff: v })}>Turn recaps off completely (no recap markers in the player or the intros tool)</Switch>
-      <Switch checked={p.autoDetectIntros} onChange={(v) => setPrefs({ autoDetectIntros: v })} disabled={status.readOnly}>Find intros and credits in the background when I play a season without markers (needs ffmpeg; only sure finds are saved)</Switch>
-      <RandomFolders />
-      <div className="strong small">Subtitle look</div>
-      <SubStyleEditor />
-    </Section>
-  );
-}
-
-/** Which folders "Play something" picks from. */
-function RandomFolders() {
-  return <FolderPicker label="“Play something” picks from" pref="randomFolders" />;
 }
 
 /* ---------------------------------------------------------- subtitles */
@@ -495,150 +470,6 @@ function LibraryLanguages({ canEdit }: { canEdit: boolean }) {
   );
 }
 
-/* ------------------------------------------------------------- picks */
-
-function PicksSettings({ status }: { status: Status }) {
-  const p = usePrefs();
-  return (
-    <Section id="picks" title="Picks of the day" icon="heart" hint="Twelve suggestions a day, also in Jellyfin so other apps see them.">
-      <p className="muted small">
-        Infuse's home screen only has its own rows (Up Next, Favourites, Recently Added) plus folders you pin. Jellyfin home-screen add-ons such as KefinTweaks only change Jellyfin's own app, not Infuse. So there are two ways to see the picks in Infuse:
-      </p>
-      <ol className="muted small steps-ol">
-        <li><b>A pinned row (recommended).</b> Media Hub keeps a collection called “Picks of the day” and changes it every day. In Infuse: your Jellyfin share → <b>Collections</b> → long-press <b>Picks of the day</b> → <b>Pin to Home Screen</b>. It's listed first.</li>
-        <li><b>Favourites.</b> Switch on the option below: today's picks show in Infuse's Favourites row. Your own favourites are never touched.</li>
-      </ol>
-      <p className="muted small">The picks change when Media Hub runs that day (it does this by itself in the background). Infuse can take a while to notice the change.</p>
-      <Switch checked={p.picksAsFavorites} disabled={status.readOnly} onChange={(v) => { setPrefs({ picksAsFavorites: v }); void syncPicks(); }}>
-        Also mark today's picks as favourites (yesterday's are unmarked again; your own favourites are never touched)
-      </Switch>
-      <FolderPicker label="Picks come from" pref="picksFolders" />
-      <div className="row"><button disabled={status.readOnly} onClick={() => void syncPicks()}><Icon name="reload" /> Update in Jellyfin now</button></div>
-    </Section>
-  );
-}
-
-/* ------------------------------------------------- Jellyfin as backend */
-
-/** Whether a library option is "on", and the value that switches it on or off. */
-const TUNE_SWITCH: Record<string, { on: (v: unknown) => boolean; value: (on: boolean, s: Status) => unknown; recommendedOn: boolean }> = {
-  AutomaticRefreshIntervalDays: { on: (v) => Number(v ?? 0) > 0, value: (on) => (on ? 30 : 0), recommendedOn: false },
-  EnableRealtimeMonitor: { on: (v) => v === true, value: (on) => on, recommendedOn: true },
-  ExtractChapterImagesDuringLibraryScan: { on: (v) => v !== false, value: (on) => on, recommendedOn: false },
-  ExtractTrickplayImagesDuringLibraryScan: { on: (v) => v !== false, value: (on) => on, recommendedOn: false },
-  SaveLocalMetadata: { on: (v) => v === true, value: (on) => on, recommendedOn: true },
-  MetadataSavers: { on: (v) => Array.isArray(v) && v.includes("Nfo"), value: (on) => (on ? ["Nfo"] : []), recommendedOn: true },
-  SubtitleDownloadLanguages: { on: (v) => Array.isArray(v) && v.length > 0, value: (on, s) => (on ? s.subLangs : []), recommendedOn: false },
-};
-
-function BackendSettings({ status }: { status: Status }) {
-  const epoch = useEpoch();
-  const [t, setT] = useState<Tuning | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [openLib, setOpenLib] = useState<string | null>(null);
-  const canEdit = !status.readOnly;
-  const load = () => api.backendTuning().then((x) => { setT(x); setError(null); }).catch((e) => setError(errorText(e)));
-  useEffect(() => void load(), [epoch]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const libs = new Map<string, TuneRow[]>();
-  for (const r of t?.rows.filter((x) => x.scope === "library") ?? []) libs.set(r.target, [...(libs.get(r.target) ?? []), r]);
-  const tasks = t?.rows.filter((x) => x.scope === "task") ?? [];
-  const todo = t?.rows.filter((x) => x.scope === "library" && !x.ok).length ?? 0;
-  const set = (r: TuneRow, value: unknown, what: string) => void track(what, () => api.backendSet(r.scope, r.target, r.key, value)).catch((e) => setError(errorText(e)));
-
-  return (
-    <Section id="backend" title="Jellyfin as the backend" icon="server" hint="Media Hub decides details, art and skip markers. Jellyfin keeps them and hands them to Infuse.">
-      {error && <p className="error">{error}</p>}
-      {!canEdit && <p className="note">Changing Jellyfin's settings needs changes switched on (above).</p>}
-
-      <KeepInPlace t={t} canEdit={canEdit} onChanged={load} />
-
-      <div className="strong small">Your edits stay</div>
-      <Switch checked={t?.lockEdits ?? true} onChange={(v) => void api.setLockEdits(v).then(load)}>
-        Lock a title once I change its details or pictures, so Jellyfin's own refreshes never undo it (Refresh from internet and Identify unlock it again)
-      </Switch>
-      <div className="row">
-        <button disabled={!canEdit} onClick={() => void askConfirm("Lock every show and movie? Jellyfin then never changes their details or pictures by itself. Each title can be undone in History.", { okLabel: "Lock all" }).then((ok) => { if (ok) void track("Locking every title", async (job) => { const un = await followEvent(job, "bulk-progress"); try { const n = await api.lockAll(true); job.update(`${n} titles locked`, 1); } finally { un(); } }, { stop: "bulk" }).catch((e) => setError(errorText(e))); })}><Icon name="lock" /> Lock every title</button>
-        <button disabled={!canEdit} onClick={() => void track("Unlocking every title", async (job) => { const un = await followEvent(job, "bulk-progress"); try { const n = await api.lockAll(false); job.update(`${n} titles unlocked`, 1); } finally { un(); } }, { stop: "bulk" }).catch((e) => setError(errorText(e)))}>Unlock every title</button>
-      </div>
-
-      <div className="row between">
-        <div>
-          <div className="strong small">Library settings</div>
-          <div className="muted small">{t ? (todo ? `${todo} setting${todo === 1 ? "" : "s"} differ from what works best with Media Hub and Infuse.` : "Every library is set up the way Media Hub works best.") : "Reading Jellyfin's settings…"}</div>
-        </div>
-        {todo > 0 && <button className="primary" disabled={!canEdit} onClick={() => void track("Setting up Jellyfin", () => api.backendApplyRecommended().then(() => undefined)).catch((e) => setError(errorText(e)))}>Use the recommended settings</button>}
-      </div>
-      <div className="tune-libs">
-        {[...libs.entries()].map(([id, rows]) => {
-          const off = rows.filter((r) => !r.ok).length;
-          const open = openLib === id;
-          return (
-            <div key={id} className={`tune-lib ${open ? "open" : ""}`}>
-              <button className="tune-lib-head link-plain" onClick={() => setOpenLib(open ? null : id)}>
-                <span className={`chev ${open ? "open" : ""}`}><Icon name="chevron" size={12} /></span>
-                <span className="strong">{rows[0].targetName}</span>
-                <span className={`small ${off ? "warn" : "ok"}`}>{off ? `${off} to change` : "✓ all good"}</span>
-              </button>
-              {open && rows.map((r) => {
-                const sw = TUNE_SWITCH[r.key];
-                const on = sw ? sw.on(r.current) : false;
-                return (
-                  <div key={r.key} className={`tune-row ${r.ok ? "" : "differs"}`}>
-                    <div className="grow">
-                      <div>{r.label} <span className="muted small">· recommended {sw?.recommendedOn ? "on" : "off"}</span></div>
-                      <div className="muted small">{r.detail}</div>
-                    </div>
-                    {sw && <input type="checkbox" className="switch" checked={on} disabled={!canEdit} onChange={(e) => set(r, sw.value(e.target.checked, status), `${r.targetName}: ${r.label.toLowerCase()} ${e.target.checked ? "on" : "off"}`)} />}
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
-      </div>
-
-      {tasks.length > 0 && (
-        <>
-          <div className="strong small">Jellyfin's scheduled tasks</div>
-          <p className="muted small">Heavy tasks slow down the NAS and Infuse's library sync while they run. Best at night, or off when you don't need them.</p>
-          <div className="tune-libs">
-            {tasks.map((r) => {
-              const isOff = Array.isArray(r.current) && r.current.length === 0;
-              return (
-                <div key={r.target} className="tune-row">
-                  <div className="grow">
-                    <div>{r.targetName} <span className={`small ${isOff ? "muted" : ""}`}>· {r.label}</span></div>
-                    <div className="muted small">{r.detail}</div>
-                  </div>
-                  <button className="link small" disabled={!canEdit} onClick={() => void track(`Running “${r.targetName}”`, () => api.backendRunTask(r.target), { reload: false })}>Run now</button>
-                  <input type="checkbox" className="switch" title={isOff ? "Off" : "On a schedule"} checked={!isOff} disabled={!canEdit} onChange={(e) => set(r, e.target.checked, `${r.targetName} ${e.target.checked ? "on" : "off"}`)} />
-                </div>
-              );
-            })}
-          </div>
-        </>
-      )}
-
-      <div className="strong small">Infuse</div>
-      <div className={`why-box ${t?.markersOk ? "sure" : ""}`}>
-        <ul>
-          <li className={t?.markersOk ? "ok" : "warn"}>
-            {t ? (t.markersOk ? `Skip intro, credits and recap: Jellyfin ${t.version} hands Media Hub's markers to Infuse (Infuse 8.0.4 or newer).` : `Jellyfin ${t.version || "(unknown)"} is older than 10.10, so Infuse can't read skip markers from it. Update Jellyfin.`) : "Checking the Jellyfin version…"}
-          </li>
-          <li>Add the server in Infuse under Settings → Shares → Add → Jellyfin, signed in as the same user Media Hub watches as.</li>
-          <li><b>Direct mode</b> is the fast one: Infuse browses Jellyfin live, nothing to sync. Library mode copies everything into Infuse first.</li>
-          <li>Picks of the day, your collections and playlists: pin them to Infuse's home screen under Settings → Shares → your Jellyfin server → Add Favorite.</li>
-          <li>Infuse shows what Media Hub set: titles, summaries, posters, backgrounds and logos come from Jellyfin, so edit them here, not in Infuse.</li>
-          <li>Watched status and where you stopped sync both ways through Jellyfin.</li>
-        </ul>
-      </div>
-    </Section>
-  );
-}
-
-/* ---------------------------------------------------------- schedule */
-
 function ScheduleSettings({ status }: { status: Status }) {
   const p = usePrefs();
   const s = p.schedule;
@@ -653,12 +484,11 @@ function ScheduleSettings({ status }: { status: Status }) {
       </div>
       <div className="fields2">
         <label className="check small"><input type="checkbox" checked={s.scan} onChange={(e) => set({ scan: e.target.checked })} />Scan the library</label>
-        <label className="check small"><input type="checkbox" checked={s.picks} onChange={(e) => set({ picks: e.target.checked })} />Update “Picks of the day”</label>
         <label className="check small"><input type="checkbox" checked={s.art} onChange={(e) => set({ art: e.target.checked })} />Fill in missing artwork (newest titles first)</label>
         <label className="check small"><input type="checkbox" checked={s.subtitles} onChange={(e) => set({ subtitles: e.target.checked })} />Get missing subtitles (your Subtitles settings)</label>
       </div>
       <div className="row"><button onClick={() => void runDaily(status, true)}><Icon name="play" /> Run now</button></div>
-      {status.readOnly && <p className="muted small">Artwork, subtitles and picks need changes switched on.</p>}
+      {status.readOnly && <p className="muted small">Artwork and subtitles need changes switched on.</p>}
     </Section>
   );
 }

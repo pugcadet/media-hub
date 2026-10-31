@@ -245,6 +245,72 @@ pub async fn structure_plan(state: State<'_, AppState>, actions: Vec<Action>) ->
     Ok(StructurePlan { plan_id, ops })
 }
 
+/* -------------------------------------------- music: featured artists into the main artist */
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistMerge {
+    /// "Music/Drake feat. Rihanna"
+    pub from: String,
+    /// "Music/Drake"
+    pub to: String,
+    pub albums: Vec<String>,
+}
+
+/// Artist folders that are really a featured version of another artist in the same folder.
+pub fn artist_merges(root: &Path, top: &str) -> Vec<ArtistMerge> {
+    let (dirs, _) = list(&root.join(top));
+    let names: Vec<String> = dirs.iter().map(|d| name_of(d)).collect();
+    let mut out = Vec::new();
+    for (d, n) in dirs.iter().zip(&names) {
+        let main = crate::inbox::main_artist(n);
+        if main.is_empty() || main == *n {
+            continue;
+        }
+        // Into the existing main artist folder (matched loosely), or a new one with that name.
+        let target = names.iter().find(|x| x.eq_ignore_ascii_case(&main)).cloned().unwrap_or_else(|| sanitize(&main));
+        let albums: Vec<String> = list(d).0.iter().map(|a| name_of(a)).collect();
+        out.push(ArtistMerge { from: format!("{top}/{n}"), to: format!("{top}/{target}"), albums });
+    }
+    out.sort_by(|a, b| a.from.cmp(&b.from));
+    out
+}
+
+#[tauri::command]
+pub async fn music_artist_merges(state: State<'_, AppState>, top: String) -> Result<Vec<ArtistMerge>> {
+    safe_rel(&top)?;
+    let root = root_of(&state)?;
+    tauri::async_runtime::spawn_blocking(move || artist_merges(&root, &top)).await.map_err(|e| Error::msg(e.to_string()))
+}
+
+/// The moves: each album folder of a featured artist goes into the main artist's folder.
+#[tauri::command]
+pub async fn music_merge_plan(state: State<'_, AppState>, top: String, from: Vec<String>) -> Result<StructurePlan> {
+    safe_rel(&top)?;
+    let root = root_of(&state)?;
+    let r2 = root.clone();
+    let ops = tauri::async_runtime::spawn_blocking(move || {
+        let mut ops = Vec::new();
+        for m in artist_merges(&r2, &top).into_iter().filter(|m| from.contains(&m.from)) {
+            let src = r2.join(&m.from);
+            let (albums, files) = list(&src);
+            for a in albums {
+                ops.push(mv(&r2, &a, format!("{}/{}", m.to, name_of(&a)), "folder", Some(name_of(&a))));
+            }
+            // Loose songs in the artist folder follow too.
+            for f in files {
+                ops.push(mv(&r2, &f, format!("{}/{}", m.to, name_of(&f)), "video", None));
+            }
+        }
+        ops
+    })
+    .await
+    .map_err(|e| Error::msg(e.to_string()))?;
+    let plan_id = format!("music-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+    state.set_plan(StoredPlan { id: plan_id.clone(), root, ops: ops.clone() })?;
+    Ok(StructurePlan { plan_id, ops })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,6 +342,11 @@ mod tests {
         assert_eq!(mv.loose_movies, vec!["Movies/Heat (1995).mkv".to_string()]);
         assert_eq!(mv.foldered_movies, vec!["Movies/Dune (2021)".to_string()]);
 
+        touch(&root, "Music/Drake/Views/01.mp3");
+        touch(&root, "Music/Drake feat. Rihanna/Take Care/01.mp3");
+        let merges = artist_merges(&root, "Music");
+        assert_eq!(merges.len(), 1);
+        assert_eq!((merges[0].from.as_str(), merges[0].to.as_str()), ("Music/Drake feat. Rihanna", "Music/Drake"));
         let ops = plan(&root, &[Action { kind: "seasons".into(), path: "TV/Bluey".into() }]).unwrap();
         assert!(ops.iter().any(|o| o.to == "TV/Bluey/Season 01/Bluey - S01E01.mkv"));
         assert!(ops.iter().any(|o| o.to == "TV/Bluey/Season 01/Bluey - S01E01.en.srt"));

@@ -89,6 +89,33 @@ pub async fn reveal_item(state: State<'_, AppState>, id: String) -> Result<()> {
     Ok(())
 }
 
+/// Opens a title's video in the computer's own player (QuickTime, IINA, VLC …). Videos only.
+#[tauri::command]
+pub async fn open_video(state: State<'_, AppState>, id: String) -> Result<()> {
+    let server = server_path(&state, &id).await?;
+    let local = to_local(&state, &server)?;
+    let name = local.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if !local.is_file() || !crate::naming::is_video(&name) {
+        return Err(Error::msg("There's no single video file to open for this (open the folder instead)."));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("open").arg(&local).spawn();
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let s = local.to_string_lossy();
+        let s = s.strip_prefix(r"\\?\").unwrap_or(&*s).to_string();
+        let _ = Command::new("explorer").raw_arg(format!("\"{s}\"")).spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = Command::new("xdg-open").arg(&local).spawn();
+    }
+    Ok(())
+}
+
 /// Shows a folder inside the library folder (renamer rows).
 #[tauri::command]
 pub fn reveal_rel(state: State<'_, AppState>, rel: String) -> Result<()> {

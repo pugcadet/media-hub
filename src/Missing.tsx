@@ -5,7 +5,7 @@ import { nav } from "./nav";
 import { Icon } from "./ui";
 import { Check, IconBtn, SearchBox, Seg, Toolbar } from "./kit";
 import { askRenumber } from "./Renumber";
-import { setPrefs, usePrefs } from "./prefs";
+import { folderOff, setPrefs, usePrefs } from "./prefs";
 import { readSaved, usePageState, writeSaved } from "./saved";
 import { missingSummary, savePart } from "./scan";
 
@@ -36,7 +36,13 @@ export default function Missing({ status }: { status: Status }) {
 
   useEffect(() => {
     reload();
-    api.list("series", "", "name", 0, 5000).then(setShows).catch(() => setShows([]));
+    // Shows in folders that are left alone (Folders page, e.g. YouTube) aren't checked.
+    Promise.all([api.list("series", "", "name", 0, 5000), api.libraryHealth(false).catch(() => null)])
+      .then(([list, h]) => {
+        const off = new Set((h?.rows ?? []).filter((r) => folderOff(r.libraryFolder)).map((r) => r.id.replace(/-/g, "")));
+        setShows(list.filter((x) => !off.has(x.id.replace(/-/g, ""))));
+      })
+      .catch(() => setShows([]));
   }, [epoch]);
 
   async function check(list: Item[]) {

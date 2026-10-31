@@ -39,6 +39,12 @@ pub struct CheckRow {
     pub reasons: Vec<String>,
     pub example: Option<(String, String)>,
     pub error: Option<String>,
+    /// When this title was checked (seconds); 0 = with the whole list.
+    #[serde(default)]
+    pub checked: i64,
+    /// Something was renamed in its folder since it was checked: needs a fresh look.
+    #[serde(default)]
+    pub stale: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -198,7 +204,29 @@ pub fn naming_check_last(state: State<'_, AppState>) -> Result<Option<CheckResul
             r.rows.retain(|x| known.contains(&x.id.replace('-', "")));
         }
     }
+    // Renamed since its check (by the Inbox, Identify, Folders, …): the row is out of date.
+    if let Some(r) = r.as_mut() {
+        let oldest = r.rows.iter().map(|x| if x.checked > 0 { x.checked } else { r.at }).min().unwrap_or(r.at);
+        if let Ok(moves) = state.store().and_then(|s| s.renames_since(oldest)) {
+            mark_stale(&mut r.rows, r.at, &moves);
+        }
+    }
     Ok(r)
+}
+
+/// Rows whose folder had something renamed in or out of it after their check.
+pub fn mark_stale(rows: &mut [CheckRow], list_at: i64, moves: &[(i64, String, String)]) {
+    for row in rows.iter_mut() {
+        let since = if row.checked > 0 { row.checked } else { list_at };
+        let folder = row.folder.trim_end_matches('/');
+        if folder.is_empty() {
+            continue;
+        }
+        let inside = |p: &str| p == folder || p.starts_with(&format!("{folder}/"));
+        if moves.iter().any(|(at, from, to)| *at > since && (inside(from) || inside(to))) {
+            row.stale = true;
+        }
+    }
 }
 
 #[tauri::command]
@@ -255,6 +283,11 @@ async fn run(app: &AppHandle, tv_tpl: &str, movie_tpl: &str, only: Option<Vec<St
     let _ = app.emit("naming-progress", Progress { done: total, total, name: String::new() });
     let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     // A partial check (some ids) updates the saved full list.
+    let mut rows = rows;
+    for r in &mut rows {
+        r.checked = at;
+        r.stale = false;
+    }
     let mut result = CheckResult { at, rows };
     if only.is_some() {
         if let Some(prev) = std::fs::read(saved_path(&state)).ok().and_then(|b| serde_json::from_slice::<CheckResult>(&b).ok()) {
@@ -277,6 +310,16 @@ async fn run(app: &AppHandle, tv_tpl: &str, movie_tpl: &str, only: Option<Vec<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rows_renamed_since_their_check_are_stale() {
+        let row = |folder: &str, checked: i64| CheckRow { folder: folder.into(), checked, ..Default::default() };
+        let mut rows = vec![row("TV/Bluey", 100), row("TV/Bluey Two", 100), row("Movies/Heat", 300)];
+        mark_stale(&mut rows, 50, &[(200, "TV/Bluey/Season 01/a.mkv".into(), "TV/Bluey/Season 01/b.mkv".into()), (200, "Movies/Heat".into(), "Movies/Heat (1995)".into())]);
+        assert!(rows[0].stale);
+        assert!(!rows[1].stale, "a similar name isn't the same folder");
+        assert!(!rows[2].stale, "checked after the rename");
+    }
 
     fn op(from: &str, to: &str, kind: &'static str, status: &'static str, score: Option<u8>) -> PlanOp {
         PlanOp {

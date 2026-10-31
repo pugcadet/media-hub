@@ -2,7 +2,7 @@
 // and the activity bar at the top of the window.
 import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Alert, api, bumpArt, Card, errorText, imageUrl } from "./api";
-import { clearDataCaches, followEvent, isStopped, stopJob, track, useEpoch, useJobLog, useJobs, type JobRecord } from "./activity";
+import { clearDataCaches, followEvent, isStopped, logProblem, stopJob, track, useEpoch, useJobLog, useJobs, type JobRecord } from "./activity";
 import { nav } from "./nav";
 import { prefs as usePrefsLiteSnapshot, setPrefs as setPrefsLite, usePrefs as usePrefsLite } from "./prefs";
 
@@ -90,23 +90,6 @@ function MenuHost() {
  * Plays a title: a movie or episode directly; a show from where you are (the episode you
  * started, else the first one you haven't watched); a season from its first unwatched episode.
  */
-export async function playTitle(id: string): Promise<void> {
-  try {
-    const d = await api.details(id);
-    const t = d.item.Type;
-    if (t === "Movie" || t === "Episode") return nav.play(id);
-    const seasons = t === "Series" ? d.seasons.filter((s) => (s.IndexNumber ?? 0) > 0).concat(d.seasons.filter((s) => (s.IndexNumber ?? 0) === 0)) : t === "Season" ? [d.item] : [];
-    for (const s of seasons) {
-      if (s.UserData?.Played && s !== seasons[seasons.length - 1]) continue;
-      const eps = (await api.children(s.Id)).filter((e) => e.Type === "Episode");
-      const e = eps.find((x) => (x.UserData?.PlaybackPositionTicks ?? 0) > 0) ?? eps.find((x) => !x.UserData?.Played);
-      if (e) return nav.play(e.Id);
-    }
-    nav.open(id);
-  } catch (e) {
-    void track("Play", () => Promise.reject(errorText(e)));
-  }
-}
 
 /** What a right-click on a title offers. */
 export interface MenuTarget {
@@ -126,7 +109,7 @@ export function itemMenu(t: MenuTarget, canEdit = true): MenuItem[] {
   const titled = k === "movie" || k === "series";
   const items: MenuItem[] = [
     { label: "Open", run: () => (k === "collection" && usePrefsLiteSnapshot().mode !== "manage" ? nav.route({ view: "collections", collection: t.id }) : nav.open(t.id)) },
-    ...(playable ? [{ label: "Play", run: () => nav.play(t.id) }] : k === "series" || k === "season" ? [{ label: "Play", run: () => void playTitle(t.id) }] : []),
+    ...(playable ? [{ label: "Open the video", run: () => void api.openVideo(t.id).catch((e) => logProblem("Open the video", errorText(e))) }] : []),
     ...(t.seriesId && (k === "episode" || k === "season") ? [{ label: "Go to show", run: () => nav.open(t.seriesId!) }] : []),
     ...(t.seasonId && k === "episode" ? [{ label: "Go to season", run: () => nav.open(t.seriesId ?? t.seasonId!, { tab: t.seasonId! }) }] : []),
     { sep: true },
@@ -450,13 +433,6 @@ export function scanLibrary(): Promise<void> {
 
 /* --------------------------------------------------------- cards & rows */
 
-/** Plays what a card stands for: the video itself, or a show from where you are. */
-export function playCard(c: Card): void {
-  if (c.kind === "movie" || c.kind === "episode") nav.play(c.id);
-  else if (c.kind === "series" || c.kind === "season") void playTitle(c.id);
-  else if (c.kind === "collection") nav.route({ view: "collections", collection: c.id });
-  else nav.open(c.id);
-}
 
 /**
  * A poster (or wide thumbnail for episodes). Clicking the picture plays it; clicking the
@@ -473,14 +449,13 @@ export function CardTile({ c, wide, canEdit = true, inCollection, onOpen, menuEx
   const [broken, setBroken] = useState(false);
   const [broken2, setBroken2] = useState(false);
   const open = () => (onOpen ? onOpen(c) : c.kind === "person" ? undefined : nav.open(c.kind === "episode" && c.seriesId ? c.id : c.id));
-  const playable = !onOpen && c.kind !== "person" && c.kind !== "other";
   const menu = (e: React.MouseEvent) => openMenu(e, [
     ...(menuExtra ? [...menuExtra(c), { sep: true }] : []),
     ...itemMenu({ id: c.id, kind: c.kind, title: c.title, seriesId: c.seriesId, played: c.played, inCollection }, canEdit),
   ]);
   return (
     <div className={`tile ${isWide ? "wide" : ""}`} onContextMenu={menu} title={c.title}>
-      <button className={`art ${isWide ? "wide cover" : ""} tile-art`} onClick={playable ? () => playCard(c) : open} aria-label={playable ? `Play ${c.title}` : `Open ${c.title}`}>
+      <button className={`art ${isWide ? "wide cover" : ""} tile-art`} onClick={open} aria-label={`Open ${c.title}`}>
         {!broken ? (
           <img src={art} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} />
         ) : fallback && !broken2 ? (
@@ -488,7 +463,6 @@ export function CardTile({ c, wide, canEdit = true, inCollection, onOpen, menuEx
         ) : (
           <div className="noart">{c.title}</div>
         )}
-        {playable && <span className="tile-play"><Icon name="play" size={20} /></span>}
         {c.played && <span className="played" title="Watched">✓</span>}
         {c.progress != null && c.progress > 0.01 && c.progress < 0.99 && <span className="tile-progress"><span style={{ width: `${c.progress * 100}%` }} /></span>}
       </button>

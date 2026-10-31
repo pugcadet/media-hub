@@ -9,8 +9,8 @@ import { BulkSelect, Icon, itemMenu, openMenu, TriCheck, useUndoableSet } from "
 import { folderTabs, IconBtn, KTabs, PageHead, SearchBox, Seg } from "./kit";
 import { usePageState } from "./saved";
 import { Studio, StudioItem } from "./Studio";
-import Structure from "./Structure";
-import { setPrefs, usePrefs, withShowYear, yearOptional, minimalNames, type Prefs } from "./prefs";
+import Folders from "./Folders";
+import { folderOff, setPrefs, usePrefs, withShowYear, yearOptional, minimalNames, type Prefs } from "./prefs";
 
 type Source = PlanArgs["source"];
 type Kind = "auto" | "tv" | "movie";
@@ -916,7 +916,13 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
     }
   }
 
-  const rows = res?.rows ?? [];
+  // Folders switched off (Folders page, e.g. YouTube) aren't listed at all.
+  const rows = (res?.rows ?? []).filter((r) => !folderOff(r.folder));
+  // Renamed since they were checked (Inbox, Identify, Folders …): checked again by themselves.
+  const staleKey = rows.filter((r) => r.stale && !skipped(r)).map((r) => r.id).join(",");
+  useEffect(() => {
+    if (staleKey && !checking) void check(staleKey.split(",").slice(0, 40));
+  }, [staleKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const top = (r: CheckRow) => r.folder.split("/")[0] || "(library folder)";
   const q = filter.toLowerCase();
   const match = (r: CheckRow) => (folderTab === "@all" || top(r) === folderTab) && (!q || r.name.toLowerCase().includes(q) || r.folder.toLowerCase().includes(q));
@@ -1332,7 +1338,7 @@ export default function Renamer({ status, onChanged, start, embedded }: {
       {!status.libraryRoot ? <FolderFix status={status} onChanged={onChanged} />
         : mode === "check" ? <CheckList status={status} focus={start?.item} />
         : mode === "bulk" ? <BulkEdit status={status} onCheck={() => setMode("check")} />
-        : mode === "folders" ? <Structure status={status} />
+        : mode === "folders" ? <Folders status={status} />
         : (
           <>
             <p className="muted small"><button className="link" onClick={() => setMode("check")}>← Back to the list</button></p>
