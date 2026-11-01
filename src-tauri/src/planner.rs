@@ -337,6 +337,25 @@ fn title_similarity(a: &str, b: &str) -> f64 {
 
 /// Episode titles compared loosely: "Stan of Arabia (1)", "Stan of Arabia, Part 1" and
 /// "Stan Of Arabia Pt. 1" are the same episode.
+/// An episode title as plain words, accents folded ("Doppelgängers" → ["doppelgangers"]).
+fn episode_words(t: &str) -> Vec<String> {
+    let folded: String = t
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => 'a',
+            'è' | 'é' | 'ê' | 'ë' => 'e',
+            'ì' | 'í' | 'î' | 'ï' => 'i',
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' => 'o',
+            'ù' | 'ú' | 'û' | 'ü' => 'u',
+            'ñ' => 'n',
+            'ç' => 'c',
+            c => c,
+        })
+        .collect();
+    folded.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+}
+
 pub fn same_episode_title(a: &str, b: &str) -> bool {
     fn norm(t: &str) -> String {
         // "Doppelgängers" and "Doppelgangers" are the same title.
@@ -427,12 +446,27 @@ pub fn plan_tv(
                 title = current.clone();
             }
         }
+        // One title is the other with more to it ("XXXI" vs "XXXI - Jack in Egypt"): the fuller
+        // one is used, and it isn't a disagreement.
+        let extends = |long: &str, short: &str| {
+            let (l, sh) = (episode_words(long), episode_words(short));
+            !sh.is_empty() && l.len() > sh.len() && l[..sh.len()] == sh[..]
+        };
+        let mut fuller = false;
+        if kept.is_none() && !current.is_empty() && !looked_up.is_empty() {
+            if extends(&current, &title) {
+                title = current.clone();
+                fuller = true;
+            } else if extends(&title, &current) {
+                fuller = true;
+            }
+        }
         // The file names the episode differently than the database: never "100% sure".
         let generic = {
             let c = current.to_lowercase();
             c.split(|ch: char| !ch.is_alphanumeric()).filter(|w| !w.is_empty()).all(|w| matches!(w, "episode" | "ep" | "part" | "pt" | "chapter") || w.chars().all(|ch| ch.is_ascii_digit()))
         };
-        let differs = kept.is_none() && !current.is_empty() && !generic && !looked_up.is_empty() && !same_episode_title(&title, &current)
+        let differs = !fuller && kept.is_none() && !current.is_empty() && !generic && !looked_up.is_empty() && !same_episode_title(&title, &current)
             && !current.split(" + ").all(|part| title.split(" + ").any(|t| same_episode_title(t, part)));
         if differs {
             kept = Some(format!("The file calls it “{current}”, the database calls this number “{title}”: check which is right (the file's name differs)."));
@@ -917,6 +951,17 @@ mod tests {
         assert!(ops[0].to.ends_with("S06E04 - Doppelgängers.mkv"), "{ops:#?}");
         assert!(ops[0].note.as_deref().unwrap_or("").contains("under another number"));
         assert!(same_episode_title("Doppelgängers", "Doppelgangers"));
+    }
+
+    #[test]
+    fn the_fuller_title_wins() {
+        let f = files(&["TV/Samurai Jack (2001)/Season 03/Samurai Jack (2001) - S03E05 - XXXI - Jack in Egypt.mkv"]);
+        let r = req("TV/Samurai Jack (2001)", "{show}< ({year})>/{seasondir}/{show} - {sxe}< - {title}>.{ext}");
+        let mut t = HashMap::new();
+        t.insert((3, 5), "XXXI".to_string());
+        let ops = plan_tv(&f, &r, &t, &nothing_exists).unwrap();
+        assert!(ops[0].to.ends_with("Samurai Jack - S03E05 - XXXI - Jack in Egypt.mkv"), "{ops:#?}");
+        assert!(ops[0].note.is_none(), "{ops:#?}");
     }
 
     #[test]
