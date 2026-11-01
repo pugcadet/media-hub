@@ -263,6 +263,12 @@ pub fn season_from_release_dir(name: &str) -> Option<u32> {
     if re_sxe().is_match(name) || re_nxm().is_match(name) {
         return None;
     }
+    // "S01-S03", "Season 1-3": several seasons in one folder.
+    static RANGE: OnceLock<Regex> = OnceLock::new();
+    let range = RANGE.get_or_init(|| Regex::new(r"(?i)(?:s|season[ ._-]*)\d{1,2}[ ._]*-[ ._]*(?:s|season[ ._-]*)?\d{1,2}(?:$|[^0-9])").expect("season range"));
+    if range.is_match(name) {
+        return None;
+    }
     let mut found: Option<u32> = None;
     for c in re_season_release().captures_iter(name) {
         let n: u32 = c.get(1).or(c.get(2))?.as_str().parse().ok()?;
