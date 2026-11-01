@@ -175,6 +175,11 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
   const [mode, setMode] = useState<"fixed" | "end" | "percent">("end");
   const [v1, setV1] = useState("3:00");
   const [v2, setV2] = useState("");
+  // Sensible starting values: an intro from 0:00, credits from a few minutes before the end to the end.
+  useEffect(() => {
+    if (part === "credits") { setMode("end"); setV1("3:00"); setV2(""); }
+    else { setMode("fixed"); setV1("0:00"); setV2(""); }
+  }, [part]);
   const [applyTo, setApplyTo] = useState<Scope>("season");
   const firstInput = useRef<HTMLInputElement>(null);
   const [drawing, setDrawing] = useState<Part>("intro");
@@ -262,11 +267,12 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
 
   /** The span the top box describes for an episode of this length (null: times don't fit). */
   function ruleSpan(dur: number, pt: Part): Span | null | "bad" {
-    const a = parseTime(v1);
+    // Empty start: the intro starts at 0:00. Empty end: credits run to the end of the episode.
+    const a = v1.trim() ? parseTime(v1) : mode === "fixed" && pt !== "credits" ? 0 : null;
     const b = v2.trim() ? parseTime(v2) : null;
     if (a === null) return "bad";
     let span: Span;
-    if (mode === "fixed") span = { start: a, end: b ?? Math.min(dur, a + 60) };
+    if (mode === "fixed") span = { start: a, end: b ?? (pt === "credits" ? dur : Math.min(dur, a + 60)) };
     else if (mode === "end") span = pt === "credits" ? { start: Math.max(0, dur - a), end: dur } : { start: Math.max(0, dur - a), end: Math.max(0, dur - (b ?? 0)) };
     else span = { start: (dur * a) / 100, end: b != null ? (dur * b) / 100 : pt === "credits" ? dur : (dur * a) / 100 + 60 };
     return span.end > span.start ? span : null;
@@ -471,7 +477,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
           {mode === "fixed" && (
             <div className="row">
               <label>{LABEL[part]} starts at<input ref={firstInput} className="mono" value={v1} onChange={(e) => setV1(e.target.value)} placeholder="0:45" /></label>
-              <label>and ends at<input className="mono" value={v2} onChange={(e) => setV2(e.target.value)} placeholder="1:45" /></label>
+              <label>and ends at<input className="mono" value={v2} onChange={(e) => setV2(e.target.value)} placeholder={part === "credits" ? "end of the episode" : "1:45"} /></label>
             </div>
           )}
           {mode === "end" && (
@@ -732,7 +738,8 @@ function SegPreview({ ep, draft, parts, first, onSet }: { ep: SegEpisode; draft:
   const setOut = () => {
     const t = now();
     const cur = draft[part];
-    const start = cur && cur.start < t - 1 ? cur.start : Math.max(0, t - 60);
+    // Without a start yet: an intro (or recap) starts at 0:00.
+    const start = cur && cur.start < t - 1 ? cur.start : part === "credits" ? Math.max(0, t - 60) : 0;
     onSet(part, { start, end: t });
   };
 

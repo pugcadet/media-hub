@@ -13,8 +13,9 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
-/// Provider name the MediaSegments API plugin accepts for segments written by other tools.
-const PROVIDER: &str = "Chapter Segments Provider";
+/// The MediaSegments API plugin's own provider: it never regenerates, so Jellyfin never deletes
+/// what is saved under it (the chapter provider wiped saved markers on every segment scan).
+const PROVIDER: &str = "MediaSegments API";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

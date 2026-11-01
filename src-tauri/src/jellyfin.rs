@@ -180,6 +180,7 @@ pub fn not_found_text(path: &str) -> String {
         ["Shows", id, ..] | ["Items", id, "Similar"] if is_id(id) => TITLE_GONE.to_string(),
         ["Items", _, "Images", ..] => "Jellyfin has no such picture for this title.".to_string(),
         ["Items", _, "RemoteImages", ..] => "Jellyfin couldn't fetch that picture (the image site may have removed it).".to_string(),
+        [api, _] if api.to_lowercase().contains("mediasegmentsapi") => "Jellyfin refused the skip markers: in Jellyfin, open Dashboard → Libraries → this library → Manage library, and tick “MediaSegments API” under Media segment providers. Then save again.".to_string(),
         ["MediaSegments", ..] => "Jellyfin can't store skip markers: install the “MediaSegments API” plugin (Dashboard → Plugins) and restart Jellyfin.".to_string(),
         ["Providers", "Subtitles", ..] | ["Items", _, "RemoteSearch", "Subtitles", ..] => "The subtitle site doesn't have this subtitle (any more). Pick another one.".to_string(),
         _ => format!("Jellyfin couldn't find what Media Hub asked for ({}).", parts.iter().map(|x| if is_id(x) { "…" } else { x }).collect::<Vec<_>>().join("/")),
