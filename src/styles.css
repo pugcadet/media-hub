@@ -2275,3 +2275,7 @@ button.inbox-choice:has(.inbox-choice-pic) { flex-direction: row; align-items: c
 .todo-group:first-child { border-top: 0; padding-top: 0; }
 .todo-group.warn .todo-head > svg { color: #f5b14c; }
 .todo-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tidy-list { display: flex; flex-direction: column; gap: 2px; padding-left: 28px; max-height: 60vh; overflow-y: auto; }
+.tidy-row .mf-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tidy-op { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1.4fr); gap: 8px; }
+.tidy-op.conflict { opacity: .5; }

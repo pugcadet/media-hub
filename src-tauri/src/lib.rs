@@ -44,6 +44,7 @@ mod structure;
 mod subs;
 mod jfserver;
 mod subpreview;
+mod tidy;
 mod updater;
 
 use tauri::Manager;
@@ -86,6 +87,7 @@ pub fn run() {
             backend::plugins_installed,
             jfserver::server_overview,
             subpreview::subtitle_preview,
+            tidy::tidy_names_plan,
             subpreview::video_clip,
             player::preview_window,
             jfserver::server_task_run,

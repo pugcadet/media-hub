@@ -280,7 +280,7 @@ fn sidecars(root: &Path, video: &str) -> Vec<String> {
 
 /// Subtitles named only by their language ("English.srt", "eng.srt") get the video's name, so
 /// Jellyfin and Infuse pick them up: "Movie (1996).eng.srt".
-fn language_subs(root: &Path, dir: &str, video_stem: &str, taken: &mut HashSet<String>) -> Vec<PlanOp> {
+pub(crate) fn language_subs(root: &Path, dir: &str, video_stem: &str, taken: &mut HashSet<String>) -> Vec<PlanOp> {
     const LANGS: &[(&[&str], &str)] = &[
         (&["english", "eng", "en"], "eng"), (&["dutch", "nederlands", "dut", "nld", "nl"], "dut"), (&["french", "francais", "fre", "fra", "fr"], "fre"),
         (&["german", "deutsch", "ger", "deu", "de"], "ger"), (&["spanish", "espanol", "spa", "es"], "spa"), (&["italian", "ita", "it"], "ita"),

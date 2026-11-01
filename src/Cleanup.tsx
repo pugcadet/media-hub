@@ -8,15 +8,16 @@ import { Icon } from "./ui";
 import Duplicates from "./Duplicates";
 import Missing from "./Missing";
 import Storage from "./Storage";
+import Tidy from "./Tidy";
 import { cleanupBlocks } from "./Dashboard";
 import { KTabs, PageHead } from "./kit";
 import { savePart, scanEverything, useScanSummary } from "./scan";
 import { rankImages } from "./ArtPicker";
 import { usePageState } from "./saved";
 
-export type CleanupTab = "duplicates" | "missing" | "folders" | "storage" | "pictures";
+export type CleanupTab = "names" | "duplicates" | "missing" | "folders" | "storage" | "pictures";
 // Folder tidying lives in the Renamer (Renamer → Folders).
-const TABS: CleanupTab[] = ["duplicates", "missing", "storage", "pictures"];
+const TABS: CleanupTab[] = ["names", "duplicates", "missing", "storage", "pictures"];
 const asTab = (t?: string): CleanupTab | "" => (TABS.includes(t as CleanupTab) ? (t as CleanupTab) : "");
 
 export default function Cleanup({ status, tab, onNav }: { status: Status; tab?: string; onNav: (v: View) => void }) {
@@ -45,8 +46,9 @@ export default function Cleanup({ status, tab, onNav }: { status: Status; tab?: 
           </button>
         }
       />
-      <KTabs active={t} onChange={pick} tabs={cleanupBlocks(sum, status.series).filter((b) => b.key !== "folders").map((b) => ({ id: b.key, label: b.title, icon: b.icon, count: b.count === null ? "–" : b.count === 0 ? "✓" : b.count.toLocaleString(), warn: !!b.count }))} />
+      <KTabs active={t} onChange={pick} tabs={[{ id: "names", label: "Names and years", icon: "rename" as const }, ...cleanupBlocks(sum, status.series).filter((b) => b.key !== "folders").map((b) => ({ id: b.key, label: b.title, icon: b.icon, count: b.count === null ? "–" : b.count === 0 ? "✓" : b.count.toLocaleString(), warn: !!b.count }))]} />
       <div className="cleanup-body" key={t}>
+        {t === "names" && <Tidy status={status} />}
         {t === "duplicates" && <Duplicates status={status} />}
         {t === "missing" && <Missing status={status} />}
         {t === "storage" && <Storage status={status} onNav={onNav} />}

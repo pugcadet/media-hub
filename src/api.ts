@@ -1036,6 +1036,7 @@ export const api = {
     invoke<{ folder: string; moved: number; copied: number; skipped: string[]; trashed: boolean; keptBecause: string | null }>("import_run", { dest, title, year, mode }),
   clearResume: (id: string) => invoke<void>("clear_resume", { id }),
   inboxPick: () => invoke<string | null>("inbox_pick"),
+  tidyNamesPlan: (skip: string[]) => invoke<{ planId: string; titles: { id: string; name: string; kind: "series" | "movie"; folder: string; ops: PlanOp[] }[] }>("tidy_names_plan", { skip }),
   inboxReveal: () => invoke<void>("inbox_reveal"),
   inboxScan: () => invoke<[string | null, InboxItem[]]>("inbox_scan"),
   inboxResolve: (key: string, target: InboxTarget) => invoke<InboxPlan>("inbox_resolve", { key, target }),

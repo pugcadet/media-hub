@@ -27,7 +27,7 @@ const parentOf = (p: string) => p.split("/").slice(0, -1).join("/");
 type StepState = "working" | "done" | "failed";
 
 /** Applies a plan with a progress bar and a mark per item; returns when Jellyfin was told. */
-function useRun(onDone: () => void) {
+export function useRun(onDone: () => void) {
   const [prog, setProg] = useState<{ done: number; total: number; now: string } | null>(null);
   const [marks, setMarks] = useState<Record<string, StepState>>({});
   const [busy, setBusy] = useState(false);
