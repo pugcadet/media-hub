@@ -339,7 +339,26 @@ fn title_similarity(a: &str, b: &str) -> f64 {
 /// "Stan Of Arabia Pt. 1" are the same episode.
 pub fn same_episode_title(a: &str, b: &str) -> bool {
     fn norm(t: &str) -> String {
-        let t = t.to_lowercase().replace("part one", "1").replace("part two", "2").replace("part three", "3");
+        // "Doppelgängers" and "Doppelgangers" are the same title.
+        let folded: String = t
+            .to_lowercase()
+            .chars()
+            .map(|c| match c {
+                'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => "a".to_string(),
+                'è' | 'é' | 'ê' | 'ë' => "e".to_string(),
+                'ì' | 'í' | 'î' | 'ï' => "i".to_string(),
+                'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' => "o".to_string(),
+                'ù' | 'ú' | 'û' | 'ü' => "u".to_string(),
+                'ñ' => "n".to_string(),
+                'ç' => "c".to_string(),
+                'ß' => "ss".to_string(),
+                'æ' => "ae".to_string(),
+                'œ' => "oe".to_string(),
+                '’' | '\'' => String::new(),
+                c => c.to_string(),
+            })
+            .collect();
+        let t = folded.replace("part one", "1").replace("part two", "2").replace("part three", "3");
         t.split(|c: char| !c.is_alphanumeric())
             .filter(|w| !w.is_empty() && !matches!(*w, "part" | "pt" | "the" | "a" | "an" | "and"))
             .collect::<Vec<_>>()
@@ -400,6 +419,7 @@ pub fn plan_tv(
             if req.alt_titles.iter().any(same_slot) {
                 kept = Some(format!("Kept “{current}”: another database has it as this episode (the episode order differs between databases)."));
             } else if titles.iter().any(|(k, t)| !(k.0 == m.season && m.episodes.contains(&k.1)) && same_episode_title(t, &current))
+                || req.alt_titles.iter().any(|a| a.values().any(|t| same_episode_title(t, &current)))
             {
                 kept = Some(format!("Kept “{current}”: the database lists it under another number, so the order differs. Check it yourself."));
             }
@@ -884,6 +904,19 @@ mod tests {
         r.minimal = true;
         let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
         assert_eq!(ops[0].to, "TV/SpongeBob SquarePants (1999)/Season 08/SpongeBob SquarePants - S08E01 - Accidents Will Happen.mkv", "{ops:#?}");
+    }
+
+    #[test]
+    fn accents_and_shifted_numbers_keep_the_file_title() {
+        let f = files(&["TV/Parks and Recreation (2009)/Season 06/Parks and Recreation (2009) - S06E04 - Doppelgängers.mkv"]);
+        let r = req("TV/Parks and Recreation (2009)", "{show}< ({year})>/{seasondir}/{show} - {sxe}< - {title}>.{ext}");
+        let mut t = HashMap::new();
+        t.insert((6, 3), "Doppelgangers".to_string());
+        t.insert((6, 4), "Gin It Up!".to_string());
+        let ops = plan_tv(&f, &r, &t, &nothing_exists).unwrap();
+        assert!(ops[0].to.ends_with("S06E04 - Doppelgängers.mkv"), "{ops:#?}");
+        assert!(ops[0].note.as_deref().unwrap_or("").contains("under another number"));
+        assert!(same_episode_title("Doppelgängers", "Doppelgangers"));
     }
 
     #[test]

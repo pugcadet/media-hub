@@ -385,7 +385,9 @@ pub(crate) async fn make_plan(state: &AppState, args: PlanArgs) -> Result<(PlanR
             chosen_score.map(|s| {
                 let known = !titles.is_empty() && op.season.map(|se| op.episodes.iter().all(|e| titles.contains_key(&(se, *e)))).unwrap_or(false);
                 // The databases disagree about this one: never a "100% match".
-                let disputed = op.note.as_deref().map(|n| n.contains("under another number") || n.contains("the file's name differs")).unwrap_or(false);
+                // The file's own title and number are kept when the databases' order differs, so that's
+                // safe; only a title that would change to a different one is never "100%".
+                let disputed = op.note.as_deref().map(|n| n.contains("the file's name differs")).unwrap_or(false);
                 if known && !disputed { s } else { s.min(60) }
             })
         } else {
