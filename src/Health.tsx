@@ -170,7 +170,7 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
             <div className="muted small">{rows ? `${perfect} of ${total} titles have a match and every kind of picture.` : "Checking…"} Dots: {checks.map((c) => LABEL[c]).join(" · ")}.</div>
           </div>
           <div className="pg-actions">
-            <button disabled={checking} onClick={() => void load(true)}><Icon name="reload" /> {checking ? "Checking…" : "Check again"}</button>
+            <button disabled={checking} onClick={() => void load(true)}><Icon name="reload" /> {checking ? "Checking…" : "Refresh"}</button>
             <button className="primary" disabled={!canEdit || !rows} onClick={() => void fixAll()}>Fill in missing art ({shown.filter((r) => score(r) < 1).length})</button>
           </div>
         </div>
@@ -211,7 +211,7 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
           <div className="muted small">{rows ? `${perfect} of ${total} titles are complete (names, match, artwork, subtitles).` : "Checking…"}{at ? ` Checked ${new Date(at * 1000).toLocaleString()}.` : ""}</div>
         </div>
         <div className="pg-actions">
-          <button disabled={checking} onClick={() => void load(true)}><Icon name="reload" /> {checking ? "Checking…" : "Check again"}</button>
+          <button disabled={checking} onClick={() => void load(true)}><Icon name="reload" /> {checking ? "Checking…" : "Refresh"}</button>
           <button className="primary" disabled={!canEdit || !rows} onClick={() => void fixAll()}>Fix what's safe ({shown.filter((r) => score(r) < 1).length})</button>
         </div>
       </div>

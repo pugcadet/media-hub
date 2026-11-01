@@ -1199,7 +1199,7 @@ export interface ServerTask {
   progress: number | null; lastStatus: string | null; lastEnd: string | null; lastError: string | null;
 }
 export interface ServerOverview {
-  name: string; version: string; os: string; pendingRestart: boolean; latest: string | null; updateAvailable: boolean;
+  name: string; version: string; os: string; pendingRestart: boolean; latest: string | null; updateAvailable: boolean; catalogOk: boolean;
   plugins: { name: string; version: string; status: string; update: string | null }[];
   tasks: ServerTask[];
   events: { name: string; overview: string; severity: string; date: string }[];

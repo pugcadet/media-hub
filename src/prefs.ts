@@ -133,6 +133,8 @@ export interface Prefs {
   inboxShowTop: Record<string, string>;
   /** Folders: movies of one collection share a folder ("Movies/Alien Collection/Alien (1979)"). */
   keepCollections: boolean;
+  /** Intros and credits: the folders it shows (null: every folder that has shows). */
+  introsFolders: string[] | null;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -186,6 +188,7 @@ export const DEFAULT_PREFS: Prefs = {
   inboxTop: {},
   inboxShowTop: {},
   keepCollections: false,
+  introsFolders: null,
 };
 
 /** Ready-made highlight colours for Settings → Look. */
@@ -257,6 +260,7 @@ function load(): Prefs {
       inboxTop: p.inboxTop ?? {},
       inboxShowTop: p.inboxShowTop ?? {},
       keepCollections: p.keepCollections ?? false,
+      introsFolders: Array.isArray(p.introsFolders) ? p.introsFolders : null,
     };
   } catch {
     return DEFAULT_PREFS;

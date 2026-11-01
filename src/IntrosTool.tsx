@@ -6,7 +6,7 @@ import { track, useEpoch } from "./activity";
 import type { View } from "./nav";
 import { Icon } from "./ui";
 import { folderTabs, KTabs, PageHead, SearchBox, Seg, Toolbar } from "./kit";
-import { usePrefs } from "./prefs";
+import { orderFolders, setPrefs, usePrefs } from "./prefs";
 import { foldersOf, tabFolder, useFolderMap } from "./folders";
 
 // Marker counts per show, kept while the app is open.
@@ -81,7 +81,17 @@ export default function IntrosTool({ status }: { status: Status; onNav?: (v: Vie
   useEffect(() => void api.pluginsInstalled().then((l) => setSkipper(l.some((p) => /intro ?skipper/i.test(p.name)))).catch(() => undefined), []);
   const folderMap = useFolderMap();
 
-  const hidden = usePrefs().hiddenTabs.intros ?? [];
+  const pr = usePrefs();
+  const hidden = pr.hiddenTabs.intros ?? [];
+  const [allTops, setAllTops] = useState<string[]>([]);
+  useEffect(() => void api.folders("").then((f) => setAllTops(f.map((x) => x.name))).catch(() => undefined), []);
+  const withShows = foldersOf(folderMap).filter((f) => shows.some((x) => folderMap.get(x.id) === f));
+  const chosen = pr.introsFolders;
+  const tabsFolders = chosen ? orderFolders([...new Set([...chosen])]) : withShows;
+  const toggleFolder = (f: string, on: boolean) => {
+    const base = chosen ?? withShows;
+    setPrefs({ introsFolders: on ? [...new Set([...base, f])] : base.filter((x) => x !== f) });
+  };
   useEffect(() => {
     const t = setTimeout(() => {
       api.list("series", query, "name", 0, 3000, lib)
@@ -95,6 +105,7 @@ export default function IntrosTool({ status }: { status: Status; onNav?: (v: Vie
   const inFolder = tabFolder(tab);
   const visible = shows.filter((s) => {
     if (inFolder && folderMap.get(s.id) !== inFolder) return false;
+    if (!inFolder && chosen && !chosen.includes(folderMap.get(s.id) ?? "")) return false;
     if (!onlyGaps) return true;
     const x = summaries.get(s.id);
     return !x || x.intro < x.episodes || x.credits < x.episodes;
@@ -116,7 +127,18 @@ export default function IntrosTool({ status }: { status: Status; onNav?: (v: Vie
       {!show && (
         <>
           <KTabs folders active={inFolder ?? "@all"} onChange={(id) => { setTab(id === "@all" ? "all" : `folder:${id}`); setLib(null); }}
-            tabs={folderTabs(foldersOf(folderMap).filter((f) => shows.some((x) => folderMap.get(x.id) === f)), (f) => (f === null ? shows.length : shows.filter((x) => folderMap.get(x.id) === f).length))} />
+            tabs={folderTabs(tabsFolders, (f) => (f === null ? shows.filter((x) => !chosen || chosen.includes(folderMap.get(x.id) ?? "")).length : shows.filter((x) => folderMap.get(x.id) === f).length))} />
+          <details className="folders-options small">
+            <summary className="muted">Which folders show here</summary>
+            <div className="chips">
+              {allTops.map((f) => {
+                const on = tabsFolders.includes(f);
+                return <label key={f} className={`chip ${on ? "on" : ""}`}><input type="checkbox" checked={on} onChange={(e) => toggleFolder(f, e.target.checked)} /> {f}</label>;
+              })}
+              {chosen && <button className="link small" onClick={() => setPrefs({ introsFolders: null })}>Back to automatic</button>}
+            </div>
+            <span className="muted">Only shows (with seasons and episodes) appear in a folder; a folder Jellyfin keeps as movies shows no shows here.</span>
+          </details>
           <Toolbar right={<span className="muted small">{visible.length} show{visible.length === 1 ? "" : "s"}</span>}>
             <SearchBox value={query} onChange={setQuery} placeholder="Search shows" />
             <Seg value={onlyGaps ? "gaps" : "all"} onChange={(v) => setOnlyGaps(v === "gaps")} options={[{ id: "all", label: "All" }, { id: "gaps", label: "Missing markers" }]} />

@@ -3,14 +3,14 @@
 // own with the right name (or together with their collection), episodes in season folders,
 // featured artists into the main artist. Every change is one batch History can undo, with a
 // progress bar that shows what's moving.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, errorText, MovieFolder, PlanOp, scanAround, Status } from "./api";
 import { track } from "./activity";
 import { askConfirm } from "./confirm";
 import { Icon, TriCheck, useUndoableSet } from "./ui";
 import { agoText, useSaved } from "./saved";
-import { Seg } from "./kit";
+import { KTabs } from "./kit";
 import { folderOff, setPrefs, usePrefs } from "./prefs";
 import { foldersSummary, savePart } from "./scan";
 import { nav } from "./nav";
@@ -138,52 +138,39 @@ export default function Folders({ status }: { status: Status }) {
   const active = sel && list.includes(sel) ? sel : list.find((t) => todoOf(t) > 0) ?? list[0] ?? null;
 
   if (!status.libraryRoot) return <p className="note">Choose your library folder in Settings first.</p>;
+  const off = active ? folderOff(active, p) : false;
   return (
     <div className="folders-page">
-      <div className="row between">
-        <span className="muted small">One tidy layout: every movie in its own folder, every episode in a season folder.{structure ? ` Checked ${agoText(structure.at)}.` : ""}</span>
-        <button className="primary" disabled={checking} onClick={() => void look()}>{checking ? <span className="spinner" /> : <Icon name="search" />} Look again</button>
+      <div className="folders-bar">
+        <KTabs active={active ?? ""} onChange={setSel} tabs={list.map((t) => ({ id: t, label: t, count: folderOff(t, p) ? null : structure ? todoOf(t) || null : null, warn: todoOf(t) > 0 }))} />
+        <span className="grow" />
+        <span className="muted small">{structure ? `Checked ${agoText(structure.at)}` : ""}</span>
+        <button disabled={checking} onClick={() => void look()}>{checking ? <span className="spinner small-spin" /> : <Icon name="reload" />} Refresh</button>
       </div>
       {error && <p className="error">{error}</p>}
-      <div className="folders-split">
-        <section className="folders-tops" aria-label="Your folders">
-          <h2 className="folders-h">Your folders</h2>
-          {list.map((t) => {
-            const off = folderOff(t, p);
-            const n = todoOf(t);
-            return (
-              <div key={t} className={`folders-top ${active === t ? "on" : ""} ${off ? "off" : n ? "warn" : "ok"}`}>
-                <button className="folders-top-main" onClick={() => setSel(t)}>
-                  <span className="strong">{t}</span>
-                  <span className="small muted">{kindOf(t)}</span>
-                  <span className={`small strong folders-state`}>{off ? "Left alone" : !structure ? "–" : n ? `${n} to tidy` : "Tidy"}</span>
-                </button>
-                <label className="folders-switch small" title="Off: the Renamer, the naming checks and the missing-episode check leave this folder alone">
-                  Rename
-                  <input type="checkbox" className="switch" checked={!off} onChange={(e) => setPrefs((x) => ({ renameOff: e.target.checked ? x.renameOff.filter((f) => f.toLowerCase() !== t.toLowerCase()) : [...x.renameOff, t] }))} />
-                </label>
-              </div>
-            );
-          })}
-          <p className="small muted">Switch Rename off for a folder (like YouTube) and the Renamer, the naming checks and the missing-episode check leave it alone.</p>
-        </section>
-
-        <section className="folders-main" aria-label="Suggestions">
-          {active && folderOff(active, p) && (
-            <div className="card form"><h2>{active} is left alone</h2><p className="muted">Nothing here is renamed or moved. Switch Rename back on to get suggestions.</p></div>
+      {active && (
+        <details className="folders-options small">
+          <summary className="muted">Options for {active}</summary>
+          <label className="switch-row"><span className="grow">Leave {active} alone<br /><span className="muted">Nothing in it is renamed or moved (for example YouTube). The Renamer and the episode checks skip it too.</span></span>
+            <input type="checkbox" className="switch" checked={off} onChange={(e) => setPrefs((x) => ({ renameOff: !e.target.checked ? x.renameOff.filter((f) => f.toLowerCase() !== active.toLowerCase()) : [...x.renameOff, active] }))} />
+          </label>
+          {kindOf(active) !== "Shows" && kindOf(active) !== "Music" && (
+            <label className="switch-row"><span className="grow">Keep collections together<br /><span className="muted">Movies of one Jellyfin collection share a folder, e.g. <span className="mono">{active}/Alien Collection/Alien (1979)</span>. Jellyfin and Infuse find them either way.</span></span>
+              <input type="checkbox" className="switch" checked={p.keepCollections} onChange={(e) => setPrefs({ keepCollections: e.target.checked })} />
+            </label>
           )}
-          {active && !folderOff(active, p) && (
-            <>
-              <h2 className="folders-h">Suggestions for {active}</h2>
-              {!structure && !movies && <div className="pg-loading"><span className="spinner" /> Looking at your folders…</div>}
-              {movies && (movies.data.some((m) => m.top === active)) && <MovieSuggestions key={`m-${active}`} top={active} list={movies.data.filter((m) => m.top === active)} readOnly={status.readOnly} onDone={() => void look()} />}
-              {structure && <ShowSuggestions key={`s-${active}`} folder={structure.data.find((x) => x.folder === active) ?? null} readOnly={status.readOnly} onDone={() => void look()} />}
-              {/music|muziek/i.test(active) && <MusicSuggestions key={`a-${active}-${musicN}`} top={active} readOnly={status.readOnly} onDone={() => setMusicN((x) => x + 1)} />}
-              {structure && movies && todoOf(active) === 0 && !/music|muziek/i.test(active) && <div className="card form"><p className="ok">✓ {active} is tidy.</p></div>}
-            </>
-          )}
-        </section>
-      </div>
+        </details>
+      )}
+      {active && off && <div className="card form"><p className="muted">{active} is left alone. Turn that off under Options to tidy it.</p></div>}
+      {active && !off && (
+        <div className="folders-main">
+          {!structure && !movies && <div className="pg-loading"><span className="spinner" /> Looking at your folders…</div>}
+          {movies && movies.data.some((m) => m.top === active) && <MovieSuggestions key={`m-${active}`} top={active} list={movies.data.filter((m) => m.top === active)} readOnly={status.readOnly} onDone={() => void look()} />}
+          {structure && <ShowSuggestions key={`s-${active}`} folder={structure.data.find((x) => x.folder === active) ?? null} readOnly={status.readOnly} onDone={() => void look()} />}
+          {/music|muziek/i.test(active) && <MusicSuggestions key={`a-${active}-${musicN}`} top={active} readOnly={status.readOnly} onDone={() => setMusicN((x) => x + 1)} />}
+          {structure && movies && todoOf(active) === 0 && !/music|muziek/i.test(active) && <div className="card form"><p className="ok">✓ Everything in {active} is tidy.</p></div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -209,7 +196,6 @@ function MovieSuggestions({ top, list: everything, readOnly, onDone }: { top: st
   const list = everything.filter((m) => !m.doubt);
   const { keepCollections } = usePrefs();
   const [groupOut, setGroupOut] = useState<Record<string, boolean>>({});
-  const [groupName, setGroupName] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const { run, mark, bar, busy } = useRun(onDone);
   const sel = useUndoableSet<string>();
@@ -235,9 +221,7 @@ function MovieSuggestions({ top, list: everything, readOnly, onDone }: { top: st
 
   async function apply() {
     const moves = all.filter((m) => sel.has(m.video)).map((m) => ({ video: m.video, mode: (collected.includes(m) ? "collect" : m.group && outOf(m.group) ? "out" : "fix") as "fix" | "out" | "collect" }));
-    const renames = groups
-      .filter(([g]) => !outOf(g) && (groupName[g] ?? last(g)).trim() && (groupName[g] ?? last(g)).trim() !== last(g))
-      .map(([g]) => ({ folder: g, name: (groupName[g] ?? last(g)).trim() }));
+    const renames: { folder: string; name: string }[] = [];
     if (!moves.length && !renames.length) return setError("Nothing selected to change.");
     setError(null);
     try {
@@ -264,20 +248,26 @@ function MovieSuggestions({ top, list: everything, readOnly, onDone }: { top: st
     </label>
   );
   const picked = all.filter((m) => sel.has(m.video)).length;
-  return (
-    <div className="stack">
-      <div className="card form folders-opt">
-        <label className="switch-row">
-          <span className="grow"><span className="strong">Keep collections together</span><br /><span className="muted small">Movies of one collection share a folder: <span className="mono">{top}/Alien Collection/Alien (1979)</span>. Jellyfin and Infuse find them either way; this is for tidiness.</span></span>
-          <input type="checkbox" className="switch" checked={keepCollections} onChange={(e) => setPrefs({ keepCollections: e.target.checked })} />
-        </label>
+  const section = (key: string, title: string, items: MovieFolder[], to: (m: MovieFolder) => string, extra?: ReactNode) => items.length > 0 && (
+    <div key={key} className="todo-group">
+      <div className="todo-head">
+        <TriCheck state={sel.state(items.map((m) => m.video))} onChange={(on) => sel.setMany(items.map((m) => m.video), on)} />
+        <b className="grow">{title}</b>
+        {extra}
       </div>
+      <div className="struct-list">{items.map((m) => row(m, to(m)))}</div>
+    </div>
+  );
+  const named = plain.filter((m) => m.kind !== "nested");
+  const nested = plain.filter((m) => m.kind === "nested");
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  return (
+    <div className="card form folders-card">
       {error && <p className="error">{error}</p>}
-
       {doubtful.length > 0 && (
-        <div className="card form folders-card">
-          <div className="row"><Icon name="warn" size={14} /><b className="grow">{doubtful.length} movie{doubtful.length === 1 ? "" : "s"} may be identified wrong</b>
-            <span className="muted small">Jellyfin's name doesn't match the file, so these are left alone. Identify them, then look again.</span></div>
+        <div className="todo-group warn">
+          <div className="todo-head"><Icon name="warn" size={14} /><b className="grow">{n(doubtful.length, "movie may be identified wrong", "movies may be identified wrong")}: left alone</b></div>
+          <div className="muted small">Jellyfin's name doesn't match the file. Identify it, then press Refresh.</div>
           <div className="struct-list">
             {doubtful.map((m) => (
               <div key={m.video} className="small mf-row">
@@ -290,68 +280,20 @@ function MovieSuggestions({ top, list: everything, readOnly, onDone }: { top: st
           </div>
         </div>
       )}
-
-      {byColl.map(([c, ms]) => (
-        <div key={c} className="card form folders-card">
-          <div className="row">
-            <TriCheck state={sel.state(ms.filter((m) => movieNeeds(m, true)).map((m) => m.video))} onChange={(on) => sel.setMany(ms.filter((m) => movieNeeds(m, true)).map((m) => m.video), on)} />
-            <Icon name="stack" size={14} />
-            <b className="grow">{c}</b>
-            <span className="muted small">{ms.length} movies together in <span className="mono">{top}/{c}</span></span>
-          </div>
-          <div className="struct-list">{ms.filter((m) => movieNeeds(m, true)).map((m) => row(m, movieWant(m, true).to))}</div>
-        </div>
-      ))}
-
-      {plain.length > 0 && (
-        <div className="card form folders-card">
-          <div className="row">
-            <TriCheck state={sel.state(plain.map((m) => m.video))} onChange={(on) => sel.setMany(plain.map((m) => m.video), on)} />
-            <b className="grow">{plain.length} movie{plain.length === 1 ? "" : "s"} get the right folder</b>
-            <span className="muted small">Name and year from Jellyfin{plain.some((m) => m.kind !== "own") ? " · loose ones get a folder" : ""}</span>
-          </div>
-          <div className="struct-list">{plain.map((m) => row(m, movieWant(m, false).to))}</div>
-        </div>
-      )}
-
+      {section("named", n(named.length, "movie folder gets the right name", "movie folders get the right name"), named, (m) => movieWant(m, false).to)}
+      {section("nested", n(nested.length, "movie is in an extra folder inside its own folder", "movies are in an extra folder inside their own folder"), nested, (m) => movieWant(m, false).to)}
+      {byColl.map(([c, ms]) => section(`c-${c}`, `${c}: ${n(ms.filter((m) => movieNeeds(m, true)).length, "movie goes", "movies go")} together`, ms.filter((m) => movieNeeds(m, true)), (m) => movieWant(m, true).to))}
       {groups.map(([g, ms]) => {
         const out = outOf(g);
         const todo = ms.filter(needs);
-        if (!out && !todo.length && (groupName[g] ?? last(g)) === last(g)) {
-          return (
-            <div key={g} className="card form folders-card quiet">
-              <div className="row"><Icon name="folder" size={14} /><b className="grow">“{last(g)}” holds {ms.length} movies</b>
-                <button className="link small" onClick={() => setGroupOut((x) => ({ ...x, [g]: true }))}>Move them out</button></div>
-            </div>
-          );
-        }
-        return (
-          <div key={g} className="card form folders-card">
-            <div className="row">
-              <TriCheck state={sel.state(todo.map((m) => m.video))} onChange={(on) => sel.setMany(todo.map((m) => m.video), on)} />
-              <Icon name="folder" size={14} />
-              <b className="grow">“{last(g)}” holds {ms.length} movies</b>
-              <Seg value={out ? "out" : "keep"} onChange={(v) => setGroupOut((x) => ({ ...x, [g]: v === "out" }))} options={[{ id: "keep", label: "Keep this folder" }, { id: "out", label: `Move them to “${top}”` }]} />
-            </div>
-            {!out && (
-              <div className="small mf-rename">
-                <span className="muted">Folder name</span>
-                <input aria-label="Folder name" value={groupName[g] ?? last(g)} onChange={(e) => setGroupName((x) => ({ ...x, [g]: e.target.value }))} />
-              </div>
-            )}
-            <div className="folders-diff">
-              <div><span className="small strong">Now</span>{ms.slice(0, 4).map((m) => <span key={m.video} className="mono small muted ellipsis">{m.kind === "own" ? m.folder.slice(top.length + 1) : m.video.slice(top.length + 1)}</span>)}{ms.length > 4 && <span className="small muted">… {ms.length - 4} more</span>}</div>
-              <div><span className="small strong">After</span>{ms.slice(0, 4).map((m) => <span key={m.video} className="mono small accent ellipsis">{out ? m.expected : `${groupName[g] ?? last(g)}/${m.expected}`}</span>)}{ms.length > 4 && <span className="small muted">… {ms.length - 4} more</span>}</div>
-            </div>
-            {todo.length > 0 && <div className="struct-list">{todo.map((m) => row(m, out ? `${top}/${m.expected}` : movieWant(m, false).to))}</div>}
-          </div>
-        );
+        if (!todo.length && !out) return null;
+        return section(`g-${g}`, out ? `“${last(g)}”: ${n(ms.length, "movie moves", "movies move")} out to ${top}` : `In “${last(g)}”: ${n(todo.length, "movie gets", "movies get")} a folder of its own`, out ? ms : todo,
+          (m) => (out ? `${top}/${m.expected}` : movieWant(m, false).to),
+          <button className="link small" onClick={() => setGroupOut((x) => ({ ...x, [g]: !out }))}>{out ? "Keep them in this folder" : `Move them to ${top} instead`}</button>);
       })}
-
       {bar}
-      {(picked > 0 || groups.some(([g]) => !outOf(g) && (groupName[g] ?? last(g)) !== last(g))) && (
-        <div className="row end"><button className="primary" disabled={busy || readOnly} onClick={() => void apply()}>{busy ? "Working…" : `Tidy ${picked} movie${picked === 1 ? "" : "s"}`}</button></div>
-      )}
+      {picked > 0 && <div className="row end"><button className="primary" disabled={busy || readOnly} onClick={() => void apply()}>{busy ? "Working…" : `Fix ${picked} selected`}</button></div>}
+      {picked === 0 && all.length === 0 && doubtful.length === 0 && <p className="ok">✓ Every movie folder in {top} is right.</p>}
     </div>
   );
 }

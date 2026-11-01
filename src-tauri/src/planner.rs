@@ -361,8 +361,8 @@ pub fn plan_tv(
     let folder_name = folder.rsplit('/').next().unwrap_or("");
     let parsed = parse_name(folder_name);
     let (guess, guess_year) = guess_show(folder, files);
-    let show = req.show.clone().filter(|s| !s.trim().is_empty()).unwrap_or(guess);
     let year = req.year.or(guess_year);
+    let show = crate::naming::title_without_year(&req.show.clone().filter(|s| !s.trim().is_empty()).unwrap_or(guess), year.map(i64::from));
     if show.trim().is_empty() {
         return Err("Could not work out the show name. Type it in.".into());
     }
@@ -603,9 +603,10 @@ pub fn plan_movies(
         }
         let year = found.and_then(|m| m.year).or(year0);
         // The file's own fuller name wins when it's the same title with more to it (same year).
+        let db_title = |m: &MovieMatch| crate::naming::title_without_year(&m.title, m.year.map(i64::from));
         let title = match found {
-            Some(m) if year0.is_none() || year0 == m.year => crate::naming::fuller_title(&m.title, &title0),
-            Some(m) => m.title.clone(),
+            Some(m) if year0.is_none() || year0 == m.year => crate::naming::fuller_title(&db_title(m), &title0),
+            Some(m) => db_title(m),
             None => title0,
         };
 

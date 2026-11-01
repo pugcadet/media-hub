@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Alert, api, Card, imageUrl, InboxItem, JournalRow, Status, Tuning } from "./api";
 import { useEpoch } from "./activity";
 import { nav, type Route } from "./nav";
-import { Icon, scanLibrary, type IconName } from "./ui";
+import { Icon, type IconName } from "./ui";
 import { KIND } from "./History";
 import { setPrefs, usePrefs } from "./prefs";
 import { namesToFix } from "./fixers";
@@ -125,7 +125,7 @@ export default function Dashboard({ status }: { status: Status }) {
   const series = status.series;
 
   const todo: Block[] = [
-    { key: "names", icon: "rename", count: names?.toFix ?? sum.names?.toFix ?? null, ok: share(names?.toFix, titles), title: "Names to fix", okTitle: "Names right", detail: names ? `${names.sure} can be renamed in one go.` : "Not checked yet: Check everything checks them.", tone: "info", go: { view: "renamer" }, at: sum.names?.at },
+    { key: "names", icon: "rename", count: names?.toFix ?? sum.names?.toFix ?? null, ok: share(names?.toFix, titles), title: "Names to fix", okTitle: "Names right", detail: names ? `${names.sure} can be renamed in one go.` : "Not checked yet: Refresh everything checks them.", tone: "info", go: { view: "renamer" }, at: sum.names?.at },
     { key: "identified", icon: "search", count: h?.unidentified ?? null, ok: share(h?.unidentified, titles), title: "Not identified", okTitle: "All identified", detail: "No match with TMDB or TVDB yet.", tone: "bad", go: { view: "library", flag: "identified" }, at: h?.at },
     { key: "artwork", icon: "image", count: h?.noArt ?? null, ok: share(h?.noArt, titles), title: "Missing artwork", okTitle: "Artwork complete", detail: "A poster, background or logo is missing.", tone: "warn", go: { view: "library", flag: "artwork" }, at: h?.at },
     { key: "subtitles", icon: "subtitles", count: h?.subsVideos ?? null, ok: share(h?.subsTitles, titles), title: "No subtitles", okTitle: "Subtitles", detail: h ? `In ${h.subsTitles} title${h.subsTitles === 1 ? "" : "s"}, in your first language.` : "", tone: "warn", go: { view: "subtitles" }, at: h?.at },
@@ -148,13 +148,8 @@ export default function Dashboard({ status }: { status: Status }) {
         </div>
         <div className="dash-scan">
           <button className="primary" disabled={scanning} onClick={() => void scan(false)} title="Checks names, artwork, subtitles, intros, missing episodes, duplicates, folders and storage. Only what changed since the last check is read again.">
-            {scanning ? <span className="spinner" /> : <Icon name="reload" size={16} />} {scanning ? "Checking…" : "Check everything"}
+            {scanning ? <span className="spinner" /> : <Icon name="reload" size={16} />} {scanning ? "Refreshing…" : "Refresh everything"}
           </button>
-          <div className="row">
-            <button className="link small" disabled={scanning} onClick={() => void scan(true)}>Check all again</button>
-            <span className="muted small">·</span>
-            <button className="link small" onClick={() => void scanLibrary()}>Ask Jellyfin to look for new files</button>
-          </div>
         </div>
       </div>
 

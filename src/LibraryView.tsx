@@ -11,7 +11,7 @@ import { artSkipped, fixTitles, FixKind, namesToFix, noSubsOf, targetOf } from "
 import { askFixes } from "./FixDialog";
 import { Studio, StudioItem } from "./Studio";
 import ItemPage from "./ItemPage";
-import { askChoice, Icon, type IconName, Img, itemMenu, openMenu, SettingsLink, type MenuItem } from "./ui";
+import { askChoice, Icon, type IconName, Img, itemMenu, openMenu, reloadData, SettingsLink, type MenuItem } from "./ui";
 import { askIdentify } from "./IdentifyDialog";
 import { namingLeftAlone, prefs, setPrefs, usePrefs } from "./prefs";
 import { folderTabs, IconBtn, KTabs, PageHead, SearchBox, Seg, StatusIcons, Toolbar } from "./kit";
@@ -228,7 +228,10 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
         {checking ? "Checking the library…" : rows ? `${perfect} of ${inFolder.length} titles complete.` : "Reading the library…"}
         {folders.length === 0 && rows && <> Folder tabs appear once your library folder is set (<SettingsLink section="library">Settings</SettingsLink>).</>}
       </>}
-      actions={folder === "@music" ? undefined : <button className="primary" disabled={!canEdit || !rows} onClick={() => void fixAll()}><Icon name="wand" /> Fix what's safe ({shown.filter((r) => score(r) < 1).length})</button>}
+      actions={folder === "@music" ? undefined : <>
+        <button disabled={checking} onClick={() => void reloadData().then(() => load(true)).catch(() => undefined)}>{checking ? <span className="spinner small-spin" /> : <Icon name="reload" />} Refresh</button>
+        <button className="primary" disabled={!canEdit || !rows} onClick={() => void fixAll()}><Icon name="wand" /> Fix what's safe ({shown.filter((r) => score(r) < 1).length})</button>
+      </>}
     />
   );
 

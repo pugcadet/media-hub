@@ -75,7 +75,7 @@ export default function Duplicates({ status }: { status: Status }) {
         </div>
         <div className="pg-actions">
           {saved && <span className="muted small">Checked {agoText(saved.at)}</span>}
-          <button className="primary" disabled={busy} onClick={() => void find()}>{groups ? "Look again" : "Find duplicates"}</button>
+          <button className="primary" disabled={busy} onClick={() => void find()}>{groups ? "Refresh" : "Find duplicates"}</button>
         </div>
       </div>
       {error && <p className="error">{error}</p>}

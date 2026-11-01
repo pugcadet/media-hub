@@ -52,7 +52,7 @@
       { id: hex(103), title: "Up", year: 2009, video: "Movies/Pixar/Up.mkv", folder: "Movies/Pixar", top: "Movies", kind: "shared", group: "Movies/Pixar", expected: "Up (2009)", ok: false, collection: null },
       { id: hex(104), title: "Coco", year: 2017, video: "Movies/Pixar/Coco.mkv", folder: "Movies/Pixar", top: "Movies", kind: "shared", group: "Movies/Pixar", expected: "Coco (2017)", ok: false, collection: null },
     ],
-    server_overview: { name: "Jellyfin", version: "10.10.3", os: "Linux", pendingRestart: true, latest: "10.10.7", updateAvailable: true,
+    server_overview: { name: "Jellyfin", version: "10.10.3", os: "Linux", catalogOk: true, pendingRestart: true, latest: "10.10.7", updateAvailable: true,
       plugins: [{ name: "Intro Skipper", version: "1.10.10.1", status: "Active", update: "1.10.10.5" }, { name: "MediaSegments API", version: "1.0", status: "Active", update: null }, { name: "Open Subtitles", version: "20.0", status: "Malfunctioned", update: null }],
       tasks: [
         { id: "a1", name: "Scan media library", category: "Library", key: "RefreshLibrary", state: "Running", progress: 42, lastStatus: "Completed", lastEnd: new Date(Date.now() - 3600e3).toISOString(), lastError: null },

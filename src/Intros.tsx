@@ -876,7 +876,7 @@ export function ToolsSettings() {
       )}
       <div className="row">
         <button onClick={() => void api.pickFfmpeg().then(() => load()).catch((e) => setError(errorText(e)))}>Choose ffmpeg…</button>
-        <button onClick={() => void load()}>Check again</button>
+        <button onClick={() => void load()}><Icon name="reload" /> Refresh</button>
       </div>
       {error && <p className="error">{error}</p>}
     </section>

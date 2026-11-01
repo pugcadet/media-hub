@@ -50,6 +50,7 @@ pub struct MovieFolder {
 /// "Alien (1979)". Id tags ("[tmdbid-348]") are left out; the file's own fuller name wins
 /// when it's the same title with more to it ("Star Wars Episode IV - A New Hope (1977)").
 pub fn expected_name(title: &str, year: Option<i64>, video_stem: &str) -> String {
+    let title = &crate::naming::title_without_year(title, year);
     let file = parse_name(video_stem);
     let title = if file.year.is_none() || file.year.map(i64::from) == year { fuller_title(title, &file.title) } else { title.trim().to_string() };
     let base = match year {
@@ -432,6 +433,8 @@ mod tests {
             // Fuller name from the file.
             m("f", "Star Wars", 1977, "Movies/Star Wars Collection/Star Wars (1977)/Star Wars Episode IV - A New Hope (1977).mkv"),
             m("g", "Return of the Jedi", 1983, "Movies/Star Wars Collection/Return of the Jedi (1983)/Return of the Jedi (1983).mkv"),
+            // Jellyfin couldn't look it up and kept the year in the name; a folder already doubled.
+            m("h", "Prometheus (2012)", 2012, "Movies/Alien Collection/Prometheus (2012) (2012)/Prometheus (2012).mkv"),
         ]);
         let get = |id: &str| list.iter().find(|x| x.id == id).unwrap();
         assert_eq!(get("a").kind, "shared", "the collection folder isn't Aliens' own folder");
@@ -445,6 +448,8 @@ mod tests {
         assert!(!get("a").doubt && !get("c").doubt && !get("f").doubt);
         assert_eq!(get("f").expected, "Star Wars Episode IV - A New Hope (1977)");
         assert!(get("g").ok);
+        assert_eq!(get("h").expected, "Prometheus (2012)");
+        assert!(!get("h").ok, "the doubled year gets fixed");
     }
 
     #[test]

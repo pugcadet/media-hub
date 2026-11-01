@@ -120,6 +120,9 @@ pub fn is_messy(stem: &str) -> bool {
     if !s.contains(' ') && (s.matches('.').count() >= 2 || s.contains('_')) {
         return true;
     }
+    if dedupe_year(s) != s {
+        return true; // "Aliens (1986) (1986)"
+    }
     if strip_editions(s) != s.split_whitespace().collect::<Vec<_>>().join(" ") {
         return true; // "Sling Blade Directors Cut (1996)"
     }
@@ -145,6 +148,51 @@ pub fn sanitize(s: &str) -> String {
     finalize_component(&out)
 }
 
+/// "Aliens (1986) (1986)" → "Aliens (1986)": a year is never written twice.
+pub fn dedupe_year(s: &str) -> String {
+    let mut out = s.to_string();
+    loop {
+        let b = out.as_bytes();
+        let mut hit: Option<(usize, usize)> = None;
+        let mut i = 0;
+        while i + 6 <= b.len() {
+            if b[i] == b'(' && b[i + 5] == b')' && b[i + 1..i + 5].iter().all(u8::is_ascii_digit) {
+                let year = &out[i..i + 6];
+                let rest = &out[i + 6..];
+                let trimmed = rest.trim_start_matches([' ', '-', '.', '_']);
+                if trimmed.starts_with(year) {
+                    let skip = rest.len() - trimmed.len();
+                    hit = Some((i + 6, i + 6 + skip + 6));
+                    break;
+                }
+            }
+            i += 1;
+        }
+        match hit {
+            Some((a, z)) => out.replace_range(a..z, ""),
+            None => break,
+        }
+    }
+    out
+}
+
+/// The title without a year it already carries ("Prometheus (2012)" → "Prometheus"), so the
+/// year can be added once.
+pub fn title_without_year(title: &str, year: Option<i64>) -> String {
+    let t = title.trim();
+    if let Some(y) = year {
+        for form in [format!("({y})"), format!("[{y}]"), y.to_string()] {
+            if let Some(rest) = t.strip_suffix(form.as_str()) {
+                let rest = rest.trim_end_matches([' ', '-', '.', '_']);
+                if !rest.is_empty() {
+                    return rest.to_string();
+                }
+            }
+        }
+    }
+    t.to_string()
+}
+
 const RESERVED: &[&str] = &[
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
     "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
@@ -152,7 +200,7 @@ const RESERVED: &[&str] = &[
 
 /// Final tidy of one path component: single spaces, no trailing dots/spaces, not too long.
 pub fn finalize_component(c: &str) -> String {
-    let collapsed = c.split_whitespace().collect::<Vec<_>>().join(" ");
+    let collapsed = dedupe_year(&c.split_whitespace().collect::<Vec<_>>().join(" "));
     let mut t = collapsed.trim_end_matches(['.', ' ']).to_string();
     if RESERVED.contains(&split_ext(&t).0.to_lowercase().as_str()) {
         t.insert(0, '_');
@@ -498,6 +546,19 @@ mod tests {
         assert_eq!(strip_editions("Remastered"), "Remastered");
         assert_eq!(parse_name("Heat.1995.Directors.Cut.1080p.BluRay").title, "Heat");
         assert_eq!(clean_release("Some.Movie.Extended.Cut.1080p"), "Some Movie");
+    }
+
+    #[test]
+    fn a_year_is_written_once() {
+        assert_eq!(dedupe_year("Aliens (1986) (1986)"), "Aliens (1986)");
+        assert_eq!(dedupe_year("Alien - Covenant (2017) (2017)"), "Alien - Covenant (2017)");
+        assert_eq!(dedupe_year("Prometheus (2012) (2012).mkv"), "Prometheus (2012).mkv");
+        assert_eq!(dedupe_year("Dune (1984) (2021)"), "Dune (1984) (2021)");
+        assert_eq!(finalize_component("Aliens (1986)  (1986)"), "Aliens (1986)");
+        assert!(is_messy("Aliens (1986) (1986)"));
+        assert_eq!(title_without_year("Prometheus (2012)", Some(2012)), "Prometheus");
+        assert_eq!(title_without_year("Blade Runner 2049", Some(2017)), "Blade Runner 2049");
+        assert_eq!(title_without_year("1917", Some(1917)), "1917");
     }
 
     #[test]

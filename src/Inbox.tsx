@@ -281,7 +281,7 @@ export default function Inbox({ status }: { status: Status }) {
             <Icon name="folder" size={14} /> {dir ? <span className="mono ellipsis">{dir}</span> : "Choose your downloads folder"}
           </button>
           {dir && <IconBtn icon="external" title="Open the downloads folder" onClick={() => void api.inboxReveal().catch((e) => setError(errorText(e)))} />}
-          <IconBtn icon="reload" title="Look again" onClick={() => setN((x) => x + 1)} />
+          <button onClick={() => setN((x) => x + 1)}><Icon name="reload" /> Refresh</button>
           <button className="primary" disabled={busy || !ready.length || status.readOnly} onClick={() => void place(ready)}>
             {busy ? <span className="spinner" /> : <Icon name="check" />} Put {ready.length || ""} in place
           </button>

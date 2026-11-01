@@ -560,7 +560,6 @@ function Alerts() {
 
 export function ActivityBar({ left }: { left?: ReactNode } = {}) {
   const jobs = useJobs();
-  const [spin, setSpin] = useState(false);
   const [open, setOpen] = useState(false);
   const running = jobs.filter((j) => !j.done);
   return (
@@ -581,17 +580,6 @@ export function ActivityBar({ left }: { left?: ReactNode } = {}) {
         {running.length > 3 && <span className="muted small">+{running.length - 3} more</span>}
       </button>
       <Alerts />
-      <button
-        className={`icon-btn ${spin ? "spinning" : ""}`}
-        title="Reload data from Jellyfin: subtitles, art, watch progress, new titles (R)"
-        aria-label="Reload data"
-        onClick={() => {
-          setSpin(true);
-          void reloadData().finally(() => setSpin(false));
-        }}
-      >
-        <Icon name="reload" />
-      </button>
       {open && <Processes onClose={() => setOpen(false)} />}
     </div>
   );

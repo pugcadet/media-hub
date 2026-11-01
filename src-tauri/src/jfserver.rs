@@ -67,6 +67,8 @@ pub struct ServerOverview {
     /// Newest Jellyfin release on GitHub, when it could be looked up.
     latest: Option<String>,
     update_available: bool,
+    /// Jellyfin could read its plugin catalogue (needs internet; fails when its DNS is broken).
+    catalog_ok: bool,
     plugins: Vec<ServerPlugin>,
     tasks: Vec<ServerTask>,
     events: Vec<ServerEvent>,
@@ -114,6 +116,7 @@ pub async fn server_overview(state: State<'_, AppState>) -> Result<ServerOvervie
     let plugins = plugins.await.ok().and_then(|x| x.ok());
     let latest = latest.await.ok().flatten();
     let version = s(&info, "Version").to_string();
+    let catalog_ok = packages.as_ref().map(|p| !p.is_empty()).unwrap_or(false);
     let packages = packages.unwrap_or_default();
     let plugins = plugins
         .unwrap_or_default()
@@ -155,6 +158,7 @@ pub async fn server_overview(state: State<'_, AppState>) -> Result<ServerOvervie
         pending_restart: info.get("HasPendingRestart").and_then(|b| b.as_bool()).unwrap_or(false),
         update_available: latest.as_deref().map_or(false, |l| newer(l, &version)) || info.get("HasUpdateAvailable").and_then(|b| b.as_bool()).unwrap_or(false),
         latest,
+        catalog_ok,
         version,
         plugins,
         tasks,

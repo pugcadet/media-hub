@@ -136,7 +136,7 @@ function EpisodePictures({ status }: { status: Status }) {
       <div className="row">
         <label className="check"><input type="checkbox" checked={useFrames} onChange={(e) => setUseFrames(e.target.checked)} />When TMDB has none, use a frame from the video (needs ffmpeg)</label>
         <div className="spacer" />
-        <button onClick={load}><Icon name="reload" /> Look again</button>
+        <button onClick={load}><Icon name="reload" /> Refresh</button>
         <button className="primary" disabled={status.readOnly || !eps?.length} onClick={() => void fill(eps ?? [])}>Fill in all {eps?.length || ""}</button>
       </div>
       {list.length > 0 && (

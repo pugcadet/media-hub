@@ -76,7 +76,7 @@ export default function Server({ status }: { status: Status }) {
         title="Jellyfin"
         sub={data ? `${data.name} · version ${data.version}${data.os ? ` · ${data.os}` : ""}` : "Your server at a glance"}
         actions={<>
-          <button onClick={() => setTick((n) => n + 1)}><Icon name="reload" /> Look again</button>
+          <button onClick={() => setTick((n) => n + 1)}><Icon name="reload" /> Refresh</button>
           <button className="primary" disabled={readOnly || busy === "scan"} onClick={() => void act("scan", "Scanning all libraries", () => api.serverTaskRunKey("RefreshLibrary"))}>
             {busy === "scan" ? <span className="spinner small-spin" /> : <Icon name="reload" />} Scan all libraries
           </button>
@@ -99,6 +99,12 @@ export default function Server({ status }: { status: Status }) {
                 </div>
               </div>
             </div>
+            {!data.catalogOk && (
+              <div className="jf-state warn">
+                <Icon name="warn" />
+                <div className="grow"><div className="strong">Jellyfin can't reach the internet</div><div className="muted small">Its plugin catalogue doesn't load, so Identify finds no artwork and plugin updates fail too. Usually the container's DNS setting: on a Synology, set DSM's DNS (Control Panel → Network) to 1.1.1.1, or add a dns: line to Jellyfin's compose file, then restart the container.</div></div>
+              </div>
+            )}
             {data.pendingRestart && (
               <div className="jf-state warn">
                 <Icon name="warn" />
@@ -106,7 +112,7 @@ export default function Server({ status }: { status: Status }) {
                 <button disabled={readOnly || busy === "restart"} onClick={() => void restart()}>Restart</button>
               </div>
             )}
-            {failed.length + broken.length + problems.length === 0 && !data.pendingRestart && (
+            {failed.length + broken.length + problems.length === 0 && !data.pendingRestart && data.catalogOk && (
               <div className="jf-state ok"><Icon name="check" /><div className="grow"><div className="strong">Nothing's wrong</div><div className="muted small">No failed jobs, broken plugins or recent errors.</div></div></div>
             )}
           </section>
