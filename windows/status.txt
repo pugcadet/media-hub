@@ -1,1 +1,1 @@
-job status: cancelled  commit: 8de97e81ec8c9bfddcb8a3da1ada1229fde1110a  run: 59
+job status: success  commit: 5ad7168865512ba03258262e8aec51106e6bad40  run: 60
