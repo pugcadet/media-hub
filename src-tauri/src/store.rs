@@ -372,7 +372,7 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
         let exact = query.map(|q| q.trim().to_lowercase());
         let rows = stmt.query_map(
-            params![kind, library, pattern, limit.clamp(1, 500), exact, offset.max(0)],
+            params![kind, library, pattern, limit.clamp(1, 20_000), exact, offset.max(0)],
             row_to_item,
         )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

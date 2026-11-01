@@ -4,7 +4,7 @@ import { api, cleanTitle, errorText, imageUrl, Item, SegSummary, Status } from "
 import { ShowIntros } from "./Intros";
 import { track, useEpoch } from "./activity";
 import type { View } from "./nav";
-import { Icon } from "./ui";
+import { Icon, reloadData } from "./ui";
 import { folderTabs, KTabs, PageHead, SearchBox, Seg, Toolbar } from "./kit";
 import { orderFolders, setPrefs, usePrefs } from "./prefs";
 import { foldersOf, tabFolder, useFolderMap } from "./folders";
@@ -117,11 +117,14 @@ export default function IntrosTool({ status }: { status: Status; onNav?: (v: Vie
         title={show ? cleanTitle(show.name, show.year) : "Intros and credits"}
         sub={show ? "Skip intro and skip credits markers, season by season." : "Finds the intro and credits of every episode and saves them as skip markers in Jellyfin. Infuse shows them as Skip buttons."}
         actions={show ? <button onClick={() => setShow(null)}><span className="flip"><Icon name="chevron" size={14} /></span> All shows</button>
-          : skipper ? (
+          : <>
+          <button onClick={() => void reloadData()}><Icon name="reload" /> Refresh</button>
+          {skipper && (
             <button onClick={() => void track("Starting Intro Skipper in Jellyfin", async (job) => { const n = await api.runIntroSkipper(); job.update(`“${n}” runs in Jellyfin now; markers appear as it goes`, 1); }, { reload: false }).catch(() => undefined)} title="Jellyfin's Intro Skipper plugin finds intros and credits on the server (for the folders chosen in Settings → Intros)">
               <Icon name="skip" /> Run Intro Skipper in Jellyfin
             </button>
-          ) : undefined}
+          )}
+          </>}
       />
       {error && <p className="error">{error}</p>}
       {!show && (
