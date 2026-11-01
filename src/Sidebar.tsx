@@ -4,7 +4,7 @@ import type { Route, View } from "./nav";
 import { UpdateBadge } from "./Updates";
 import { setPrefs, usePrefs } from "./prefs";
 import { Icon, type IconName } from "./ui";
-import { noSubsOf } from "./fixers";
+import { useScanSummary } from "./scan";
 
 interface Props {
   status: Status;
@@ -39,14 +39,10 @@ function Brand({ compact }: { compact?: boolean }) {
   );
 }
 
-export default function Sidebar({ status, attention, route, onRoute }: Props) {
+export default function Sidebar({ status, route, onRoute }: Props) {
   const [inbox, setInbox] = useState(0);
-  const { subSkipFolders } = usePrefs();
-  const [subsTodo, setSubsTodo] = useState<number | null>(null);
-  useEffect(() => {
-    // Leaves out the folders you don't want subtitles for (what the Subtitles page lists).
-    api.libraryHealth(false).then((h) => setSubsTodo(h.rows.reduce((n, r) => n + noSubsOf(r), 0))).catch(() => setSubsTodo(null));
-  }, [route.view, subSkipFolders.join("|")]);
+  // The same numbers as the Library's chips and Home's blocks (checks.ts), updated after every change.
+  const health = useScanSummary().health;
   useEffect(() => {
     const load = () => api.inboxList().then(([, l]) => setInbox(l.length)).catch(() => setInbox(0));
     void load();
@@ -54,9 +50,8 @@ export default function Sidebar({ status, attention, route, onRoute }: Props) {
     return () => window.clearInterval(t);
   }, [route.view]);
   const badge = (v: View): string => {
-    if (!attention) return "";
-    if (v === "subtitles") return subsTodo ? String(subsTodo) : subsTodo === 0 ? "" : attention.noSubtitles ? String(attention.noSubtitles) : "";
-    if (v === "library" && attention.unmatched + attention.noPoster) return String(attention.unmatched + attention.noPoster);
+    if (v === "subtitles") return health?.subsVideos ? String(health.subsVideos) : "";
+    if (v === "library") return health?.libraryTodo ? String(health.libraryTodo) : "";
     if (v === "add" && inbox) return String(inbox);
     return "";
   };

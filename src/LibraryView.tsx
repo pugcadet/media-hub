@@ -7,7 +7,7 @@ import { applyArt, askArt } from "./ArtPicker";
 import { api, titleYear, Card, CheckRow, Details, errorText, HealthRow, imageUrl, SegSummary, Status } from "./api";
 import { followEvent, onItemsChanged, track, useEpoch } from "./activity";
 import { nav, type Route } from "./nav";
-import { artSkipped, fixTitles, FixKind, namesToFix, noSubsOf, targetOf } from "./fixers";
+import { artSkipped, fixTitles, FixKind, targetOf } from "./fixers";
 import { askFixes } from "./FixDialog";
 import { Studio, StudioItem } from "./Studio";
 import ItemPage from "./ItemPage";
@@ -16,8 +16,7 @@ import { askIdentify } from "./IdentifyDialog";
 import { namingLeftAlone, prefs, setPrefs, usePrefs } from "./prefs";
 import { folderTabs, IconBtn, KTabs, PageHead, SearchBox, Seg, StatusIcons, Toolbar } from "./kit";
 import MusicManage from "./MusicManage";
-
-type Check = "naming" | "identified" | "artwork" | "subtitles" | "intros";
+import { TITLE_ART, titleState, type Check } from "./checks";
 
 const CHECKS: { id: Check; label: string; icon: IconName; hint: string }[] = [
   { id: "naming", label: "Naming", icon: "rename", hint: "File and folder names the way Infuse and Jellyfin want them" },
@@ -28,26 +27,14 @@ const CHECKS: { id: Check; label: string; icon: IconName; hint: string }[] = [
 ];
 /** Home's blocks link here with these names. */
 const FLAG: Record<string, Check> = { names: "naming", naming: "naming", identified: "identified", unmatched: "identified", artwork: "artwork", noposter: "artwork", subtitles: "subtitles", intros: "intros" };
-const ART: { key: "poster" | "backdrop" | "logo" | "thumb"; kind: string }[] = [
-  { key: "poster", kind: "Primary" }, { key: "backdrop", kind: "Backdrop" }, { key: "logo", kind: "Logo" }, { key: "thumb", kind: "Thumb" },
-];
 
 interface Row extends HealthRow {
   check: CheckRow | null;
   seg: SegSummary | null;
 }
 
-function state(r: Row, c: Check): boolean | null {
-  // Checks you switched off for this title (no subtitles or intros needed) count as fine.
-  if ((prefs().checksOff[clean(r.id)] ?? []).includes(c)) return null;
-  switch (c) {
-    case "naming": return !r.check || r.check.stale || namingLeftAlone(r.check) ? null : !namesToFix(r.check) && !r.check.error;
-    case "identified": return r.identified;
-    case "artwork": return ART.every((a) => r[a.key] || artSkipped(r.id).includes(a.kind));
-    case "subtitles": return noSubsOf(r) === 0;
-    case "intros": return r.kind !== "series" ? null : r.seg ? r.seg.episodes === 0 || r.seg.intro >= r.seg.episodes * 0.8 : null;
-  }
-}
+const state = (r: Row, c: Check): boolean | null => titleState(r, c);
+const ART = TITLE_ART;
 
 const clean = (id: string) => id.replace(/-/g, "").toLowerCase();
 

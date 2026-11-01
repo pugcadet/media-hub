@@ -5,14 +5,15 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { api, DupGroup, HealthRow, MissingReport, OverviewRow, Status, errorText } from "./api";
 import { track, useEpoch, type JobHandle } from "./activity";
-import { folderOff, prefs } from "./prefs";
+import { folderOff, prefs, usePrefs } from "./prefs";
 import { readSaved, writeSaved } from "./saved";
 import type { TopFolder } from "./FolderTidy";
-import { artSkipped, CORE_ART, namesToFix, noSubsOf } from "./fixers";
+import { namesToFix } from "./fixers";
+import { subsMissing, titleState, type Check } from "./checks";
 
 /** Counts per part, with when each part last ran (ms). */
 export interface ScanSummary {
-  health: { at: number; titles: number; unidentified: number; noArt: number; subsVideos: number; subsTitles: number; complete: number } | null;
+  health: { at: number; titles: number; unidentified: number; noArt: number; subsVideos: number; subsTitles: number; complete: number; libraryTodo: number } | null;
   names: { at: number; toFix: number; sure: number } | null;
   missing: { at: number; shows: number; episodes: number } | null;
   duplicates: { at: number; groups: number; files: number } | null;
@@ -77,15 +78,18 @@ export function storageSummary(rows: OverviewRow[]): StorageSummary {
 }
 
 export function healthSummary(at: number, rows: HealthRow[]): NonNullable<ScanSummary["health"]> {
-  const subsTitles = rows.filter((r) => noSubsOf(r) > 0);
+  // The same rules as the Library's chips (checks.ts).
+  const subsTitles = rows.filter((r) => titleState(r, "subtitles") === false);
+  const bad = (r: HealthRow, c: Check) => titleState(r, c) === false;
   return {
     at: at * 1000,
     titles: rows.length,
-    unidentified: rows.filter((r) => !r.identified).length,
-    noArt: rows.filter((r) => r.identified && CORE_ART.some((a) => !r[a.key] && !artSkipped(r.id).includes(a.kind))).length,
-    subsVideos: subsTitles.reduce((n, r) => n + noSubsOf(r), 0),
+    unidentified: rows.filter((r) => bad(r, "identified")).length,
+    noArt: rows.filter((r) => bad(r, "artwork")).length,
+    subsVideos: subsTitles.reduce((n, r) => n + subsMissing(r), 0),
     subsTitles: subsTitles.length,
-    complete: rows.filter((r) => r.identified && CORE_ART.every((a) => r[a.key] || artSkipped(r.id).includes(a.kind)) && noSubsOf(r) === 0).length,
+    complete: rows.filter((r) => !bad(r, "identified") && !bad(r, "artwork") && !bad(r, "subtitles")).length,
+    libraryTodo: rows.filter((r) => bad(r, "identified") || bad(r, "artwork")).length,
   };
 }
 
@@ -111,6 +115,7 @@ export function foldersSummary(top: TopFolder[], at: number): NonNullable<ScanSu
  */
 export function useScanSummary(): ScanSummary {
   const epoch = useEpoch();
+  const pr = usePrefs(); // switched-off checks, skipped art and subtitle folders change the counts
   const v = useSyncExternalStore((f) => { subs.add(f); return () => subs.delete(f); }, () => version);
   const [live, setLive] = useState<Pick<ScanSummary, "health" | "names">>({ health: null, names: null });
   useEffect(() => {
@@ -126,7 +131,7 @@ export function useScanSummary(): ScanSummary {
     return () => {
       alive = false;
     };
-  }, [epoch, v]);
+  }, [epoch, v, pr]);
   const p = readParts();
   return {
     health: live.health,
