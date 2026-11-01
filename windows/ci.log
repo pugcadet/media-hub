@@ -1,11 +1,11 @@
 
-added 75 packages in 7s
+added 75 packages in 9s
 [1m[92m    Updating[0m crates.io index
-[1m[92m   Compiling[0m media-hub v0.25.4 (D:\a\media-hub\media-hub\src-tauri)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 29s
-[1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-0222397e9d9dad32.exe)
+[1m[92m   Compiling[0m media-hub v0.25.5 (D:\a\media-hub\media-hub\src-tauri)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 22s
+[1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-9f33ef8da33ffc12.exe)
 
-running 183 tests
+running 186 tests
 test backend::tests::versions ... ok
 test backend::tests::schedules_read_nicely ... ok
 test backend::tests::library_rows_compare_with_recommended ... ok
@@ -21,7 +21,6 @@ test detect::tests::chapters_with_names_are_used ... ok
 test bulk::tests::removes_and_adds_episode_tags ... ok
 test detect::tests::windows_and_snapping ... ok
 test downloads::tests::audio_mode ... ok
-test bulk::tests::drops_release_tags ... ok
 test downloads::tests::builds_safe_arguments ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
 test downloads::tests::plain_error_text ... ok
@@ -29,6 +28,7 @@ test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
 test downloads::tests::search_targets_and_results ... ok
 test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
+test bulk::tests::drops_release_tags ... ok
 test downloads::tests::summarizes_playlists ... ok
 test bulk::tests::plans_files_sidecars_and_folder ... ok
 test fake_jellyfin::tests::a_missing_picture_is_none_not_an_error ... ok
@@ -183,6 +183,9 @@ test subs::tests::wrong_episode_is_zero ... ok
 test subsync::tests::finds_a_shift ... ok
 test subsync::tests::reads_and_writes_srt_and_vtt ... ok
 test subsync::tests::speech_detection_follows_loudness ... ok
+test tidy::tests::movies_get_one_name_for_folder_video_and_subtitles ... ok
+test tidy::tests::shows_get_year_on_the_folder_only_and_two_digit_seasons ... ok
+test tidy::tests::years_only_come_out_of_episode_names ... ok
 test updater::tests::checksums_and_assets ... ok
 test updater::tests::swap_keeps_old_when_new_is_missing ... ok
 test updater::tests::versions_compare ... ok
@@ -190,9 +193,9 @@ test fingerprint::tests::unrelated_audio_has_no_match ... ok
 test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 183 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.48s
+test result: ok. 186 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.34s
 
-[1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-0158e347c473b427.exe)
+[1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-c1530aa9613b5739.exe)
 
 running 0 tests
 
@@ -202,17 +205,17 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 running 0 tests
 
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
         Info Looking up installed tauri packages to check mismatched versions...
      Running beforeBuildCommand `npm run build`
 
-> media-hub@0.25.4 build
+> media-hub@0.25.5 build
 > tsc && vite build
 
 [36mvite v5.4.21 [32mbuilding for production...[36m[39m
 transforming...
-[32m✓[39m 91 modules transformed.
+[32m✓[39m 92 modules transformed.
 [1m[33m[plugin:vite:reporter][39m[22m [33m[plugin vite:reporter] 
 (!) D:/a/media-hub/media-hub/src/Renamer.tsx is dynamically imported by D:/a/media-hub/media-hub/src/Inbox.tsx, D:/a/media-hub/media-hub/src/LibraryView.tsx, D:/a/media-hub/media-hub/src/scan.ts but also statically imported by D:/a/media-hub/media-hub/src/App.tsx, dynamic import will not move module into another chunk.
 [39m
@@ -275,26 +278,12 @@ computing gzip size...
 [2mdist/[22m[32massets/jetbrains-mono-latin-400-normal-6-qcROiO.woff       [39m[1m[2m   27.50 kB[22m[1m[22m
 [2mdist/[22m[32massets/inter-latin-wght-normal-Dx4kXJAl.woff2              [39m[1m[2m   48.26 kB[22m[1m[22m
 [2mdist/[22m[32massets/inter-latin-ext-wght-normal-DO1Apj_S.woff2          [39m[1m[2m   85.07 kB[22m[1m[22m
-[2mdist/[22m[35massets/index-B56tR5uO.css                                  [39m[1m[2m  193.49 kB[22m[1m[22m[2m │ gzip:  52.25 kB[22m
-[2mdist/[22m[36massets/index-BVA6iJoN.js                                   [39m[1m[33m1,188.85 kB[39m[22m[2m │ gzip: 365.66 kB[22m
+[2mdist/[22m[35massets/index-CzV901G0.css                                  [39m[1m[2m  193.78 kB[22m[1m[22m[2m │ gzip:  52.31 kB[22m
+[2mdist/[22m[36massets/index-srF8C7H_.js                                   [39m[1m[33m1,193.08 kB[39m[22m[2m │ gzip: 366.84 kB[22m
 [33m
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 3.85s[39m
-[1m[92m   Compiling[0m media-hub v0.25.4 (D:\a\media-hub\media-hub\src-tauri)
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 8m 15s
-       Built application at: D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe
-        Info Patching D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe with bundle type information: nsis
-        Info Verifying NSIS package
- Downloading https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip
-        Info validating hash
-        Info extracting NSIS
- Downloading https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll
-        Info validating hash
-        Info Target: x64
-     Running makensis to produce D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.25.4_x64-setup.exe
-    Finished 1 bundle at:
-        D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.25.4_x64-setup.exe (7.07 MiB)
-
+[32m✓ built in 3.79s[39m
+[1m[92m   Compiling[0m media-hub v0.25.5 (D:\a\media-hub\media-hub\src-tauri)
