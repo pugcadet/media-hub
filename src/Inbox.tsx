@@ -32,7 +32,7 @@ interface Row {
 
 /* ------------------------------------------------------------------ matching */
 
-const norm = (s: string) => s.toLowerCase().replace(/\(\d{4}\)/g, "").replace(/&/g, "and").replace(/[^a-z0-9]/g, "").replace(/^the/, "");
+const norm = (s: string) => stripEditions(s).toLowerCase().replace(/\(\d{4}\)/g, "").replace(/&/g, "and").replace(/[^a-z0-9]/g, "").replace(/^the/, "");
 function likeness(a: string, b: string): number {
   const x = norm(a), y = norm(b);
   if (!x || !y) return 0;
