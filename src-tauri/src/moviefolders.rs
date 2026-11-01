@@ -265,6 +265,14 @@ fn op(from: String, to: String, kind: &'static str, title: Option<String>, taken
     }
 }
 
+/// "Heat.1995.1080p.en.srt" with the video "Heat.1995.1080p" renamed to "Heat (1995)" → "Heat (1995).en.srt".
+fn renamed(name: &str, old_stem: &str, new_stem: &str) -> String {
+    match name.strip_prefix(old_stem) {
+        Some(rest) if rest.is_empty() || rest.starts_with('.') => format!("{new_stem}{rest}"),
+        _ => name.to_string(),
+    }
+}
+
 /// Files that belong to a video: same name start (subtitles "x.en.srt", "x.nfo", "x-poster.jpg").
 fn sidecars(root: &Path, video: &str) -> Vec<String> {
     let dir = parent(video);
@@ -329,10 +337,11 @@ pub fn plan(root: &Path, movies: &[MovieFolder], moves: &[MovieMove], groups: &[
                     if n.starts_with('.') {
                         continue;
                     }
-                    files.push(op(format!("{}/{n}", m.folder), format!("{outer}/{n}"), if is_video(&n) { "video" } else { "sidecar" }, None, &mut taken, root));
+                    let new = renamed(&n, split_ext(last(&m.video)).0, &m.expected);
+                    files.push(op(format!("{}/{n}", m.folder), format!("{outer}/{new}"), if is_video(&n) { "video" } else { "sidecar" }, None, &mut taken, root));
                 }
             }
-            files.extend(language_subs(root, &outer, split_ext(last(&m.video)).0, &mut taken));
+            files.extend(language_subs(root, &outer, &m.expected, &mut taken));
             let to = format!("{}/{}", parent(&outer), m.expected);
             if to != outer {
                 folders.push(op(outer.clone(), to, "folder", Some(m.title.clone()), &mut taken, root));
@@ -340,10 +349,25 @@ pub fn plan(root: &Path, movies: &[MovieFolder], moves: &[MovieMove], groups: &[
             continue;
         }
         if m.kind == "own" {
-            files.extend(language_subs(root, &m.folder, split_ext(last(&m.video)).0, &mut taken));
             // The whole folder moves (or is renamed): extras and posters inside go along.
             let to_parent = collect.clone().unwrap_or_else(|| if out { m.top.clone() } else { parent(&m.folder).to_string() });
             let to = format!("{to_parent}/{}", m.expected);
+            // The video and its subtitles get the same name as the folder (renamed in place first).
+            let stem = split_ext(last(&m.video)).0.to_string();
+            if stem != m.expected {
+                for n in std::iter::once(m.video.clone()).chain(sidecars(root, &m.video)) {
+                    let new = renamed(last(&n), &stem, &m.expected);
+                    if new != last(&n) {
+                        let mut o = op(n.clone(), format!("{to}/{new}"), if is_video(last(&n)) { "video" } else { "sidecar" }, None, &mut taken, root);
+                        o.step_to = format!("{}/{new}", m.folder);
+                        if o.status == "ok" && fsops::exists(root, &o.step_to) && o.step_to.to_lowercase() != n.to_lowercase() {
+                            o.status = "conflict";
+                        }
+                        files.push(o);
+                    }
+                }
+            }
+            files.extend(language_subs(root, &m.folder, &m.expected, &mut taken));
             if to != m.folder {
                 folders.push(op(m.folder.clone(), to, "folder", Some(m.title.clone()), &mut taken, root));
             }
@@ -351,9 +375,10 @@ pub fn plan(root: &Path, movies: &[MovieFolder], moves: &[MovieMove], groups: &[
             // A loose video: into a new folder of its own, with its subtitles.
             let to_parent = collect.clone().unwrap_or_else(|| if out || m.kind == "loose" { m.top.clone() } else { m.folder.clone() });
             let to_dir = format!("{to_parent}/{}", m.expected);
-            files.push(op(m.video.clone(), format!("{to_dir}/{}", last(&m.video)), "video", Some(m.title.clone()), &mut taken, root));
+            let stem = split_ext(last(&m.video)).0.to_string();
+            files.push(op(m.video.clone(), format!("{to_dir}/{}", renamed(last(&m.video), &stem, &m.expected)), "video", Some(m.title.clone()), &mut taken, root));
             for s in sidecars(root, &m.video) {
-                files.push(op(s.clone(), format!("{to_dir}/{}", last(&s)), "sidecar", None, &mut taken, root));
+                files.push(op(s.clone(), format!("{to_dir}/{}", renamed(last(&s), &stem, &m.expected)), "sidecar", None, &mut taken, root));
             }
         }
     }
@@ -465,8 +490,8 @@ mod tests {
         let movies = classify(vec![m("c", "Sling Blade", 1996, v)]);
         let ops = plan(&root, &movies, &[MovieMove { video: v.into(), mode: "fix".into() }], &[]).unwrap();
         let pairs: Vec<(&str, &str)> = ops.iter().map(|o| (o.from.as_str(), o.to.as_str())).collect();
-        assert!(pairs.contains(&(v, "Movies/Sling Blade (1996)/Sling Blade Directors Cut (1996).mp4")), "{pairs:?}");
-        assert!(pairs.contains(&("Movies/Sling Blade (1996)/English.srt", "Movies/Sling Blade (1996)/Sling Blade Directors Cut (1996).eng.srt")), "{pairs:?}");
+        assert!(pairs.contains(&(v, "Movies/Sling Blade (1996)/Sling Blade (1996).mp4")), "{pairs:?}");
+        assert!(pairs.contains(&("Movies/Sling Blade (1996)/English.srt", "Movies/Sling Blade (1996)/Sling Blade (1996).eng.srt")), "{pairs:?}");
         assert!(!pairs.iter().any(|p| p.1.contains("tmdbid")));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -497,12 +522,13 @@ mod tests {
             m.collection = Some("Pixar Collection".into());
         }
         let c_ops = plan(&root, &coll, &[MovieMove { video: "Movies/Pixar/Coco.mkv".into(), mode: "collect".into() }], &[]).unwrap();
-        assert_eq!(c_ops[0].to, "Movies/Pixar Collection/Coco (2017)/Coco.mkv");
+        assert_eq!(c_ops[0].to, "Movies/Pixar Collection/Coco (2017)/Coco (2017).mkv");
         let ops = plan(&root, &movies, &moves, &groups).unwrap();
         let pairs: Vec<(&str, &str)> = ops.iter().map(|o| (o.from.as_str(), o.to.as_str())).collect();
-        assert!(pairs.contains(&("Movies/Pixar/Up.mkv", "Movies/Pixar/Up (2009)/Up.mkv")));
-        assert!(pairs.contains(&("Movies/Pixar/Up.en.srt", "Movies/Pixar/Up (2009)/Up.en.srt")));
-        assert!(pairs.contains(&("Movies/Pixar/Coco.mkv", "Movies/Coco (2017)/Coco.mkv")));
+        assert!(pairs.contains(&("Movies/Pixar/Up.mkv", "Movies/Pixar/Up (2009)/Up (2009).mkv")), "{pairs:?}");
+        assert!(pairs.contains(&("Movies/Pixar/Up.en.srt", "Movies/Pixar/Up (2009)/Up (2009).en.srt")));
+        assert!(pairs.contains(&("Movies/Pixar/Coco.mkv", "Movies/Coco (2017)/Coco (2017).mkv")));
+        assert!(pairs.contains(&("Movies/Alien Collection/Alien.1979.1080p/Alien.1979.1080p.mkv", "Movies/Alien Collection/Alien (1979)/Alien (1979).mkv")), "{pairs:?}");
         assert!(pairs.contains(&("Movies/Alien Collection/Alien.1979.1080p", "Movies/Alien Collection/Alien (1979)")));
         // The collection folder is renamed last, after the movies inside it.
         assert_eq!(ops.last().map(|o| (o.from.as_str(), o.to.as_str())), Some(("Movies/Alien Collection", "Movies/Alien")));
