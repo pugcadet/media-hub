@@ -236,23 +236,17 @@ pub struct InboxPlan {
 
 /// "Season 01" in the style the show already uses ("Season 1", "S01", "Season 01").
 pub fn season_dir_like(existing: &[String], season: u32) -> String {
+    // A folder the show already has for this season is used (Clean-up → Names and years makes
+    // it "Season 07"); a new one is always "Season 07".
     let plain = |d: &String| crate::naming::is_plain_season_dir(d);
     if let Some(d) = existing.iter().find(|d| plain(d) && season_from_dir(d) == Some(season)) {
         return d.clone();
     }
     if let Some(d) = existing.iter().find(|d| season_from_dir(d) == Some(season)) {
-        return d.clone(); // a downloaded season folder already there ("You.S05.1080p…")
+        return d.clone();
     }
     if season == 0 {
-        return existing.iter().find(|d| d.eq_ignore_ascii_case("specials")).cloned().unwrap_or_else(|| "Specials".into());
-    }
-    static R: OnceLock<Regex> = OnceLock::new();
-    let re = R.get_or_init(|| Regex::new(r"^(\D*?)(\d+)(\D*)$").expect("season style"));
-    for d in existing.iter().filter(|d| plain(d) && season_from_dir(d).map(|n| n > 0).unwrap_or(false)) {
-        if let Some(c) = re.captures(d) {
-            let width = c[2].len();
-            return format!("{}{:0width$}{}", &c[1], season, &c[3], width = width);
-        }
+        return "Specials".into();
     }
     format!("Season {season:02}")
 }
@@ -690,9 +684,9 @@ mod tests {
 
     #[test]
     fn season_folders_follow_the_show() {
-        assert_eq!(season_dir_like(&["Season 1".into(), "Season 2".into()], 3), "Season 3");
+        assert_eq!(season_dir_like(&["Season 1".into(), "Season 2".into()], 3), "Season 03");
+        assert_eq!(season_dir_like(&["Season 1".into()], 1), "Season 1", "an existing folder is used");
         assert_eq!(season_dir_like(&["Season 01".into()], 3), "Season 03");
-        assert_eq!(season_dir_like(&["S01".into()], 2), "S02");
         assert_eq!(season_dir_like(&["Season 02".into()], 2), "Season 02");
         assert_eq!(season_dir_like(&[], 4), "Season 04");
     }

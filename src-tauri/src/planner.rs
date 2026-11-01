@@ -567,7 +567,9 @@ pub fn plan_tv(
         if season_from_dir(d).is_none() {
             continue;
         }
-        if req.minimal && !crate::naming::is_messy(d) {
+        // Season folders always become "Season 07" (also when only messy names are tidied).
+        let canonical = season_from_dir(&new).map(|n| if n == 0 { "Specials".to_string() } else { format!("Season {n:02}") }) == Some(new.clone());
+        if req.minimal && !crate::naming::is_messy(d) && !canonical {
             continue;
         }
         if *d != new {
@@ -891,13 +893,17 @@ mod tests {
         let ops = plan_movies(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
         assert!(ops.iter().all(|o| o.status == "unchanged"), "{ops:#?}");
         // Episodes Jellyfin reads fine: no year, no titles, no season folders added.
-        let f = files(&["TV/Bluey/Bluey - S01E01.mkv", "TV/Bluey/Season 1/Bluey - S01E02.mkv"]);
+        let f = files(&["TV/Bluey/Bluey - S01E01.mkv", "TV/Bluey/Season 01/Bluey - S01E02.mkv"]);
         let mut r = req("TV/Bluey", TV);
         r.year = Some(2018);
         r.minimal = true;
         r.season_folders = true;
         let ops = plan_tv(&f, &r, &HashMap::from([((1, 1), "Magic Xylophone".to_string())]), &nothing_exists).unwrap();
         assert!(ops.iter().all(|o| o.status == "unchanged"), "{ops:#?}");
+        // A season folder always becomes two digits, also when only messy names are tidied.
+        let f = files(&["TV/Bluey/Season 7/Bluey - S07E02.mkv"]);
+        let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
+        assert!(ops.iter().any(|o| o.kind == "folder" && o.to == "TV/Bluey/Season 07"), "{ops:#?}");
         // A messy episode is tidied in place.
         let f = files(&["TV/Bluey/Bluey.S01E03.1080p.WEB-DL.mkv"]);
         let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();

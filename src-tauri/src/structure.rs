@@ -26,9 +26,6 @@ pub struct LooseShow {
 
 /// "Season 05" (or "Specials") for a season folder whose name isn't that yet.
 fn canonical_season(name: &str) -> Option<String> {
-    if crate::naming::is_plain_season_dir(name) {
-        return None; // "Season 1" is fine as it is
-    }
     let n = season_from_dir(name)?;
     let want = if n == 0 { "Specials".to_string() } else { format!("Season {n:02}") };
     (want != name).then_some(want)
@@ -361,11 +358,11 @@ mod tests {
         }
         let t = scan(&root);
         let show = &t[0].shows[0];
-        assert_eq!(show.messy.len(), 2, "{show:?}");
+        assert_eq!(show.messy.len(), 3, "{show:?}");
         let ops = plan(&root, &[Action { kind: "seasons".into(), path: "TV/YOU".into() }]).unwrap();
         let to: Vec<&str> = ops.iter().map(|o| o.to.as_str()).collect();
         assert!(to.contains(&"TV/YOU/Season 05") && to.contains(&"TV/YOU/Season 02"), "{to:?}");
-        assert!(!to.iter().any(|t| t.ends_with("Season 01")));
+        assert!(to.iter().any(|t| t.ends_with("Season 01")), "Season 1 becomes Season 01 too: {to:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
