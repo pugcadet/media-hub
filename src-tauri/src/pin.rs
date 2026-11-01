@@ -1,5 +1,5 @@
-//! After Identify: the match goes into the folder name ("Heat (1995) [tmdbid-949]"), so
-//! Jellyfin matches the title the same way every time, also after a reset or a new scan.
+//! After Identify: the folder gets the matched name and year ("Heat (1995)"), so Jellyfin
+//! matches the title the same way every time, also after a reset or a new scan.
 //! One rename, journaled like every rename (History can undo it).
 
 use crate::error::{Error, Result};
@@ -21,19 +21,15 @@ fn tag_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"(?i)\s*[\[{](?:tmdbid|tvdbid|imdbid|tmdb|tvdb|imdb)[-=][^\]}]*[\]}]").expect("id tag pattern"))
 }
 
-/// "Heat (1995) [tmdbid-949]": the name, the year and the best id for the kind of title.
-pub fn pinned_name(name: &str, year: Option<i64>, kind: &str, ids: &Value) -> Option<String> {
-    let id = |k: &str| ids.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric()));
-    let tag = match kind {
-        "Series" => id("Tvdb").map(|v| format!("[tvdbid-{v}]")).or_else(|| id("Tmdb").map(|v| format!("[tmdbid-{v}]"))),
-        _ => id("Tmdb").map(|v| format!("[tmdbid-{v}]")).or_else(|| id("Imdb").map(|v| format!("[imdbid-{v}]"))),
-    }?;
+/// "Heat (1995)": the matched name and year, without id tags (an old "[tmdbid-…]" is removed).
+/// Jellyfin matches a clean "Name (Year)" reliably, and that's how you want names to look.
+pub fn pinned_name(name: &str, year: Option<i64>, _kind: &str, _ids: &Value) -> Option<String> {
     let clean = tag_re().replace_all(name, "").trim().to_string();
     let base = match year {
         Some(y) if !clean.contains(&format!("({y})")) => format!("{clean} ({y})"),
         _ => clean,
     };
-    let out = sanitize(&format!("{base} {tag}"));
+    let out = sanitize(&base);
     (!out.is_empty()).then_some(out)
 }
 
@@ -65,7 +61,7 @@ pub async fn pin_identity(app: AppHandle, state: State<'_, AppState>, id: String
     let year = item.get("ProductionYear").and_then(Value::as_i64);
     let ids = item.get("ProviderIds").cloned().unwrap_or(Value::Null);
     let Some(new_name) = pinned_name(&name, year, &kind, &ids) else {
-        return Ok(PinResult { name: String::new(), changed: false, note: Some("It has no TMDB, TVDB or IMDb id yet.".into()), report: None });
+        return Ok(PinResult { name: String::new(), changed: false, note: Some("It has no name yet.".into()), report: None });
     };
     let server = item.get("Path").and_then(Value::as_str).ok_or_else(|| Error::msg("Jellyfin has no folder for this title."))?;
     let path = local::to_local(&state, server)?;
@@ -91,6 +87,15 @@ pub async fn pin_identity(app: AppHandle, state: State<'_, AppState>, id: String
         let videos = std::fs::read_dir(&dir)
             .map(|rd| rd.flatten().filter(|e| e.path().is_file() && crate::naming::is_video(&e.file_name().to_string_lossy())).count())
             .unwrap_or(0);
+        // Never rename a folder that also holds other movies' folders (a collection folder),
+        // and never make a folder inside a folder of the same movie.
+        let holds_others = std::fs::read_dir(&dir)
+            .map(|rd| rd.flatten().any(|e| e.path().is_dir() && std::fs::read_dir(e.path()).map(|r| r.flatten().any(|f| crate::naming::is_video(&f.file_name().to_string_lossy()))).unwrap_or(false)))
+            .unwrap_or(false);
+        let outer_same = gparent.rsplit('/').next().map(|g| gparent.contains('/') && crate::naming::parse_name(g).title.eq_ignore_ascii_case(&crate::naming::parse_name(&new_name).title)).unwrap_or(false);
+        if holds_others || outer_same {
+            return Ok(PinResult { name: new_name, changed: false, note: Some("Its folder is shared or nested; tidy it on Renamer → Folders instead.".into()), report: None });
+        }
         if !gparent.is_empty() && videos == 1 {
             // The movie has a folder of its own: that gets the name.
             if folder == new_name {
@@ -138,13 +143,9 @@ mod tests {
 
     #[test]
     fn puts_the_match_in_the_name() {
-        let ids = serde_json::json!({ "Tmdb": "949", "Imdb": "tt0113277" });
-        assert_eq!(pinned_name("Heat", Some(1995), "Movie", &ids).unwrap(), "Heat (1995) [tmdbid-949]");
-        let show = serde_json::json!({ "Tvdb": "353546", "Tmdb": "82728" });
-        assert_eq!(pinned_name("Bluey", Some(2018), "Series", &show).unwrap(), "Bluey (2018) [tvdbid-353546]");
-        // An old tag is replaced, not added to.
-        assert_eq!(pinned_name("Bluey [tvdbid-1]", Some(2018), "Series", &show).unwrap(), "Bluey (2018) [tvdbid-353546]");
-        assert!(pinned_name("Heat", None, "Movie", &serde_json::json!({})).is_none());
-        assert!(pinned_name("Heat", None, "Movie", &serde_json::json!({ "Tmdb": "../x" })).is_none());
+        let ids = serde_json::json!({ "Tmdb": "949" });
+        assert_eq!(pinned_name("Heat", Some(1995), "Movie", &ids).unwrap(), "Heat (1995)");
+        assert_eq!(pinned_name("Bluey [tvdbid-1]", Some(2018), "Series", &ids).unwrap(), "Bluey (2018)");
+        assert_eq!(pinned_name("Heat", None, "Movie", &ids).unwrap(), "Heat");
     }
 }

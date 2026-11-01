@@ -14,7 +14,7 @@ use crate::state::AppState;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -236,15 +236,19 @@ pub struct InboxPlan {
 
 /// "Season 01" in the style the show already uses ("Season 1", "S01", "Season 01").
 pub fn season_dir_like(existing: &[String], season: u32) -> String {
-    if let Some(d) = existing.iter().find(|d| season_from_dir(d) == Some(season)) {
+    let plain = |d: &String| crate::naming::is_plain_season_dir(d);
+    if let Some(d) = existing.iter().find(|d| plain(d) && season_from_dir(d) == Some(season)) {
         return d.clone();
+    }
+    if let Some(d) = existing.iter().find(|d| season_from_dir(d) == Some(season)) {
+        return d.clone(); // a downloaded season folder already there ("You.S05.1080p…")
     }
     if season == 0 {
         return existing.iter().find(|d| d.eq_ignore_ascii_case("specials")).cloned().unwrap_or_else(|| "Specials".into());
     }
     static R: OnceLock<Regex> = OnceLock::new();
     let re = R.get_or_init(|| Regex::new(r"^(\D*?)(\d+)(\D*)$").expect("season style"));
-    for d in existing.iter().filter(|d| season_from_dir(d).map(|n| n > 0).unwrap_or(false)) {
+    for d in existing.iter().filter(|d| plain(d) && season_from_dir(d).map(|n| n > 0).unwrap_or(false)) {
         if let Some(c) = re.captures(d) {
             let width = c[2].len();
             return format!("{}{:0width$}{}", &c[1], season, &c[3], width = width);
@@ -278,16 +282,106 @@ fn join(a: &str, b: &str) -> String {
     if a.is_empty() { b.to_string() } else { format!("{a}/{b}") }
 }
 
-/// Works out every file's place (pure apart from reading the target folders).
-pub fn plan_moves(root: &Path, item: &InboxItem, t: &Target, folder: &str, existing: bool) -> Vec<Placement> {
+/// Language of a subtitle file from its name ("Movie.en.srt", "Subs/2_English.srt"): the code
+/// it gets in the new name ("eng"), plus ".forced"/".sdh". None = not one of your languages.
+/// Ok(None) inside = no language in the name at all.
+pub fn sub_language(rel: &str, langs: &[String]) -> Option<(Option<String>, String)> {
+    let lower = rel.to_lowercase();
+    let stem = split_ext(rel.rsplit('/').next().unwrap_or(rel)).0.to_lowercase();
+    let tokens: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    let stem_tokens: Vec<&str> = stem.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    let mut flags = String::new();
+    if stem_tokens.iter().any(|t| *t == "forced") {
+        flags.push_str(".forced");
+    }
+    if stem_tokens.iter().any(|t| matches!(*t, "sdh" | "hi" | "cc")) {
+        flags.push_str(".sdh");
+    }
+    let mut wanted: Vec<String> = langs.to_vec();
+    if !wanted.iter().any(|l| l == "eng") {
+        wanted.push("eng".into());
+    }
+    for l in &wanted {
+        let codes = crate::sublock::name_codes(l);
+        if stem_tokens.iter().any(|t| codes.iter().any(|c| c == t)) || (tokens.iter().any(|t| codes.iter().any(|c| c.len() > 3 && c == t))) {
+            return Some((Some(l.clone()), flags));
+        }
+    }
+    // Some other language named in it: not wanted.
+    const OTHER: &[&str] = &["fre", "fra", "french", "ger", "deu", "german", "spa", "spanish", "ita", "italian", "por", "portuguese", "rus", "russian", "ara", "arabic", "chi", "chinese", "jpn", "japanese", "kor", "korean", "pol", "polish", "tur", "turkish", "swe", "swedish", "nor", "norwegian", "dan", "danish", "fin", "finnish", "dut", "nld", "dutch", "heb", "hebrew", "hun", "hungarian", "cze", "czech", "gre", "greek", "rum", "romanian", "vie", "vietnamese", "tha", "thai", "ind", "indonesian", "may", "malay", "hin", "hindi", "ukr", "ukrainian", "bul", "bulgarian", "hrv", "croatian", "srp", "serbian", "slv", "slovenian", "est", "lav", "lit"];
+    if stem_tokens.iter().any(|t| OTHER.contains(t)) || tokens.iter().any(|t| t.len() > 3 && OTHER.contains(t)) {
+        return None;
+    }
+    Some((None, flags))
+}
+
+fn is_sample(rel: &str) -> bool {
+    let l = rel.to_lowercase();
+    l.split(|c: char| !c.is_alphanumeric()).any(|t| t == "sample" || t == "trailer" || t == "featurette")
+}
+
+/// Works out every file's place and its clean name (pure apart from reading the target folders).
+/// Only the videos (no samples) and subtitles in your languages go; .nfo, .txt, pictures,
+/// samples and other languages stay behind (and go to the Trash with the download).
+pub fn plan_moves(root: &Path, item: &InboxItem, t: &Target, folder: &str, existing: bool, langs: &[String]) -> Vec<Placement> {
     let mut moves = Vec::new();
-    let videos: Vec<&InboxFile> = item.files.iter().filter(|f| f.video).collect();
     let name_of = |rel: &str| rel.rsplit('/').next().unwrap_or(rel).to_string();
-    // Sidecars go where their video goes ("x.en.srt" follows "x.mkv").
-    let video_of = |rel: &str| -> Option<&InboxFile> {
-        let n = name_of(rel);
-        videos.iter().copied().filter(|v| n.starts_with(split_ext(&name_of(&v.rel)).0)).max_by_key(|v| v.rel.len())
+    let videos: Vec<&InboxFile> = item.files.iter().filter(|f| f.video && (!is_sample(&f.rel) || item.files.iter().filter(|x| x.video).count() == 1)).collect();
+    // Which video a subtitle belongs to: same name start, its episode number, a folder named
+    // after the video ("Subs/<video>/2_English.srt"), or the only video.
+    let video_of = |f: &InboxFile| -> Option<&InboxFile> {
+        let n = name_of(&f.rel);
+        if let Some(v) = videos.iter().copied().filter(|v| n.starts_with(split_ext(&name_of(&v.rel)).0)).max_by_key(|v| v.rel.len()) {
+            return Some(v);
+        }
+        let parent = f.rel.rsplit('/').nth(1).unwrap_or("");
+        if let Some(v) = videos.iter().copied().find(|v| !parent.is_empty() && split_ext(&name_of(&v.rel)).0 == parent) {
+            return Some(v);
+        }
+        if let Some(m) = parse_episode(split_ext(&n).0, None) {
+            if let Some(v) = videos.iter().copied().find(|v| v.season == Some(m.season) && v.episodes == m.episodes) {
+                return Some(v);
+            }
+        }
+        (videos.len() == 1).then(|| videos[0])
     };
+    let title_plain = {
+        let p = crate::naming::parse_name(&t.title);
+        if p.title.is_empty() { t.title.trim().to_string() } else { p.title }
+    };
+    // The clean name of a video (without extension): "Heat (1995)", "Bluey - S03E48".
+    let clean_stem = |v: &InboxFile| -> Option<String> {
+        match t.kind.as_str() {
+            "movie" if videos.len() == 1 => Some(sanitize(&match t.year { Some(y) => format!("{title_plain} ({y})"), None => title_plain.clone() })),
+            "tv" => {
+                let s = v.season.or(t.season)?;
+                if v.episodes.is_empty() {
+                    return None;
+                }
+                let mut sxe = format!("S{:02}E{:02}", s, v.episodes[0]);
+                for e in &v.episodes[1..] {
+                    sxe.push_str(&format!("-E{e:02}"));
+                }
+                Some(sanitize(&format!("{title_plain} - {sxe}")))
+            }
+            _ => None,
+        }
+    };
+    let new_name = |f: &InboxFile| -> Option<String> {
+        let n = name_of(&f.rel);
+        let ext = split_ext(&n).1.to_lowercase();
+        if f.video {
+            return Some(match clean_stem(f) { Some(stem) => format!("{stem}.{ext}"), None => n });
+        }
+        if !matches!(ext.as_str(), "srt" | "ass" | "ssa" | "vtt" | "sub" | "idx" | "sup") {
+            return None; // .nfo, .txt, .jpg …: stay behind
+        }
+        let (lang, flags) = sub_language(&f.rel, langs)?;
+        let v = video_of(f)?;
+        let stem = clean_stem(v).unwrap_or_else(|| split_ext(&name_of(&v.rel)).0.to_string());
+        Some(match lang { Some(l) => format!("{stem}.{l}{flags}.{ext}"), None => format!("{stem}{flags}.{ext}") })
+    };
+    let mut used: HashSet<String> = HashSet::new();
     match t.kind.as_str() {
         "tv" => {
             let show = root.join(folder);
@@ -303,10 +397,14 @@ pub fn plan_moves(root: &Path, item: &InboxItem, t: &Target, folder: &str, exist
             };
             let mut have_cache: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
             for f in &item.files {
-                let base = if f.video { Some(f) } else { video_of(&f.rel) };
+                let base = if f.video { videos.iter().copied().find(|v| v.rel == f.rel) } else { video_of(f) };
                 let Some(v) = base else { continue };
+                let Some(name) = new_name(f) else { continue };
                 let (dir, ep) = place(v);
-                let to = join(&dir, &name_of(&f.rel));
+                let to = join(&dir, &name);
+                if !used.insert(to.to_lowercase()) {
+                    continue; // a second English subtitle for the same episode
+                }
                 let have_ep = match (&ep, f.video) {
                     (Some((s, eps)), true) if !eps.is_empty() => {
                         let known = have_cache.entry(dir.clone()).or_insert_with(|| episodes_in(&root.join(&dir), season_from_dir(dir.rsplit('/').next().unwrap_or(""))));
@@ -319,9 +417,11 @@ pub fn plan_moves(root: &Path, item: &InboxItem, t: &Target, folder: &str, exist
             // A subtitle whose video is already there is skipped too.
             let skipped: Vec<String> = moves.iter().filter(|m| m.have).map(|m| m.from.clone()).collect();
             for m in moves.iter_mut().filter(|m| !m.have) {
-                if let Some(v) = video_of(&m.from) {
-                    if skipped.contains(&v.rel) && !is_video(&name_of(&m.from)) {
-                        m.have = true;
+                if let Some(f) = item.files.iter().find(|f| f.rel == m.from && !f.video) {
+                    if let Some(v) = video_of(f) {
+                        if skipped.contains(&v.rel) {
+                            m.have = true;
+                        }
                     }
                 }
             }
@@ -335,13 +435,26 @@ pub fn plan_moves(root: &Path, item: &InboxItem, t: &Target, folder: &str, exist
                 moves.push(Placement { have: root.join(&to).exists(), from: f.rel.clone(), to });
             }
         }
-        _ => {
+        "other" => {
             for f in &item.files {
-                if !f.video && !is_sidecar(&name_of(&f.rel)) && t.kind != "other" {
+                if !f.video && !is_sidecar(&name_of(&f.rel)) {
                     continue;
                 }
                 let to = join(folder, &name_of(&f.rel));
                 moves.push(Placement { have: existing || root.join(&to).exists(), from: f.rel.clone(), to });
+            }
+        }
+        _ => {
+            for f in &item.files {
+                if f.video && !videos.iter().any(|v| v.rel == f.rel) {
+                    continue; // sample
+                }
+                let Some(name) = new_name(f) else { continue };
+                let to = join(folder, &name);
+                if !used.insert(to.to_lowercase()) {
+                    continue;
+                }
+                moves.push(Placement { have: (existing && f.video) || root.join(&to).exists(), from: f.rel.clone(), to });
             }
         }
     }
@@ -389,7 +502,8 @@ pub async fn inbox_resolve(state: State<'_, AppState>, key: String, target: Targ
         }
     };
     let (r2, f2, t2) = (root.clone(), folder.clone(), target.clone());
-    let moves = tauri::async_runtime::spawn_blocking(move || plan_moves(&r2, &item, &t2, &f2, existing))
+    let langs = state.settings()?.sub_langs.clone();
+    let moves = tauri::async_runtime::spawn_blocking(move || plan_moves(&r2, &item, &t2, &f2, existing, &langs))
         .await
         .map_err(|e| Error::msg(e.to_string()))?;
     Ok(InboxPlan { folder, existing, moves })
@@ -541,6 +655,14 @@ pub async fn inbox_place(app: AppHandle, state: State<'_, AppState>, key: String
     .map_err(|e| Error::msg(e.to_string()))?
 }
 
+/// Opens the downloads folder in Finder / Explorer.
+#[tauri::command]
+pub fn inbox_reveal(state: State<'_, AppState>) -> Result<()> {
+    let dir = inbox_dir(&state)?;
+    local::show_in_file_manager(&dir);
+    Ok(())
+}
+
 /// "Remove download": a download you don't need (already in the library) goes to the Trash.
 #[tauri::command]
 pub async fn inbox_trash(state: State<'_, AppState>, key: String) -> Result<()> {
@@ -587,13 +709,13 @@ mod tests {
             files: vec![f("Bluey.S03E47.mkv", Some(3), &[47]), f("Bluey.S03E48.mkv", Some(3), &[48]), f("Bluey.S03E48.en.srt", None, &[]), f("Bluey.S03E47.en.srt", None, &[])],
         };
         let t = Target { kind: "tv".into(), item_id: None, top: "Kids".into(), title: "Bluey".into(), year: Some(2018), season: None, artist: None, album: None };
-        let moves = plan_moves(&root, &item, &t, "Kids/Bluey (2018)", true);
+        let moves = plan_moves(&root, &item, &t, "Kids/Bluey (2018)", true, &["eng".to_string()]);
         let get = |from: &str| moves.iter().find(|m| m.from == from).unwrap();
         assert!(get("Bluey.S03E47.mkv").have, "episode 47 is already there");
         assert!(get("Bluey.S03E47.en.srt").have, "its subtitle is skipped too");
-        assert_eq!(get("Bluey.S03E48.mkv").to, "Kids/Bluey (2018)/Season 3/Bluey.S03E48.mkv");
+        assert_eq!(get("Bluey.S03E48.mkv").to, "Kids/Bluey (2018)/Season 3/Bluey - S03E48.mkv");
         assert!(!get("Bluey.S03E48.mkv").have);
-        assert_eq!(get("Bluey.S03E48.en.srt").to, "Kids/Bluey (2018)/Season 3/Bluey.S03E48.en.srt");
+        assert_eq!(get("Bluey.S03E48.en.srt").to, "Kids/Bluey (2018)/Season 3/Bluey - S03E48.eng.srt");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -607,8 +729,25 @@ mod tests {
             files: vec![InboxFile { rel: "Why Bees Dance.mp4".into(), size: 1, video: true, season: None, episodes: vec![] }],
         };
         let t = Target { kind: "tv".into(), item_id: None, top: "YouTube".into(), title: "Kurzgesagt".into(), year: None, season: None, artist: None, album: None };
-        let moves = plan_moves(&root, &item, &t, "YouTube/Kurzgesagt", true);
+        let moves = plan_moves(&root, &item, &t, "YouTube/Kurzgesagt", true, &[]);
         assert_eq!(moves[0].to, "YouTube/Kurzgesagt/Why Bees Dance.mp4");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_movie_brings_only_the_video_and_your_subtitles_with_clean_names() {
+        let root = std::env::temp_dir().join(format!("mh-inbox3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let f = |rel: &str| InboxFile { rel: rel.into(), size: 1, video: is_video(rel), season: None, episodes: vec![] };
+        let item = InboxItem {
+            key: "Heat.1995.1080p.BluRay.x264-GRP".into(), is_folder: true, size: 9, modified: 0, kind: "movie", title: "Heat".into(), year: Some(1995), music: None,
+            files: vec![f("Heat.1995.1080p.BluRay.x264-GRP.mkv"), f("Sample/heat-sample.mkv"), f("Heat.1995.nfo"), f("Subs/2_English.srt"), f("Subs/3_French.srt"), f("Subs/4_English.SDH.srt"), f("RARBG.txt")],
+        };
+        let t = Target { kind: "movie".into(), item_id: None, top: "Movies".into(), title: "Heat".into(), year: Some(1995), season: None, artist: None, album: None };
+        let moves = plan_moves(&root, &item, &t, "Movies/Heat (1995)", false, &["eng".to_string()]);
+        let to: Vec<&str> = moves.iter().map(|m| m.to.as_str()).collect();
+        assert_eq!(to, vec!["Movies/Heat (1995)/Heat (1995).mkv", "Movies/Heat (1995)/Heat (1995).eng.srt", "Movies/Heat (1995)/Heat (1995).eng.sdh.srt"], "{moves:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

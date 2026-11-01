@@ -5,11 +5,12 @@ import { api, applyPlan, CheckRow, errorText, HealthRow, ImageKind, PlanOp, scan
 import type { JobHandle } from "./activity";
 import { namingLeftAlone, prefs, subPlan, subSkipped, withShowYear, yearOptional, minimalNames } from "./prefs";
 
-export type FixKind = "art" | "subs" | "rename";
+export type FixKind = "identify" | "art" | "subs" | "rename";
 
 export interface FixTarget {
   id: string;
   name: string;
+  year?: number | null;
   kind: "series" | "movie";
   identified: boolean;
   /** Pictures to look for online. */
@@ -41,13 +42,14 @@ export function targetOf(r: HealthRow, check: CheckRow | null, extraArt = false)
   const skip = artSkipped(r.id);
   const missingArt = CORE_ART.filter((a) => !r[a.key] && !skip.includes(a.kind)).map((a) => a.kind);
   if (extraArt && !r.thumb && !skip.includes("Thumb")) missingArt.push("Thumb");
-  return { id: r.id, name: r.name, kind: r.kind, identified: r.identified, missingArt, noSubs: noSubsOf(r), check };
+  return { id: r.id, name: r.name, year: r.year, kind: r.kind, identified: r.identified, missingArt, noSubs: noSubsOf(r), check };
 }
 
 /** In words, what the safe fixes will do for one title ("poster, logo · subtitles · 52 files renamed"). */
 export function describeFixes(t: FixTarget, what: FixKind[]): string[] {
   const out: string[] = [];
   const names: Record<string, string> = { Primary: "poster", Backdrop: "background", Logo: "logo", Thumb: "thumbnail", Banner: "banner" };
+  if (what.includes("identify") && !t.identified) out.push("identify it when there's one exact match (same name and year)");
   if (what.includes("art") && t.identified && t.missingArt.length) out.push(`look for ${t.missingArt.map((k) => names[k] ?? k).join(", ")}`);
   if (what.includes("art") && !t.identified && t.missingArt.length) out.push("artwork skipped: identify it first");
   if (what.includes("subs") && t.noSubs > 0) out.push(t.kind === "series" ? `subtitles for ${t.noSubs} episode${t.noSubs === 1 ? "" : "s"}` : "subtitles");
@@ -63,10 +65,44 @@ export function namesToFix(c: CheckRow | null): boolean {
 /** What `fixTitles` would do for this title, in words ("2 pictures", "subtitles", "names"). */
 export function safeFixes(t: FixTarget): FixKind[] {
   const out: FixKind[] = [];
+  if (!t.identified) out.push("identify");
   if (t.identified && t.missingArt.length) out.push("art");
   if (t.noSubs > 0) out.push("subs");
   if (t.check?.sure) out.push("rename");
   return out;
+}
+
+/** "The Little Mermaid (1989) Remastered 1080p" → words to compare ("little mermaid"). */
+export function titleKey(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\[[^\]]*\]|\{[^}]*\}/g, " ")
+    .replace(/\(?(19|20)\d{2}\)?.*$/, " ")
+    .replace(/\b(the|a|an|and|directors?'?s?|extended|special|theatrical|final|ultimate|edition|cut|version|remaster(ed)?|restored|remake|unrated|uncut)\b/g, " ")
+    .replace(/&/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/** The one search result with exactly this name and year, if there is exactly one. */
+export function exactMatch<T extends { Name?: string; ProductionYear?: number }>(results: T[], name: string, year: number | null | undefined): T | null {
+  const key = titleKey(name);
+  const found = name.match(/\b(?:19|20)\d{2}\b/);
+  const y = year ?? (found ? Number(found[0]) : null);
+  if (!key || !y) return null;
+  const hits = results.filter((r) => r.Name && titleKey(r.Name) === key && r.ProductionYear === y);
+  const ids = new Set(hits.map((h) => JSON.stringify((h as unknown as { ProviderIds?: unknown }).ProviderIds ?? h.Name)));
+  return hits.length > 0 && ids.size === 1 ? hits[0] : null;
+}
+
+/** Identifies a title when the search finds exactly one result with the same name and year. */
+export async function identifyExact(t: { id: string; kind: "series" | "movie"; name: string; year?: number | null }): Promise<boolean> {
+  const plain = t.name.replace(/\[[^\]]*\]/g, "").replace(/\(?(19|20)\d{2}\)?.*$/, "").replace(/[._]/g, " ").trim();
+  const results = await api.identifySearch(t.kind, plain || t.name, t.year ?? null, {});
+  const hit = exactMatch(results, t.name, t.year);
+  if (!hit) return false;
+  await api.identifyApply(t.id, hit, false);
+  return true;
 }
 
 /** One video's subtitle failing is skipped; a limit or login problem stops the whole run. */
@@ -128,6 +164,7 @@ export async function renameSure(r: CheckRow): Promise<number> {
 }
 
 export interface FixResult {
+  identified?: number;
   art: number;
   subs: number;
   renamed: number;
@@ -136,7 +173,7 @@ export interface FixResult {
 }
 
 export function fixSummary(r: FixResult): string {
-  const parts = [r.art ? `${r.art} picture${r.art === 1 ? "" : "s"}` : "", r.subs ? `${r.subs} subtitle${r.subs === 1 ? "" : "s"}` : "", r.renamed ? `${r.renamed} file${r.renamed === 1 ? "" : "s"} renamed` : ""].filter(Boolean);
+  const parts = [r.identified ? `${r.identified} identified` : "", r.art ? `${r.art} picture${r.art === 1 ? "" : "s"}` : "", r.subs ? `${r.subs} subtitle${r.subs === 1 ? "" : "s"}` : "", r.renamed ? `${r.renamed} file${r.renamed === 1 ? "" : "s"} renamed` : ""].filter(Boolean);
   const err = r.errors[0] ? ` · Problem: ${r.errors[0]}` : "";
   return (parts.length ? parts.join(", ") : "Nothing could be fixed automatically") + err;
 }
@@ -146,9 +183,15 @@ export async function fixTitles(list: FixTarget[], what: FixKind[], subLangs: st
   const r: FixResult = { art: 0, subs: 0, renamed: 0, errors: [] };
   const fail = (e: unknown) => { const t = errorText(e); if (!r.errors.includes(t)) r.errors.push(t); };
   const renamedFolders: string[] = [];
-  for (const [i, t] of list.entries()) {
+  for (let [i, t] of list.entries()) {
     if (job.cancelled) break;
     job.update(t.name, i / list.length);
+    if (what.includes("identify") && !t.identified) {
+      if (await identifyExact(t).catch((e) => { fail(e); return false; })) {
+        r.identified = (r.identified ?? 0) + 1;
+        t = { ...t, identified: true };
+      }
+    }
     if (what.includes("art") && t.identified && t.missingArt.length) {
       r.art += (await api.fillMissingArt(t.id, t.missingArt).catch((e) => { fail(e); return [] as string[]; })).length;
       await api.fillMissingArt(t.id, ["Banner", "Art", "Disc"]).catch(() => undefined); // optional ones: just add them when found

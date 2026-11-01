@@ -13,8 +13,9 @@ import { agoText, useSaved } from "./saved";
 import { Seg } from "./kit";
 import { folderOff, setPrefs, usePrefs } from "./prefs";
 import { foldersSummary, savePart } from "./scan";
+import { nav } from "./nav";
 
-export interface LooseShow { folder: string; name: string; loose: number; seasons: number }
+export interface LooseShow { folder: string; name: string; loose: number; seasons: number; messy?: string[] }
 export interface TopFolder { folder: string; kind: "tv" | "movies" | "mixed" | "empty"; shows: LooseShow[]; looseMovies: string[]; folderedMovies: string[] }
 interface ArtistMerge { from: string; to: string; albums: string[] }
 
@@ -191,16 +192,21 @@ export default function Folders({ status }: { status: Status }) {
 
 /** Where a movie should end up and whether it's there. */
 function movieWant(m: MovieFolder, keepCollections: boolean): { mode: "fix" | "collect"; to: string } {
+  if (m.kind === "nested") return { mode: "fix", to: `${parentOf(parentOf(m.folder))}/${m.expected}` };
   if (keepCollections && m.collection) return { mode: "collect", to: `${m.top}/${m.collection}/${m.expected}` };
   const parent = m.kind === "own" ? parentOf(m.folder) : m.kind === "loose" ? m.top : m.folder;
   return { mode: "fix", to: `${parent}/${m.expected}` };
 }
 function movieNeeds(m: MovieFolder, keepCollections: boolean): boolean {
+  if (m.doubt) return false;
+  if (m.kind === "nested") return true;
   const w = movieWant(m, keepCollections);
   return !(m.kind === "own" && m.folder === w.to);
 }
 
-function MovieSuggestions({ top, list, readOnly, onDone }: { top: string; list: MovieFolder[]; readOnly: boolean; onDone: () => void }) {
+function MovieSuggestions({ top, list: everything, readOnly, onDone }: { top: string; list: MovieFolder[]; readOnly: boolean; onDone: () => void }) {
+  const doubtful = everything.filter((m) => m.doubt);
+  const list = everything.filter((m) => !m.doubt);
   const { keepCollections } = usePrefs();
   const [groupOut, setGroupOut] = useState<Record<string, boolean>>({});
   const [groupName, setGroupName] = useState<Record<string, string>>({});
@@ -209,7 +215,7 @@ function MovieSuggestions({ top, list, readOnly, onDone }: { top: string; list: 
   const sel = useUndoableSet<string>();
 
   // With collections: movies of a collection together. Otherwise: per folder they're in.
-  const collected = keepCollections ? list.filter((m) => m.collection) : [];
+  const collected = keepCollections ? list.filter((m) => m.collection && m.kind !== "nested") : [];
   const rest = list.filter((m) => !collected.includes(m));
   const byColl = useMemo(() => {
     const g = new Map<string, MovieFolder[]>();
@@ -252,7 +258,7 @@ function MovieSuggestions({ top, list, readOnly, onDone }: { top: string; list: 
     <label key={m.video} className="check small mf-row">
       <input type="checkbox" checked={sel.has(m.video)} onChange={() => sel.toggle(m.video)} />
       {mark(m.video)}
-      <span className="mono ellipsis" title={m.kind === "own" ? m.folder : m.video}>{m.kind === "own" ? last(m.folder) : last(m.video)}</span>
+      <span className="mono ellipsis" title={m.kind === "own" || m.kind === "nested" ? m.folder : m.video}>{m.kind === "nested" ? `${last(parentOf(m.folder))}/${last(m.folder)}` : m.kind === "own" ? last(m.folder) : last(m.video)}</span>
       <span className="muted">→</span>
       <span className="mono ellipsis accent" title={to}>{to.slice(top.length + 1)}</span>
     </label>
@@ -267,6 +273,23 @@ function MovieSuggestions({ top, list, readOnly, onDone }: { top: string; list: 
         </label>
       </div>
       {error && <p className="error">{error}</p>}
+
+      {doubtful.length > 0 && (
+        <div className="card form folders-card">
+          <div className="row"><Icon name="warn" size={14} /><b className="grow">{doubtful.length} movie{doubtful.length === 1 ? "" : "s"} may be identified wrong</b>
+            <span className="muted small">Jellyfin's name doesn't match the file, so these are left alone. Identify them, then look again.</span></div>
+          <div className="struct-list">
+            {doubtful.map((m) => (
+              <div key={m.video} className="small mf-row">
+                <span className="mono ellipsis" title={m.video}>{last(m.video)}</span>
+                <span className="muted">Jellyfin says</span>
+                <span className="strong ellipsis">{m.title}{m.year ? ` (${m.year})` : ""}</span>
+                <button className="link small" onClick={() => nav.open(m.id)}>Identify…</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {byColl.map(([c, ms]) => (
         <div key={c} className="card form folders-card">
@@ -350,7 +373,7 @@ function ShowSuggestions({ folder, readOnly, onDone }: { folder: TopFolder | nul
       const plan = await api.structurePlan(actions);
       const wanted = plan.ops;
       await run(`Season folders (${actions.length} show${actions.length === 1 ? "" : "s"})`, plan.planId, wanted, (f) => shows.find((s) => f.startsWith(s.folder + "/"))?.folder ?? null,
-        `Put the episodes of ${actions.length} show${actions.length === 1 ? "" : "s"} in season folders (with their subtitles)?`);
+        `Give ${actions.length} show${actions.length === 1 ? "" : "s"} proper season folders? Loose episodes move in (with their subtitles) and downloaded season folders are renamed "Season NN".`);
     } catch (e) {
       setError(errorText(e));
     }
@@ -359,8 +382,8 @@ function ShowSuggestions({ folder, readOnly, onDone }: { folder: TopFolder | nul
     <div className="card form folders-card">
       <div className="row">
         <TriCheck state={sel.state(shows.map((s) => s.folder))} onChange={(on) => sel.setMany(shows.map((s) => s.folder), on)} />
-        <b className="grow">{shows.length} show{shows.length === 1 ? "" : "s"} get season folders</b>
-        <span className="muted small">Episodes go into <span className="mono">Season 01</span>, <span className="mono">Season 02</span> …</span>
+        <b className="grow">{shows.length} show{shows.length === 1 ? "" : "s"} get proper season folders</b>
+        <span className="muted small">Loose episodes and downloaded season folders (<span className="mono">You.S05.1080p…</span>) become <span className="mono">Season 05</span></span>
       </div>
       {error && <p className="error small">{error}</p>}
       <div className="struct-list">
@@ -369,7 +392,7 @@ function ShowSuggestions({ folder, readOnly, onDone }: { folder: TopFolder | nul
             <input type="checkbox" checked={sel.has(s.folder)} onChange={() => sel.toggle(s.folder)} />
             {mark(s.folder)}
             <span className="ellipsis">{s.name}</span>
-            <span className="muted">{s.loose} episode{s.loose === 1 ? "" : "s"} loose{s.seasons ? ` · ${s.seasons} season folder${s.seasons === 1 ? "" : "s"} already` : ""}</span>
+            <span className="muted ellipsis">{[s.loose ? `${s.loose} episode${s.loose === 1 ? "" : "s"} loose` : "", s.messy?.length ? `${s.messy.length} season folder${s.messy.length === 1 ? "" : "s"} to rename (${s.messy[0].slice(0, 40)}${s.messy[0].length > 40 ? "…" : ""})` : ""].filter(Boolean).join(" · ")}</span>
           </label>
         ))}
       </div>

@@ -469,7 +469,9 @@ export interface MovieFolder {
   video: string;
   folder: string;
   top: string;
-  kind: "own" | "shared" | "loose";
+  kind: "own" | "shared" | "loose" | "nested";
+  /** Jellyfin's title doesn't look like the file: maybe identified wrong, never moved automatically. */
+  doubt: boolean;
   group: string | null;
   expected: string;
   ok: boolean;
@@ -952,6 +954,8 @@ export const api = {
     invoke<void>("save_segments", { itemId, intro, credits, recap, clear }),
   ffmpegInfo: () => invoke<{ path: string | null; version: string | null }>("ffmpeg_info"),
   pickFfmpeg: () => invoke<string | null>("pick_ffmpeg"),
+  /** A piece of an episode straight from the library folder (fast); fails when it can't be done. */
+  previewWindow: (id: string, start: number, seconds: number) => invoke<string>("preview_window", { id, start, seconds }),
   playStart: (id: string, start: number, audioIndex: number | null = null) => invoke<PlayInfo>("play_start", { id, start, audioIndex }),
   playStop: (token: string) => invoke<void>("play_stop", { token }),
   playProgress: (token: string, position: number, finished: boolean) => invoke<void>("play_progress", { token, position, finished }),
@@ -1032,6 +1036,7 @@ export const api = {
     invoke<{ folder: string; moved: number; copied: number; skipped: string[]; trashed: boolean; keptBecause: string | null }>("import_run", { dest, title, year, mode }),
   clearResume: (id: string) => invoke<void>("clear_resume", { id }),
   inboxPick: () => invoke<string | null>("inbox_pick"),
+  inboxReveal: () => invoke<void>("inbox_reveal"),
   inboxScan: () => invoke<[string | null, InboxItem[]]>("inbox_scan"),
   inboxResolve: (key: string, target: InboxTarget) => invoke<InboxPlan>("inbox_resolve", { key, target }),
   inboxPlace: (key: string, moves: InboxMove[]) => invoke<{ placed: string[]; skipped: number; failed: string[]; trashed: boolean }>("inbox_place", { key, moves }),
@@ -1160,10 +1165,20 @@ export function languageName(code: string, list: Culture[]): string {
 }
 
 /** "Bluey (2018)" → "Bluey" when the year is shown separately anyway. */
+/** Edition words that aren't part of a title ("Directors Cut", "Special Cut Remastered"). */
+const EDITION = /[\s._(\[-]+(?:(?:the[\s._-]+)?(?:directors?'?s?|director'?s|extended|special|theatrical|final|ultimate|collectors?'?s?|anniversary|limited|definitive)[\s._-]+(?:cut|edition|version)|unrated|uncut|remaster(?:ed)?|restored|remake|re-?cut|despecialized|open[\s._-]matte)(?:[\s._-]+(?:cut|edition|version))?(?=$|[\s._)\]-])/gi;
+export function stripEditions(name: string): string {
+  let out = name;
+  for (let i = 0; i < 4; i++) out = out.replace(EDITION, " ");
+  out = out.replace(/\s+/g, " ").replace(/[\s(\[-]+$/, "").trim();
+  return /[\p{L}\p{N}]/u.test(out) ? out : name;
+}
+
 export function cleanTitle(name: string, year?: number | null): string {
-  const m = name.match(/^(.*?)\s*\((\d{4})\)\s*$/);
-  if (m && (!year || Number(m[2]) === year)) return m[1];
-  return name;
+  const n = name.replace(/\s*[\[{](?:tmdb|tvdb|imdb)(?:id)?[-=][^\]}]*[\]}]/gi, "").trim();
+  const m = n.match(/^(.*?)\s*\((\d{4})\)(.*)$/);
+  if (m && (!year || Number(m[2]) === year)) return stripEditions(m[1]);
+  return stripEditions(n);
 }
 
 /** "Name (Year)" for lists: a year already in the name is not shown twice. */

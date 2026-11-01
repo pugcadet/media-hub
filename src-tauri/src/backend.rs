@@ -495,7 +495,10 @@ pub async fn intro_skipper_libraries(state: State<'_, AppState>) -> Result<Skipp
     let Some(id) = c.plugin_id("intro skipper").await? else {
         return Ok(SkipperLibs { installed: false, available, selected: vec![], all: true });
     };
-    let cfg = c.plugin_config(&id).await?;
+    let Ok(cfg) = c.plugin_config(&id).await else {
+        // Installed but its settings can't be read (usually: Jellyfin needs a restart).
+        return Ok(SkipperLibs { installed: false, available, selected: vec![], all: true });
+    };
     let selected: Vec<String> = cfg
         .get("SelectedLibraries")
         .and_then(Value::as_str)
@@ -513,7 +516,7 @@ pub async fn intro_skipper_libraries(state: State<'_, AppState>) -> Result<Skipp
 pub async fn set_intro_skipper_libraries(state: State<'_, AppState>, names: Vec<String>) -> Result<()> {
     let w = state.writer().await?;
     let id = w.reader().plugin_id("intro skipper").await?.ok_or_else(|| Error::msg("The Intro Skipper plugin isn't installed in Jellyfin."))?;
-    let mut cfg = w.reader().plugin_config(&id).await?;
+    let mut cfg = w.reader().plugin_config(&id).await.map_err(|_| Error::msg("Intro Skipper's settings can't be read right now. Restart Jellyfin (Media Hub → Jellyfin → Restart) and try again."))?;
     let clean: Vec<String> = names.into_iter().map(|n| n.replace(',', " ").trim().to_string()).filter(|n| !n.is_empty()).take(50).collect();
     let obj = cfg.as_object_mut().ok_or_else(|| Error::msg("Intro Skipper's settings look different than expected."))?;
     obj.insert("SelectedLibraries".into(), Value::String(clean.join(", ")));

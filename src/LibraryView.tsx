@@ -162,7 +162,7 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
   async function fixAll() {
     const list = shown.filter((r) => score(r) < 1);
     if (!list.length) return;
-    const what: FixKind[] = ["art", "subs", "rename"];
+    const what: FixKind[] = ["identify", "art", "subs", "rename"];
     const plan = await askFixes("Fix what's safe", list.map((r) => targetOf(r, r.check)), what);
     if (!plan) return;
     await track(`Fixing ${plan.list.length} titles`, (job) => fixTitles(plan.list, plan.what, st.subLangs, job).then(() => undefined), { cancellable: true, items: plan.list.map((t) => t.id) }).catch(() => undefined);

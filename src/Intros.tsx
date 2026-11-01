@@ -655,11 +655,41 @@ function SegPreview({ ep, draft, parts, first, onSet }: { ep: SegEpisode; draft:
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
+  // Fast path: a window of the episode read straight from the NAS (start, or the end for
+  // credits). If that can't be done (other video formats), Jellyfin's stream is used.
+  const winFor = (p: Part): [number, number] => (p === "credits" ? [Math.max(0, ep.duration - 420), Math.min(ep.duration, 420)] : [0, Math.min(ep.duration || 480, 480)]);
+  const [win, setWin] = useState<{ base: number; len: number; url: string } | null>(null);
+  const [useHls, setUseHls] = useState(false);
+  const base = useHls ? 0 : win?.base ?? 0;
   useEffect(() => {
+    if (useHls) return;
+    const [b0, len] = winFor(part);
+    if (win && win.base === b0) return;
+    let alive = true;
+    setReady(false);
+    api.previewWindow(ep.id, b0, len)
+      .then((url) => {
+        if (!alive) return;
+        setWin({ base: b0, len, url });
+        const v = video.current;
+        if (v) {
+          const target = (draft[part]?.start ?? b0) - b0 - 3;
+          v.src = url;
+          v.currentTime = Math.max(0, target);
+        }
+        setReady(true);
+      })
+      .catch(() => alive && setUseHls(true));
+    return () => { alive = false; };
+  }, [ep.id, part, useHls]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!useHls) return;
     let hls: Hls | null = null;
     let token: string | null = null;
     let cancelled = false;
     const startAt = draft.intro?.start ?? 0;
+    setReady(false);
     api.playStart(ep.id, 0).then((p) => {
       token = p.token;
       if (cancelled) { void api.playStop(p.token).catch(() => undefined); return; }
@@ -679,10 +709,21 @@ function SegPreview({ ep, draft, parts, first, onSet }: { ep: SegEpisode; draft:
       hls?.destroy();
       if (token) void api.playStop(token).catch(() => undefined);
     };
-  }, [ep.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ep.id, useHls]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const now = () => video.current?.currentTime ?? 0;
-  const seek = (t: number) => { if (video.current) video.current.currentTime = Math.max(0, Math.min(ep.duration, t)); };
+  const now = () => base + (video.current?.currentTime ?? 0);
+  const seek = (t: number) => {
+    const v = video.current;
+    if (!v) return;
+    const want = Math.max(0, Math.min(ep.duration, t));
+    if (!useHls && win && (want < win.base || want > win.base + win.len)) {
+      // Outside the piece that's loaded: fetch the piece around it.
+      const b0 = Math.max(0, want - 60);
+      void api.previewWindow(ep.id, b0, 420).then((url) => { setWin({ base: b0, len: 420, url }); v.src = url; v.currentTime = want - b0; }).catch(() => setUseHls(true));
+      return;
+    }
+    v.currentTime = want - base;
+  };
   const setIn = () => {
     const t = now();
     const cur = draft[part];
@@ -714,7 +755,7 @@ function SegPreview({ ep, draft, parts, first, onSet }: { ep: SegEpisode; draft:
   return (
     <div className="seg-preview">
       <div className="seg-video">
-        <video ref={video} controls onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)} />
+        <video ref={video} controls onTimeUpdate={(e) => setTime(base + e.currentTarget.currentTime)} onError={() => { if (!useHls && win) setUseHls(true); }} />
         {!ready && !error && <div className="muted small seg-video-note">Starting…</div>}
         {error && <div className="error small seg-video-note">{error}</div>}
       </div>

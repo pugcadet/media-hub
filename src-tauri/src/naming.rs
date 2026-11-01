@@ -28,6 +28,10 @@ re!(re_year, r"(?:^|[ ._(\[-])((?:19|20)\d{2})(?:$|[ ._)\]-])");
 re!(re_season_dir, r"(?i)^(?:season|series|s)[ ._-]*(\d{1,2})$");
 re!(re_res, r"(?i)^\d{3,4}[pi]$");
 re!(re_brackets, r"\[[^\]]*\]");
+// Edition words that are not part of the title ("Directors Cut", "Special Cut Remastered").
+re!(re_edition, r"(?i)[ ._(\[-]+(?:(?:the[ ._-]+)?(?:directors?'?s?|director'?s|extended|special|theatrical|final|ultimate|collectors?'?s?|anniversary|limited|definitive|\d{1,3}(?:th|st|nd|rd)[ ._-]+anniversary)[ ._-]+(?:cut|edition|version)|unrated|uncut|remaster(?:ed)?|restored|remake|re-?cut|criterion(?:[ ._-]+collection)?|despecialized|open[ ._-]matte)(?:[ ._-]+(?:cut|edition|version))?(?:$|[ ._)\]-]+)");
+// Release-style season folders: "You.S05.1080p…", "You.SEASON.03.S03.COMPLETE…", "YOU (2018) Season 02 S02 (…)".
+re!(re_season_release, r"(?i)(?:^|[ ._(\[-])(?:season|series)[ ._-]*(\d{1,2})(?:$|[^0-9])|(?:^|[ ._(\[-])s(\d{1,2})(?:$|[ ._)\]-])");
 
 // ---------------------------------------------------------------- file names
 
@@ -66,11 +70,12 @@ const JUNK: &[&str] = &[
 /// Turns a release-style tail ("Muddy.Puddles.1080p.WEB-DL.x264") into a plain title.
 pub fn clean_release(s: &str) -> String {
     let no_brackets = re_brackets().replace_all(s, " ").to_string();
-    let spaced = if no_brackets.contains(' ') {
+    let spaced = if no_brackets.trim().contains(' ') {
         no_brackets
     } else {
         no_brackets.replace(['.', '_'], " ")
     };
+    let spaced = strip_editions(&spaced);
     let mut words: Vec<&str> = Vec::new();
     for w in spaced.split_whitespace() {
         let key = w
@@ -87,20 +92,36 @@ pub fn clean_release(s: &str) -> String {
         .to_string()
 }
 
+/// Removes edition words ("Directors Cut", "Remastered", "Extended Edition") from a title.
+/// The whole title is never removed ("Remastered" alone stays).
+pub fn strip_editions(s: &str) -> String {
+    let mut out = s.to_string();
+    loop {
+        let next = re_edition().replace_all(&out, " ").to_string();
+        if next == out {
+            break;
+        }
+        out = next;
+    }
+    let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    let out = out.trim_matches(|c: char| c == ' ' || c == '-' || c == '.' || c == '_' || c == '(' || c == '[').to_string();
+    if out.chars().any(|c| c.is_alphanumeric()) { out } else { s.to_string() }
+}
+
 /// True when a name needs tidying for its own sake: release tags (quality, codec, source,
 /// group like "[YTS.MX]") or dots/underscores instead of spaces. Names that are only in a
 /// different style ("Show - 1x02", no year, no episode title) are not messy: Jellyfin reads them.
 pub fn is_messy(stem: &str) -> bool {
     let s = stem.trim();
-    for m in re_brackets().find_iter(s) {
-        let inner = m.as_str().to_lowercase();
-        // Jellyfin's own id tags ([tmdbid-123], [imdbid-tt…]) are wanted.
-        if !(inner.contains("id-") || inner.contains("tmdb") || inner.contains("tvdb") || inner.contains("imdb")) {
-            return true;
-        }
+    // Any [bracket] counts: release groups, and also id tags ([tmdbid-123]), which you don't want in names.
+    if re_brackets().is_match(s) || re_idtag().is_match(s) {
+        return true;
     }
     if !s.contains(' ') && (s.matches('.').count() >= 2 || s.contains('_')) {
         return true;
+    }
+    if strip_editions(s) != s.split_whitespace().collect::<Vec<_>>().join(" ") {
+        return true; // "Sling Blade Directors Cut (1996)"
     }
     let spaced = if s.contains(' ') { s.to_string() } else { s.replace(['.', '_'], " ") };
     spaced.split(|c: char| c.is_whitespace() || c == '.').any(|w| {
@@ -195,6 +216,21 @@ pub fn parse_name(raw: &str) -> ParsedName {
     out
 }
 
+/// The title to name a movie by: the database's, unless the file's own name is the same title
+/// with more to it ("Star Wars" vs the file's "Star Wars Episode IV - A New Hope"), then the
+/// file's, so the folder and the file say the same thing.
+pub fn fuller_title(db: &str, file: &str) -> String {
+    fn words(t: &str) -> Vec<String> {
+        t.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+    }
+    let (d, f) = (words(db), words(file));
+    if !d.is_empty() && f.len() > d.len() && f[..d.len()] == d[..] && file.chars().any(|c| c.is_uppercase()) {
+        file.trim().to_string()
+    } else {
+        db.trim().to_string()
+    }
+}
+
 // ------------------------------------------------------------------- episodes
 
 #[derive(Debug, Clone, PartialEq)]
@@ -210,7 +246,36 @@ pub fn season_from_dir(name: &str) -> Option<u32> {
     if name.eq_ignore_ascii_case("specials") {
         return Some(0);
     }
-    re_season_dir().captures(name).and_then(|c| c[1].parse().ok())
+    if let Some(n) = re_season_dir().captures(name).and_then(|c| c[1].parse().ok()) {
+        return Some(n);
+    }
+    season_from_release_dir(name)
+}
+
+/// "Season 1", "S01", "Specials": a season folder named the plain way (any style).
+pub fn is_plain_season_dir(name: &str) -> bool {
+    name.eq_ignore_ascii_case("specials") || re_season_dir().is_match(name)
+}
+
+/// A downloaded season folder: "You.S05.1080p.WEBRip", "You.SEASON.03.S03.COMPLETE",
+/// "YOU (2018) Season 02 S02 (1080p …)". Not an episode ("S05E01") and only one season.
+pub fn season_from_release_dir(name: &str) -> Option<u32> {
+    if re_sxe().is_match(name) || re_nxm().is_match(name) {
+        return None;
+    }
+    let mut found: Option<u32> = None;
+    for c in re_season_release().captures_iter(name) {
+        let n: u32 = c.get(1).or(c.get(2))?.as_str().parse().ok()?;
+        match found {
+            Some(f) if f != n => return None, // "S01-S03": several seasons
+            _ => found = Some(n),
+        }
+    }
+    // A plain name with a lone "S2" in it isn't enough unless it also looks like a release.
+    let f = found?;
+    let lower = name.to_lowercase();
+    let releaseish = lower.contains("season") || lower.contains("complete") || is_messy(name) || re_season_dir().is_match(name);
+    releaseish.then_some(f)
 }
 
 /// Reads the season and episode number(s) out of a file name (no extension).
@@ -410,7 +475,44 @@ mod tests {
         assert!(!is_messy("Bluey - S01E02"));
         assert!(!is_messy("Mr. Robot - S01E01 - eps1.0_hellofriend.mov"[..23].trim()));
         assert!(!is_messy("Ad Astra (2019)"));
-        assert!(!is_messy("Ad Astra (2019) [tmdbid-419704]"));
+        assert!(is_messy("Ad Astra (2019) [tmdbid-419704]"));
+        assert!(is_messy("Sling Blade Directors Cut (1996)"));
+    }
+
+    #[test]
+    fn edition_words_are_not_the_title() {
+        assert_eq!(parse_name("Sling Blade Directors Cut (1996)").title, "Sling Blade");
+        assert_eq!(parse_name("Aliens (1986) Special Cut Remastered").title, "Aliens");
+        assert_eq!(parse_name("Blade.Runner.1982.The.Final.Cut.1080p").title, "Blade Runner");
+        assert_eq!(parse_name("Apocalypse Now Redux Extended Edition (1979)").title, "Apocalypse Now Redux");
+        assert_eq!(parse_name("Dawn of the Dead Remake (2004)").title, "Dawn of the Dead");
+        assert_eq!(parse_name("The Director (2010)").title, "The Director");
+        assert_eq!(parse_name("Final Destination (2000)").title, "Final Destination");
+        assert_eq!(parse_name("Special (2006)").title, "Special");
+        assert_eq!(strip_editions("Remastered"), "Remastered");
+        assert_eq!(parse_name("Heat.1995.Directors.Cut.1080p.BluRay").title, "Heat");
+        assert_eq!(clean_release("Some.Movie.Extended.Cut.1080p"), "Some Movie");
+    }
+
+    #[test]
+    fn fuller_titles() {
+        assert_eq!(fuller_title("Star Wars", "Star Wars Episode IV - A New Hope"), "Star Wars Episode IV - A New Hope");
+        assert_eq!(fuller_title("Dune: Part Two", "Dune Part Two"), "Dune: Part Two");
+        assert_eq!(fuller_title("Alien", "Aliens"), "Alien");
+        assert_eq!(fuller_title("Heat", "heat extra words"), "Heat");
+    }
+
+    #[test]
+    fn release_season_folders() {
+        assert_eq!(season_from_dir("You.SEASON.03.S03.COMPLETE.1080p.10bit.WEBRip.6CH.x265.HEVC-PSA"), Some(3));
+        assert_eq!(season_from_dir("You.SEASON.01.S01.COMPLETE.1080p.WEB-DL.6CH.x265.HEVC-PSA"), Some(1));
+        assert_eq!(season_from_dir("You.S05.1080p.WEBRip.10bit.DDP5.1.x265-HODL"), Some(5));
+        assert_eq!(season_from_dir("You.S04.Complete.1080p.WEBRip.DDP5.1.H.265-HODL"), Some(4));
+        assert_eq!(season_from_dir("YOU (2018) Season 02 S02 (1080p NF WEB-DL x265 HEVC 10bit AC3 5.1 Qman) [UTR]"), Some(2));
+        assert_eq!(season_from_dir("Season 2"), Some(2));
+        assert_eq!(season_from_dir("You.S01E01.1080p"), None);
+        assert_eq!(season_from_dir("Show.S01-S03.1080p"), None);
+        assert_eq!(season_from_dir("Extras"), None);
         assert!(!is_messy("Bluey"));
     }
 

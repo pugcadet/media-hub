@@ -63,7 +63,7 @@ function RenameDetails({ t, open, onToggle }: { t: FixTarget; open: boolean; onT
   );
 }
 
-const KIND_LABEL: Record<FixKind, string> = { art: "Artwork", subs: "Subtitles", rename: "Rename (100% sure only)" };
+const KIND_LABEL: Record<FixKind, string> = { identify: "Identify (exact matches only)", art: "Artwork", subs: "Subtitles", rename: "Rename (100% sure only)" };
 
 export function FixDialogHost() {
   const req = useSyncExternalStore((f) => { subs.add(f); return () => subs.delete(f); }, () => current);

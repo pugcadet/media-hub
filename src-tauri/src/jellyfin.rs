@@ -865,7 +865,15 @@ impl Writer {
             "EndTicks": (end * TICKS_PER_SECOND).round() as i64,
         });
         let path = api.create.replace("{itemId}", id);
-        self.post(&path, &[("providerId", provider.to_string())], Some(&body)).await
+        let q = [("providerId", provider.to_string())];
+        // Jellyfin sometimes answers 500 when it's busy writing; once more after a moment.
+        match self.post(&path, &q, Some(&body)).await {
+            Err(e) if e.to_string().contains("500") => {
+                tokio_sleep(900).await;
+                self.post(&path, &q, Some(&body)).await
+            }
+            r => r,
+        }
     }
 
     pub async fn segment_delete(&self, api: &SegmentApi, segment_id: &str) -> Result<()> {
@@ -875,8 +883,13 @@ impl Writer {
         let start = api.delete.find('{').ok_or_else(|| Error::msg("bad api"))?;
         let end = api.delete[start..].find('}').map(|e| start + e + 1).ok_or_else(|| Error::msg("bad api"))?;
         let path = format!("{}{}{}", &api.delete[..start], segment_id, &api.delete[end..]);
-        let req = self.c.http.delete(self.c.url(&path));
-        self.c.send(req).await.map(|_| ())
+        match self.c.send(self.c.http.delete(self.c.url(&path))).await {
+            Err(e) if e.to_string().contains("500") => {
+                tokio_sleep(900).await;
+                self.c.send(self.c.http.delete(self.c.url(&path))).await.map(|_| ())
+            }
+            r => r.map(|_| ()),
+        }
     }
 
     /// A light refresh: Jellyfin looks at the files again (finds new subtitles), keeps all details.
@@ -1469,9 +1482,11 @@ impl Client {
     /// Id of the first installed plugin whose name matches.
     pub async fn plugin_id(&self, name_has: &str) -> Result<Option<String>> {
         let v: serde_json::Value = self.get_json("/Plugins", &[]).await?;
+        // Only a working copy has settings (an old version or one waiting for a restart doesn't).
         Ok(v.as_array().into_iter().flatten().find_map(|p| {
             let n = p.get("Name")?.as_str()?.to_lowercase();
-            n.contains(name_has).then(|| p.get("Id")?.as_str().map(|x| x.replace('-', "")))?
+            let active = p.get("Status").and_then(|s| s.as_str()).map(|s| s.eq_ignore_ascii_case("active")).unwrap_or(true);
+            (n.contains(name_has) && active).then(|| p.get("Id")?.as_str().map(|x| x.replace('-', "")))?
         }))
     }
 
@@ -1688,4 +1703,9 @@ impl Writer {
     pub async fn restart_server(&self) -> Result<()> {
         self.post("/System/Restart", &[], None).await
     }
+}
+
+/// A pause that doesn't block other work.
+async fn tokio_sleep(ms: u64) {
+    let _ = tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_millis(ms))).await;
 }

@@ -133,7 +133,7 @@ export default function Health({ status: st, focus }: { status: Status; focus: "
   async function fixAll() {
     const list = shown.filter((r) => score(r) < 1);
     if (!list.length) return;
-    const what: FixKind[] = focus === "art" ? ["art"] : ["art", "subs", "rename"];
+    const what: FixKind[] = focus === "art" ? ["identify", "art"] : ["identify", "art", "subs", "rename"];
     const plan = await askFixes("Fix what's safe", list.map((r) => targetOf(r, r.check, focus === "art")), what);
     if (!plan) return;
     await track(`Fixing ${plan.list.length} titles`, (job) => fixTitles(plan.list, plan.what, st.subLangs, job).then(() => undefined), { cancellable: true, reload: false }).catch(() => undefined);

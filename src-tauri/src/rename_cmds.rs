@@ -16,10 +16,10 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 fn stamp() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis().to_string())
-        .unwrap_or_else(|_| "0".into())
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    format!("{ms}-{n}")
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
@@ -385,7 +385,7 @@ pub(crate) async fn make_plan(state: &AppState, args: PlanArgs) -> Result<(PlanR
             chosen_score.map(|s| {
                 let known = !titles.is_empty() && op.season.map(|se| op.episodes.iter().all(|e| titles.contains_key(&(se, *e)))).unwrap_or(false);
                 // The databases disagree about this one: never a "100% match".
-                let disputed = op.note.as_deref().map(|n| n.contains("under another number")).unwrap_or(false);
+                let disputed = op.note.as_deref().map(|n| n.contains("under another number") || n.contains("the file's name differs")).unwrap_or(false);
                 if known && !disputed { s } else { s.min(60) }
             })
         } else {

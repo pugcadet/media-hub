@@ -2258,3 +2258,11 @@ button.dash-recent-tile:hover .dash-recent-art { border-color: var(--accent); tr
 .folders-card > .row { flex-wrap: wrap; }
 .folders-card > .row > b.grow { min-width: 220px; }
 .sub-inline { padding-left: 58px; }
+button.inbox-choice:has(.inbox-choice-pic) { flex-direction: row; align-items: center; gap: 12px; }
+.inbox-choice-pic { width: 44px; height: 66px; flex: 0 0 44px; border-radius: 6px; object-fit: cover; background: var(--panel2); }
+.inbox-choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.inbox-pics { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.inbox-pic { all: unset; cursor: pointer; width: 74px; display: flex; flex-direction: column; gap: 3px; }
+.inbox-pic img, .inbox-pic .noart { width: 74px; height: 110px; border-radius: 8px; object-fit: cover; background: var(--panel2); border: 2px solid transparent; display: flex; align-items: center; justify-content: center; font-size: 11px; text-align: center; overflow: hidden; }
+.inbox-pic:hover img, .inbox-pic:hover .noart { border-color: var(--accent); }
+.inbox-pic > span.small { color: var(--muted); }

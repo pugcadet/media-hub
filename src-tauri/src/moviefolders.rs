@@ -10,15 +10,13 @@ use crate::error::{Error, Result};
 use crate::fsops;
 use crate::jellyfin::valid_item_id;
 use crate::local;
-use crate::naming::{is_video, sanitize, split_ext};
+use crate::naming::{fuller_title, is_video, parse_name, sanitize, split_ext};
 use crate::planner::PlanOp;
 use crate::state::{AppState, StoredPlan};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::OnceLock;
 use tauri::State;
 
 #[derive(Serialize, Clone, Debug)]
@@ -41,24 +39,63 @@ pub struct MovieFolder {
     pub expected: String,
     /// Already in a folder of its own with the right name.
     pub ok: bool,
+    /// Jellyfin's title doesn't look like the file's name: maybe identified wrong. Never
+    /// moved or renamed automatically; identify it first.
+    pub doubt: bool,
     /// The Jellyfin collection it's in, as a folder name ("Alien Collection"), when that
     /// collection holds two or more of your movies.
     pub collection: Option<String>,
 }
 
-fn tag_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"(?i)[\[{](?:tmdbid|imdbid|tvdbid|tmdb|imdb)[-=][A-Za-z0-9]+[\]}]").expect("tag pattern"))
-}
-
-/// "Alien (1979)", plus the id tag the current folder already has ("[tmdbid-348]").
-pub fn expected_name(title: &str, year: Option<i64>, current: &str) -> String {
+/// "Alien (1979)". Id tags ("[tmdbid-348]") are left out; the file's own fuller name wins
+/// when it's the same title with more to it ("Star Wars Episode IV - A New Hope (1977)").
+pub fn expected_name(title: &str, year: Option<i64>, video_stem: &str) -> String {
+    let file = parse_name(video_stem);
+    let title = if file.year.is_none() || file.year.map(i64::from) == year { fuller_title(title, &file.title) } else { title.trim().to_string() };
     let base = match year {
         Some(y) => format!("{} ({y})", title.trim()),
         None => title.trim().to_string(),
     };
-    let tag = tag_re().find(current).map(|m| format!(" {}", m.as_str())).unwrap_or_default();
-    sanitize(&format!("{base}{tag}"))
+    sanitize(&base)
+}
+
+/// Does Jellyfin's title fit the file or folder name? (Catches a wrong identification
+/// like "Aliens Special Cut" → "Alien Warrior".)
+pub fn fits(title: &str, year: Option<i64>, video_stem: &str, folder: &str) -> bool {
+    fn words(t: &str) -> Vec<String> {
+        t.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty() && *w != "the" && *w != "a").map(str::to_string).collect()
+    }
+    let want = words(title);
+    let close = |name: &str| {
+        let p = parse_name(name);
+        if let (Some(a), Some(b)) = (p.year.map(i64::from), year) {
+            if (a - b).abs() > 1 {
+                return false;
+            }
+        }
+        let got = words(&p.title);
+        if got.is_empty() || want.is_empty() {
+            return false;
+        }
+        let n = got.len().min(want.len());
+        got[..n] == want[..n] || crate::sources::similarity(&p.title, title) >= 0.8
+    };
+    close(video_stem) || close(folder)
+}
+
+/// A folder named after exactly this movie ("Sling Blade (1996)"), not a collection ("Alien Collection").
+fn same_movie_folder(title: &str, year: Option<i64>, name: &str) -> bool {
+    fn words(t: &str) -> Vec<String> {
+        t.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+    }
+    let p = parse_name(name);
+    if let (Some(a), Some(b)) = (p.year.map(i64::from), year) {
+        if a != b {
+            return false;
+        }
+    }
+    let (got, want) = (words(&p.title), words(title));
+    !got.is_empty() && (got == want || crate::sources::similarity(&p.title, title) >= 0.9)
 }
 
 fn parent(rel: &str) -> &str {
@@ -69,13 +106,27 @@ fn last(rel: &str) -> &str {
     rel.rsplit('/').next().unwrap_or(rel)
 }
 
-/// Sorts the movies into own / shared / loose, with their collection folder (pure, for tests).
+/// Sorts the movies into own / shared / loose / nested, with their collection folder (pure, for tests).
+/// - own: the only movie in its folder, and no other movie anywhere below that folder;
+/// - shared: next to other movies, or in a folder that also holds other movies' folders
+///   (a collection folder: never renamed as if it were this movie's folder);
+/// - nested: its own folder sits inside another folder of the same movie
+///   ("Sling Blade (1996)/Sling Blade (1996) [tmdbid-…]/…"): the inner folder goes;
+/// - loose: straight in the main folder.
 pub fn classify(movies: Vec<(String, String, Option<i64>, String)>) -> Vec<MovieFolder> {
-    // How many different movies sit in each folder (extra parts of one movie don't count).
+    // How many different movies sit in each folder, and below each folder.
     let mut per_dir: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut below: HashMap<String, HashSet<String>> = HashMap::new();
     for (id, _, _, video) in &movies {
-        per_dir.entry(parent(video).to_string()).or_default().insert(id.clone());
+        let dir = parent(video).to_string();
+        per_dir.entry(dir.clone()).or_default().insert(id.clone());
+        let mut d = dir.as_str();
+        while !d.is_empty() {
+            below.entry(d.to_string()).or_default().insert(id.clone());
+            d = parent(d);
+        }
     }
+    let count = |m: &HashMap<String, HashSet<String>>, k: &str| m.get(k).map(|s| s.len()).unwrap_or(0);
     let mut out = Vec::new();
     for (id, title, year, video) in movies {
         let folder = parent(&video).to_string();
@@ -83,19 +134,26 @@ pub fn classify(movies: Vec<(String, String, Option<i64>, String)>) -> Vec<Movie
         if folder.is_empty() || top.is_empty() || top == video {
             continue; // straight in the library folder: nothing sensible to suggest
         }
-        let shared = per_dir.get(&folder).map(|s| s.len() > 1).unwrap_or(false);
-        let kind = if folder == top { "loose" } else if shared { "shared" } else { "own" };
+        let stem = split_ext(last(&video)).0.to_string();
+        let alone = count(&per_dir, &folder) <= 1 && count(&below, &folder) <= 1;
+        let up = parent(&folder).to_string();
+        let mut kind = if folder == top { "loose" } else if alone { "own" } else { "shared" };
+        // Its own folder inside a folder that is also just this movie: nested.
+        if kind == "own" && up != top && !up.is_empty() && count(&below, &up) <= 1 && same_movie_folder(&title, year, last(&up)) {
+            kind = "nested";
+        }
         let group = match kind {
-            "own" => Some(parent(&folder).to_string()).filter(|g| g != &top && !g.is_empty()),
+            "own" => Some(up.clone()).filter(|g| g != &top && !g.is_empty()),
             "shared" => Some(folder.clone()),
             _ => None,
         };
-        let expected = expected_name(&title, year, if kind == "own" { last(&folder) } else { "" });
+        let expected = expected_name(&title, year, &stem);
         if expected.is_empty() {
             continue;
         }
+        let doubt = !fits(&title, year, &stem, last(&folder));
         let ok = kind == "own" && last(&folder) == expected;
-        out.push(MovieFolder { id, title, year, video, folder, top, kind, group, expected, ok, collection: None });
+        out.push(MovieFolder { id, title, year, video, folder, top, kind, group, expected, ok, doubt, collection: None });
     }
     out.sort_by(|a, b| a.video.to_lowercase().cmp(&b.video.to_lowercase()));
     out
@@ -219,6 +277,31 @@ fn sidecars(root: &Path, video: &str) -> Vec<String> {
         .collect()
 }
 
+/// Subtitles named only by their language ("English.srt", "eng.srt") get the video's name, so
+/// Jellyfin and Infuse pick them up: "Movie (1996).eng.srt".
+fn language_subs(root: &Path, dir: &str, video_stem: &str, taken: &mut HashSet<String>) -> Vec<PlanOp> {
+    const LANGS: &[(&[&str], &str)] = &[
+        (&["english", "eng", "en"], "eng"), (&["dutch", "nederlands", "dut", "nld", "nl"], "dut"), (&["french", "francais", "fre", "fra", "fr"], "fre"),
+        (&["german", "deutsch", "ger", "deu", "de"], "ger"), (&["spanish", "espanol", "spa", "es"], "spa"), (&["italian", "ita", "it"], "ita"),
+    ];
+    let Ok(rd) = std::fs::read_dir(root.join(dir)) else { return Vec::new() };
+    let mut out = Vec::new();
+    for e in rd.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        let (stem, ext) = split_ext(&n);
+        if !matches!(ext.to_lowercase().as_str(), "srt" | "ass" | "ssa" | "vtt" | "sub") || !e.path().is_file() {
+            continue;
+        }
+        let key = stem.to_lowercase();
+        let (base, forced) = key.strip_suffix(".forced").map(|b| (b, true)).unwrap_or((key.as_str(), false));
+        if let Some((_, code)) = LANGS.iter().find(|(names, _)| names.contains(&base)) {
+            let to = format!("{dir}/{video_stem}.{code}{}.{}", if forced { ".forced" } else { "" }, ext.to_lowercase());
+            out.push(op(format!("{dir}/{n}"), to, "sidecar", None, taken, root));
+        }
+    }
+    out
+}
+
 /// The moves for what you chose. Files first, then movie folders, then collection folders.
 pub fn plan(root: &Path, movies: &[MovieFolder], moves: &[MovieMove], groups: &[GroupRename]) -> Result<Vec<PlanOp>> {
     let by_video: HashMap<&str, &MovieFolder> = movies.iter().map(|m| (m.video.as_str(), m)).collect();
@@ -232,7 +315,31 @@ pub fn plan(root: &Path, movies: &[MovieFolder], moves: &[MovieMove], groups: &[
             ("collect", Some(c)) => Some(format!("{}/{c}", m.top)),
             _ => None,
         };
+        if m.doubt {
+            continue; // maybe identified wrong: never moved by a batch
+        }
+        if m.kind == "nested" {
+            // Everything in the inner folder moves up into the outer one, which gets the name;
+            // the empty inner folder is tidied away afterwards.
+            let outer = parent(&m.folder).to_string();
+            if let Ok(rd) = std::fs::read_dir(root.join(&m.folder)) {
+                for e in rd.flatten() {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    if n.starts_with('.') {
+                        continue;
+                    }
+                    files.push(op(format!("{}/{n}", m.folder), format!("{outer}/{n}"), if is_video(&n) { "video" } else { "sidecar" }, None, &mut taken, root));
+                }
+            }
+            files.extend(language_subs(root, &outer, split_ext(last(&m.video)).0, &mut taken));
+            let to = format!("{}/{}", parent(&outer), m.expected);
+            if to != outer {
+                folders.push(op(outer.clone(), to, "folder", Some(m.title.clone()), &mut taken, root));
+            }
+            continue;
+        }
         if m.kind == "own" {
+            files.extend(language_subs(root, &m.folder, split_ext(last(&m.video)).0, &mut taken));
             // The whole folder moves (or is renamed): extras and posters inside go along.
             let to_parent = collect.clone().unwrap_or_else(|| if out { m.top.clone() } else { parent(&m.folder).to_string() });
             let to = format!("{to_parent}/{}", m.expected);
@@ -302,12 +409,61 @@ mod tests {
         assert_eq!(get("a").expected, "Alien (1979)");
         assert!(!get("a").ok);
         assert!(get("b").ok);
-        assert_eq!(get("c").expected, "Heat (1995) [tmdbid-949]", "the id tag stays");
-        assert!(get("c").ok);
+        assert_eq!(get("c").expected, "Heat (1995)", "id tags are left out");
+        assert!(!get("c").ok);
         assert_eq!(get("c").group, None);
         assert_eq!(get("d").kind, "loose");
         assert_eq!(get("e").kind, "shared");
         assert_eq!(get("e").group.as_deref(), Some("Movies/Pixar"));
+    }
+
+    #[test]
+    fn never_swallows_or_nests_movies() {
+        let list = classify(vec![
+            // A collection folder with one loose movie and another movie's folder inside.
+            m("a", "Aliens", 1986, "Movies/Alien Collection/Aliens (1986) Special Cut Remastered.mkv"),
+            m("b", "Alien: Romulus", 2024, "Movies/Alien Collection/Alien - Romulus (2024)/Alien Romulus.mkv"),
+            // A movie folder inside a folder of the same movie.
+            m("c", "Sling Blade", 1996, "Movies/Sling Blade (1996)/Sling Blade (1996) [tmdbid-12498]/Sling Blade Directors Cut (1996).mp4"),
+            // A one-movie collection folder is not "the same movie".
+            m("d", "Alien", 1979, "Movies/Alien Saga/Alien (1979)/Alien.mkv"),
+            // Identified wrong.
+            m("e", "Alien Warrior", 1986, "Movies/Aliens (1986)/Aliens (1986) Special Cut Remastered.mkv"),
+            // Fuller name from the file.
+            m("f", "Star Wars", 1977, "Movies/Star Wars Collection/Star Wars (1977)/Star Wars Episode IV - A New Hope (1977).mkv"),
+            m("g", "Return of the Jedi", 1983, "Movies/Star Wars Collection/Return of the Jedi (1983)/Return of the Jedi (1983).mkv"),
+        ]);
+        let get = |id: &str| list.iter().find(|x| x.id == id).unwrap();
+        assert_eq!(get("a").kind, "shared", "the collection folder isn't Aliens' own folder");
+        assert_eq!(get("a").group.as_deref(), Some("Movies/Alien Collection"));
+        assert_eq!(get("a").expected, "Aliens (1986)");
+        assert_eq!(get("b").kind, "own");
+        assert_eq!(get("c").kind, "nested");
+        assert_eq!(get("c").expected, "Sling Blade (1996)");
+        assert_eq!(get("d").kind, "own");
+        assert!(get("e").doubt);
+        assert!(!get("a").doubt && !get("c").doubt && !get("f").doubt);
+        assert_eq!(get("f").expected, "Star Wars Episode IV - A New Hope (1977)");
+        assert!(get("g").ok);
+    }
+
+    #[test]
+    fn nested_folders_are_flattened() {
+        let root = std::env::temp_dir().join(format!("mh-nested-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for f in ["Movies/Sling Blade (1996)/Sling Blade (1996) [tmdbid-12498]/Sling Blade Directors Cut (1996).mp4", "Movies/Sling Blade (1996)/English.srt"] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+        let v = "Movies/Sling Blade (1996)/Sling Blade (1996) [tmdbid-12498]/Sling Blade Directors Cut (1996).mp4";
+        let movies = classify(vec![m("c", "Sling Blade", 1996, v)]);
+        let ops = plan(&root, &movies, &[MovieMove { video: v.into(), mode: "fix".into() }], &[]).unwrap();
+        let pairs: Vec<(&str, &str)> = ops.iter().map(|o| (o.from.as_str(), o.to.as_str())).collect();
+        assert!(pairs.contains(&(v, "Movies/Sling Blade (1996)/Sling Blade Directors Cut (1996).mp4")), "{pairs:?}");
+        assert!(pairs.contains(&("Movies/Sling Blade (1996)/English.srt", "Movies/Sling Blade (1996)/Sling Blade Directors Cut (1996).eng.srt")), "{pairs:?}");
+        assert!(!pairs.iter().any(|p| p.1.contains("tmdbid")));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

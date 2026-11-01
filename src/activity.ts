@@ -62,6 +62,13 @@ export function reloadItems(ids: (string | null | undefined)[]): void {
   list.forEach((i) => itemEpochs.set(i, (itemEpochs.get(i) ?? 0) + 1));
   notify();
   itemSubs.forEach((f) => f(list));
+  // The saved library check learns about the change too, so Home, the menu counts and the
+  // Library stop showing a problem that was just fixed.
+  void Promise.all(list.slice(0, 40).map((id) => invoke("health_row", { id }).catch(() => null))).then(() => {
+    clearCache();
+    epoch++;
+    notify();
+  });
 }
 
 /** Changes when this title changed (after a job about it). */

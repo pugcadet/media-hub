@@ -1,6 +1,7 @@
 // "Identify" as a popup: search the providers set up in Jellyfin, pick the right match.
 // Opened from anywhere with askIdentify(); applying it reloads only that title.
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { exactMatch } from "./fixers";
 import { api, cleanTitle, errorText, ImageKind, remoteImageUrl, SearchResult } from "./api";
 import { track } from "./activity";
 import { Icon } from "./ui";
@@ -54,6 +55,7 @@ function IdentifyDialog({ req }: { req: Req }) {
   const [replaceImages, setReplaceImages] = useState(true);
   const [fillArt, setFillArt] = useState(true);
   const { pinIds: pin } = usePrefs();
+  const exact = results ? exactMatch(results, name, year ? Number(year) : null) : null;
 
   const search = useCallback(async () => {
     setSearching(true);
@@ -127,17 +129,17 @@ function IdentifyDialog({ req }: { req: Req }) {
         <div className="row">
           <label className="check"><input type="checkbox" checked={replaceImages} onChange={(e) => setReplaceImages(e.target.checked)} />Use the match's artwork</label>
           <label className="check"><input type="checkbox" checked={fillArt} onChange={(e) => setFillArt(e.target.checked)} />Then fill in artwork that's still missing</label>
-          <label className="check" title="Renames the folder to e.g. “Heat (1995) [tmdbid-949]”. Jellyfin then always matches it the same way, also after a reset. History can undo it."><input type="checkbox" checked={pin} onChange={(e) => setPrefs({ pinIds: e.target.checked })} />Make it stick: put the match in the folder name</label>
+          <label className="check" title="Renames the folder to the matched name and year, e.g. “Heat (1995)”. History can undo it."><input type="checkbox" checked={pin} onChange={(e) => setPrefs({ pinIds: e.target.checked })} />Make it stick: name the folder after the match</label>
         </div>
         {error && <p className="error">{error}</p>}
         <div className="id-results">
           {searching && !results && <div className="pg-loading"><span className="spinner" /> Searching…</div>}
           {results && results.length === 0 && <p className="muted">No matches. Try another spelling, the year, or an id from TMDB/IMDb.</p>}
-          {(results ?? []).map((r, i) => (
+          {(exact ? [exact, ...(results ?? []).filter((x) => x !== exact)] : results ?? []).map((r, i) => (
             <div className={`match ${isNow(r) ? "now" : ""}`} key={i}>
               <div className="art">{r.ImageUrl ? <img src={remoteImageUrl(r.ImageUrl)} alt="" loading="lazy" /> : <div className="noart">{r.Name}</div>}</div>
               <div className="match-text">
-                <div className="title">{r.Name}{r.ProductionYear ? ` (${r.ProductionYear})` : ""}{isNow(r) && <span className="flag ok">Current match</span>}</div>
+                <div className="title">{r.Name}{r.ProductionYear ? ` (${r.ProductionYear})` : ""}{isNow(r) && <span className="flag ok">Current match</span>}{!isNow(r) && r === exact && <span className="flag ok">Exact match</span>}</div>
                 <div className="muted small">{r.SearchProviderName}{Object.entries(r.ProviderIds ?? {}).map(([k, v]) => ` · ${k} ${v}`).join("")}</div>
                 {r.Overview && <p className="small">{r.Overview.slice(0, 240)}{r.Overview.length > 240 ? "…" : ""}</p>}
               </div>

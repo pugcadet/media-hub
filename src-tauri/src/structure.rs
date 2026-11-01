@@ -19,6 +19,19 @@ pub struct LooseShow {
     /// Episodes directly in the show folder (not in a season folder).
     pub loose: usize,
     pub seasons: usize,
+    /// Season folders with a download's name ("You.S05.1080p.WEBRip…") that become "Season 05".
+    #[serde(default)]
+    pub messy: Vec<String>,
+}
+
+/// "Season 05" (or "Specials") for a season folder whose name isn't that yet.
+fn canonical_season(name: &str) -> Option<String> {
+    if crate::naming::is_plain_season_dir(name) {
+        return None; // "Season 1" is fine as it is
+    }
+    let n = season_from_dir(name)?;
+    let want = if n == 0 { "Specials".to_string() } else { format!("Season {n:02}") };
+    (want != name).then_some(want)
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -97,8 +110,13 @@ pub fn scan(root: &Path) -> Vec<TopFolder> {
             let season_dirs = inner_dirs.iter().filter(|x| season_from_dir(&name_of(x)).is_some()).count();
             if eps > 0 || season_dirs > 0 {
                 tv_votes += 1;
-                if eps > 0 {
-                    t.shows.push(LooseShow { folder: rel(root, &d), name: name_of(&d), loose: eps, seasons: season_dirs });
+                // Only one folder per season can take the name; two downloads of one season stay.
+                let mut wanted: Vec<(String, String)> = inner_dirs.iter().filter_map(|x| canonical_season(&name_of(x)).map(|w| (name_of(x), w))).collect();
+                let dup: Vec<String> = wanted.iter().map(|w| w.1.clone()).filter(|w| wanted.iter().filter(|x| &x.1 == w).count() > 1).collect();
+                wanted.retain(|w| !dup.contains(&w.1) && !inner_dirs.iter().any(|x| name_of(x) == w.1));
+                let messy: Vec<String> = wanted.into_iter().map(|w| w.0).collect();
+                if eps > 0 || !messy.is_empty() {
+                    t.shows.push(LooseShow { folder: rel(root, &d), name: name_of(&d), loose: eps, seasons: season_dirs, messy });
                 }
             } else if vids.len() == 1 && inner_dirs.iter().all(|x| !videos(&list(x).1).iter().any(|_| true) || name_of(x).to_lowercase().contains("extra")) {
                 movie_votes += 1;
@@ -170,6 +188,17 @@ pub fn plan(root: &Path, actions: &[Action]) -> Result<Vec<PlanOp>> {
         let (subs, files) = list(&dir);
         match a.kind.as_str() {
             "seasons" => {
+                // Downloaded season folders get the plain name ("Season 05"), when it's free.
+                let names: Vec<String> = subs.iter().map(|d| name_of(d)).collect();
+                for d in &subs {
+                    let n = name_of(d);
+                    if let Some(want) = canonical_season(&n) {
+                        let taken = names.iter().any(|x| x == &want) || subs.iter().filter(|x| canonical_season(&name_of(x)).as_deref() == Some(want.as_str())).count() > 1;
+                        if !taken {
+                            ops.push(mv(root, d, format!("{}/{want}", a.path), "folder", None));
+                        }
+                    }
+                }
                 for v in videos(&files) {
                     let Some(m) = parse_episode(split_ext(&name_of(v)).0, None) else { continue };
                     let season = if m.season == 0 { "Specials".to_string() } else { format!("Season {:02}", m.season) };
@@ -319,6 +348,25 @@ mod tests {
         let p = root.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, b"x").unwrap();
+    }
+
+    #[test]
+    fn downloaded_season_folders_get_plain_names() {
+        let root = std::env::temp_dir().join(format!("mh-seasons-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for f in ["TV/YOU/You.S05.1080p.WEBRip.10bit.DDP5.1.x265-HODL/You.S05E01.mkv", "TV/YOU/Season 1/You.S01E01.mkv", "TV/YOU/YOU (2018) Season 02 S02 (1080p NF WEB-DL x265 HEVC 10bit AC3 5.1 Qman) [UTR]/You.S02E01.mkv"] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+        let t = scan(&root);
+        let show = &t[0].shows[0];
+        assert_eq!(show.messy.len(), 2, "{show:?}");
+        let ops = plan(&root, &[Action { kind: "seasons".into(), path: "TV/YOU".into() }]).unwrap();
+        let to: Vec<&str> = ops.iter().map(|o| o.to.as_str()).collect();
+        assert!(to.contains(&"TV/YOU/Season 05") && to.contains(&"TV/YOU/Season 02"), "{to:?}");
+        assert!(!to.iter().any(|t| t.ends_with("Season 01")));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

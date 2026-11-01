@@ -407,6 +407,16 @@ pub fn plan_tv(
                 title = current.clone();
             }
         }
+        // The file names the episode differently than the database: never "100% sure".
+        let generic = {
+            let c = current.to_lowercase();
+            c.split(|ch: char| !ch.is_alphanumeric()).filter(|w| !w.is_empty()).all(|w| matches!(w, "episode" | "ep" | "part" | "pt" | "chapter") || w.chars().all(|ch| ch.is_ascii_digit()))
+        };
+        let differs = kept.is_none() && !current.is_empty() && !generic && !looked_up.is_empty() && !same_episode_title(&title, &current)
+            && !current.split(" + ").all(|part| title.split(" + ").any(|t| same_episode_title(t, part)));
+        if differs {
+            kept = Some(format!("The file calls it “{current}”, the database calls this number “{title}”: check which is right (the file's name differs)."));
+        }
         let first = m.episodes[0];
         let mut sxe = format!("S{:02}E{:02}", m.season, first);
         for e in &m.episodes[1..] {
@@ -440,11 +450,15 @@ pub fn plan_tv(
         };
         let parts = parts_of(&rendered, true);
         let mut new_name = name_with_rules(&parts.file, &rules);
-        if req.year_optional && without_year(name) == without_year(&new_name) {
-            new_name = name.to_string();
-        }
-        if req.minimal && !crate::naming::is_messy(stem) {
-            new_name = name.to_string();
+        // A year in an episode file name the pattern doesn't want ("Show (2018) - S01E01") goes.
+        let unwanted_year = without_year(name) != name && without_year(&new_name) == new_name;
+        if !unwanted_year {
+            if req.year_optional && without_year(name) == without_year(&new_name) {
+                new_name = name.to_string();
+            }
+            if req.minimal && !crate::naming::is_messy(stem) {
+                new_name = name.to_string();
+            }
         }
         if top_name.is_none() {
             top_name = parts.top.clone();
@@ -587,8 +601,13 @@ pub fn plan_movies(
         if let Some(m) = found {
             tmdb = m.tmdb.clone().or(tmdb);
         }
-        let title = found.map(|m| m.title.clone()).unwrap_or(title0);
         let year = found.and_then(|m| m.year).or(year0);
+        // The file's own fuller name wins when it's the same title with more to it (same year).
+        let title = match found {
+            Some(m) if year0.is_none() || year0 == m.year => crate::naming::fuller_title(&m.title, &title0),
+            Some(m) => m.title.clone(),
+            None => title0,
+        };
 
         let mut vars: HashMap<&str, Var> = HashMap::new();
         vars.insert("title", Var::text(title.as_str()));
@@ -853,6 +872,40 @@ mod tests {
         assert_eq!(folders.len(), 1, "{ops:#?}");
         assert_eq!(folders[0].to, "TV/Bluey (2018)");
         assert_eq!(without_year("Bluey (2018) - S01E01.mkv"), "Bluey - S01E01.mkv");
+    }
+
+    #[test]
+    fn a_year_in_episode_files_goes_when_the_pattern_has_none() {
+        let f = files(&["TV/SpongeBob SquarePants (1999)/Season 08/SpongeBob SquarePants (1999) - S08E01 - Accidents Will Happen.mkv"]);
+        let mut r = req("TV/SpongeBob SquarePants (1999)", "{show}< ({year})>/{seasondir}/{show} - {sxe}< - {title}>.{ext}");
+        r.year = Some(1999);
+        r.year_optional = true;
+        r.minimal = true;
+        let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
+        assert_eq!(ops[0].to, "TV/SpongeBob SquarePants (1999)/Season 08/SpongeBob SquarePants - S08E01 - Accidents Will Happen.mkv", "{ops:#?}");
+    }
+
+    #[test]
+    fn a_different_title_in_the_file_is_flagged() {
+        let f = files(&["TV/SpongeBob SquarePants/Season 08/SpongeBob SquarePants - S08E05-E06 - Yours, Mine and Mine & Kracked Krabs.mkv"]);
+        let r = req("TV/SpongeBob SquarePants", "{show}/{seasondir}/{show} - {sxe}< - {title}>.{ext}");
+        let mut t = HashMap::new();
+        t.insert((8, 5), "The Curse of the Hex".to_string());
+        t.insert((8, 6), "The Hot Shot".to_string());
+        let ops = plan_tv(&f, &r, &t, &nothing_exists).unwrap();
+        assert!(ops[0].note.as_deref().unwrap_or("").contains("the file's name differs"), "{ops:#?}");
+        t.insert((8, 5), "Yours, Mine and Mine".to_string());
+        t.insert((8, 6), "Kracked Krabs".to_string());
+        let ops = plan_tv(&f, &r, &t, &nothing_exists).unwrap();
+        assert!(ops[0].note.is_none(), "{ops:#?}");
+    }
+
+    #[test]
+    fn release_season_folders_become_season_folders() {
+        let f = files(&["TV/You/You.S05.1080p.WEBRip.10bit.DDP5.1.x265-HODL/You.S05E01.1080p.WEBRip.mkv"]);
+        let r = req("TV/You", "{show}/{seasondir}/{show} - {sxe}< - {title}>.{ext}");
+        let ops = plan_tv(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
+        assert!(ops.iter().any(|o| o.kind == "folder" && o.to == "TV/You/Season 05"), "{ops:#?}");
     }
 
     #[test]

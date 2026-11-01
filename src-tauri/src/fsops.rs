@@ -291,6 +291,17 @@ pub fn apply_with(
         let target = if op.step_to.is_empty() { &op.to } else { &op.step_to };
         let step = |state, error| Step { index, total, from: op.from.clone(), to: target.clone(), state, error };
         progress(step("working", None));
+        // Gone since the preview (moved along with its folder, renamed elsewhere): skip it.
+        if !exists(root, &op.from) {
+            if exists(root, target) {
+                progress(step("done", None));
+            } else {
+                let why = "isn't there any more (moved or renamed since the preview), skipped".to_string();
+                progress(step("failed", Some(why.clone())));
+                failed.push(format!("{}: {why}", op.from));
+            }
+            continue;
+        }
         let id = journal.begin(batch, &root_str, &op.from, target)?;
         match move_with_timeout(root, &root_canon, &op.from, target) {
             Ok(()) => {

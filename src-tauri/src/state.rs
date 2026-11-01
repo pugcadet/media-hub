@@ -14,7 +14,8 @@ pub struct AppState {
     /// The API key, read from the key storage once and then kept in memory only.
     key: Mutex<Option<String>>,
     /// The last rename plan shown to the user. Apply only ever runs this exact plan.
-    plan: Mutex<Option<StoredPlan>>,
+    /// Recent previews (newest last), so two screens previewing at once don't cancel each other.
+    plan: Mutex<Vec<StoredPlan>>,
 }
 
 #[derive(Clone)]
@@ -38,7 +39,7 @@ impl AppState {
             store: Mutex::new(store),
             settings: Mutex::new(settings),
             key: Mutex::new(None),
-            plan: Mutex::new(None),
+            plan: Mutex::new(Vec::new()),
         })
     }
 
@@ -57,16 +58,20 @@ impl AppState {
     }
 
     pub fn set_plan(&self, p: StoredPlan) -> Result<()> {
-        *lock(&self.plan)? = Some(p);
+        let mut list = lock(&self.plan)?;
+        list.retain(|x| x.id != p.id);
+        list.push(p);
+        let extra = list.len().saturating_sub(40);
+        list.drain(..extra);
         Ok(())
     }
 
     /// Takes the plan out so it cannot be applied twice.
     pub fn take_plan(&self, id: &str) -> Result<StoredPlan> {
-        let mut slot = lock(&self.plan)?;
-        match slot.as_ref() {
-            Some(p) if p.id == id => Ok(slot.take().expect("checked")),
-            _ => Err(Error::msg("This preview is out of date. Make a new preview first.")),
+        let mut list = lock(&self.plan)?;
+        match list.iter().position(|p| p.id == id) {
+            Some(i) => Ok(list.remove(i)),
+            None => Err(Error::msg("This preview is out of date. Make a new preview first.")),
         }
     }
 

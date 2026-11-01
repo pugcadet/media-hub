@@ -562,6 +562,10 @@ async fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<V
             .body(bytes)
             .map_err(|e| Error::msg(e.to_string()));
     }
+    // A local preview window (made by `preview_window`), with seeking (Range).
+    if let Some(tok) = path.strip_prefix("/lv/") {
+        return serve_window(tok, request);
+    }
     let rest = path.strip_prefix("/s/").ok_or_else(|| Error::msg("bad path"))?;
     let (tok, file) = rest.split_once('/').ok_or_else(|| Error::msg("bad path"))?;
     // Only plain relative names: no "..", no encoded characters that a server could decode into "..".
@@ -603,6 +607,108 @@ async fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<V
         .header("Access-Control-Allow-Origin", "*")
         .body(body)
         .map_err(|e| Error::msg(e.to_string()))
+}
+
+fn windows() -> &'static Mutex<HashMap<String, std::path::PathBuf>> {
+    static W: OnceLock<Mutex<HashMap<String, std::path::PathBuf>>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn serve_window(tok: &str, request: &Request<Vec<u8>>) -> Result<Response<Vec<u8>>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let file = windows().lock().map_err(|_| Error::msg("internal error"))?.get(tok).cloned().ok_or_else(|| Error::msg("unknown window"))?;
+    let mut f = std::fs::File::open(&file)?;
+    let len = f.metadata()?.len();
+    let range = request.headers().get("range").and_then(|v| v.to_str().ok()).and_then(|r| r.strip_prefix("bytes=")).map(|r| {
+        let (a, b) = r.split_once('-').unwrap_or((r, ""));
+        let start: u64 = a.parse().unwrap_or(0);
+        let end: u64 = b.parse().unwrap_or(len.saturating_sub(1)).min(len.saturating_sub(1));
+        (start, end)
+    });
+    const CHUNK: u64 = 4 * 1024 * 1024;
+    let (start, end, partial) = match range {
+        Some((a, b)) if a < len => (a, b.min(a + CHUNK - 1), true),
+        _ => (0, len.saturating_sub(1).min(CHUNK - 1), len > CHUNK),
+    };
+    f.seek(SeekFrom::Start(start))?;
+    let mut buf = vec![0u8; (end + 1 - start) as usize];
+    f.read_exact(&mut buf)?;
+    let mut r = Response::builder()
+        .status(if partial || range.is_some() { 206 } else { 200 })
+        .header("Content-Type", "video/mp4")
+        .header("Accept-Ranges", "bytes")
+        .header("Cache-Control", "no-store")
+        .header("Access-Control-Allow-Origin", "*");
+    if partial || range.is_some() {
+        r = r.header("Content-Range", format!("bytes {start}-{end}/{len}"));
+    }
+    r.body(buf).map_err(|e| Error::msg(e.to_string()))
+}
+
+/// A piece of an episode, read straight from the library folder and repackaged (not
+/// re-encoded) so the window can play it at once: much quicker than Jellyfin preparing a
+/// stream. Only for H.264/HEVC video; otherwise it says so and the stream is used instead.
+#[tauri::command]
+pub async fn preview_window(state: State<'_, AppState>, id: String, start: f64, seconds: f64) -> Result<String> {
+    if !valid_item_id(&id) || !start.is_finite() || !seconds.is_finite() {
+        return Err(Error::msg("bad window"));
+    }
+    let item = state.reader().await?.item_json(&id).await?;
+    let video = crate::local::to_local(&state, item.get("Path").and_then(Value::as_str).unwrap_or(""))?;
+    let ff = crate::media_tools::locate_ffmpeg(state.settings()?.ffmpeg_path.as_deref()).ok_or_else(|| Error::msg("needs ffmpeg"))?;
+    let dir = state.dir.join("tmp");
+    std::fs::create_dir_all(&dir)?;
+    let (start, seconds) = (start.max(0.0), seconds.clamp(10.0, 900.0));
+    let out = dir.join(format!("win-{id}-{}.mp4", start.round() as i64));
+    let o = out.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<()> {
+        use std::process::{Command, Stdio};
+        // Which video codec (from ffmpeg's own description of the file).
+        let mut probe = Command::new(&ff);
+        probe.args(["-hide_banner", "-nostdin"]).arg("-i").arg(&video).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+        crate::media_tools::hide_window(&mut probe);
+        let info = String::from_utf8_lossy(&probe.output().map_err(|e| Error::msg(format!("Could not start ffmpeg: {e}")))?.stderr).to_lowercase();
+        let vline = info.lines().find(|l| l.contains("video:")).unwrap_or("");
+        let hevc = vline.contains("hevc") || vline.contains("h265");
+        if !(hevc || vline.contains("h264")) {
+            return Err(Error::msg("not h264/hevc"));
+        }
+        let mut cmd = Command::new(&ff);
+        cmd.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y"])
+            .args(["-ss", &format!("{start:.3}"), "-t", &format!("{seconds:.3}")])
+            .arg("-i")
+            .arg(&video)
+            .args(["-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn", "-c:v", "copy"])
+            .args(if hevc { vec!["-tag:v", "hvc1"] } else { vec![] })
+            .args(["-c:a", "aac", "-b:a", "160k", "-ac", "2", "-movflags", "+faststart"])
+            .arg(&o)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        crate::media_tools::hide_window(&mut cmd);
+        let r = cmd.output().map_err(|e| Error::msg(format!("Could not start ffmpeg: {e}")))?;
+        if !r.status.success() {
+            return Err(Error::msg("ffmpeg could not repackage it"));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| Error::msg(e.to_string()))??;
+    let tok = token()?;
+    let mut map = windows().lock().map_err(|_| Error::msg("internal error"))?;
+    // Keep only the last few windows (their temporary files are ours to remove).
+    if map.len() >= 6 {
+        let old: Vec<String> = map.keys().cloned().collect();
+        for k in old.into_iter().take(map.len() - 5) {
+            if let Some(p) = map.remove(&k) {
+                if p != out {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+    }
+    map.insert(tok.clone(), out);
+    Ok(format!("{}/lv/{tok}", media_base()))
 }
 
 /// A session for one song (music). Returns the address the window plays.
