@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { usePageState } from "./saved";
 import { api, cleanTitle, errorText, imageUrl, Item, SegSummary, Status } from "./api";
-import { ShowIntros } from "./Intros";
+import { detectAndSave, ShowIntros } from "./Intros";
+import { askConfirm } from "./confirm";
 import { track, useEpoch } from "./activity";
 import type { View } from "./nav";
 import { Icon, reloadData } from "./ui";
@@ -111,6 +112,30 @@ export default function IntrosTool({ status }: { status: Status; onNav?: (v: Vie
     return !x || x.intro < x.episodes || x.credits < x.episodes;
   });
 
+  async function findAll() {
+    const list = visible.slice();
+    if (!(await askConfirm(`Find intros and credits for ${list.length} show${list.length === 1 ? "" : "s"}?\n\nMedia Hub listens to every episode that's missing markers and saves the ones it's sure about. Episodes that already have markers are skipped. This can take a while; you can stop it any time, and every saved marker can be undone.`, { okLabel: "Find them" }))) return;
+    await track(`Finding intros and credits (${list.length} shows)`, async (job) => {
+      let saved = 0;
+      for (const [i, sh] of list.entries()) {
+        if (job.cancelled) break;
+        const sum = await api.segmentSummary(sh.id).catch(() => null);
+        if (sum && sum.episodes > 0 && sum.intro >= sum.episodes && sum.credits >= sum.episodes) continue; // already complete
+        job.update(`${cleanTitle(sh.name, sh.year)} · show ${i + 1} of ${list.length}`, i / list.length);
+        const d = await api.details(sh.id).catch(() => null);
+        const seasons = (d?.seasons ?? []).filter((x) => x.Id).map((x) => x.Id);
+        if (!seasons.length) continue;
+        const sub = {
+          update: (detail: string, p: number | null = null) => job.update(`${cleanTitle(sh.name, sh.year)} (${i + 1}/${list.length}) · ${detail}`, (i + (p ?? 0)) / list.length),
+          get cancelled() { return job.cancelled; },
+        };
+        saved += await detectAndSave(seasons, sub).catch(() => 0);
+        summaries.delete(sh.id);
+      }
+      job.update(`Markers saved for ${saved} episodes`, 1);
+    }, { cancellable: true, reload: true, stop: "detect" }).catch((e) => setError(errorText(e)));
+  }
+
   return (
     <div className="pg">
       <PageHead
@@ -119,6 +144,9 @@ export default function IntrosTool({ status }: { status: Status; onNav?: (v: Vie
         actions={show ? <button onClick={() => setShow(null)}><span className="flip"><Icon name="chevron" size={14} /></span> All shows</button>
           : <>
           <button onClick={() => void reloadData()}><Icon name="reload" /> Refresh</button>
+          <button className="primary" disabled={status.readOnly || !visible.length} onClick={() => void findAll()} title="Media Hub listens to each episode (with ffmpeg, straight from the NAS) and saves the intros and credits it's sure about">
+            <Icon name="wand" /> Find intros and credits for {visible.length === shows.length ? "all" : visible.length} shows
+          </button>
           {skipper && (
             <button onClick={() => void track("Starting Intro Skipper in Jellyfin", async (job) => { const n = await api.runIntroSkipper(); job.update(`“${n}” runs in Jellyfin now; markers appear as it goes`, 1); }, { reload: false }).catch(() => undefined)} title="Jellyfin's Intro Skipper plugin finds intros and credits on the server (for the folders chosen in Settings → Intros)">
               <Icon name="skip" /> Run Intro Skipper in Jellyfin

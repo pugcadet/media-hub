@@ -18,12 +18,12 @@ export function UpdateSettings() {
   const [info, setInfo] = useState<Info | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const check = () => {
+  const check = (manual: boolean) => {
     setBusy("Checking…");
     setError(null);
-    api.checkUpdate().then(setInfo).catch((e) => setError(errorText(e))).finally(() => setBusy(null));
+    api.checkUpdate(manual).then(setInfo).catch((e) => setError(errorText(e))).finally(() => setBusy(null));
   };
-  useEffect(check, []);
+  useEffect(() => check(false), []);
   return (
     <section className="card form">
       <h2>Updates</h2>
@@ -32,7 +32,7 @@ export function UpdateSettings() {
       {info?.available && info.notes && <p className="muted small" style={{ whiteSpace: "pre-wrap" }}>{info.notes.slice(0, 600)}</p>}
       {error && <p className="error">{error}</p>}
       <div className="row">
-        <button disabled={!!busy} onClick={check}>{busy === "Checking…" ? "Checking…" : "Check for updates"}</button>
+        <button disabled={!!busy} onClick={() => check(true)}>{busy === "Checking…" ? "Checking…" : "Check for updates"}</button>
         {info?.available && (
           <button className="primary" disabled={!!busy} onClick={() => {
             setBusy("Updating…");

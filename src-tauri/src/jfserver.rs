@@ -92,8 +92,8 @@ pub(crate) fn best_update(packages: &[Value], name: &str, installed: &str, serve
 }
 
 async fn latest_release() -> Option<String> {
-    let http = reqwest::Client::builder().user_agent("Media Hub").timeout(std::time::Duration::from_secs(8)).build().ok()?;
-    let v: Value = http.get("https://api.github.com/repos/jellyfin/jellyfin/releases/latest").send().await.ok()?.json().await.ok()?;
+    // Asked at most twice a day (GitHub limits how often it can be asked).
+    let v = crate::updater::github_latest("jellyfin/jellyfin", std::time::Duration::from_secs(12 * 3600)).await.ok()?;
     let tag = s(&v, "tag_name").trim_start_matches('v').to_string();
     (!tag.is_empty()).then_some(tag)
 }

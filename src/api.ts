@@ -897,7 +897,7 @@ export const api = {
   setUser: (id: string) => invoke<void>("set_user", { id }),
   setSyncWatched: (value: boolean) => invoke<void>("set_sync_watched", { value }),
   watchSyncTest: () => invoke<string>("watch_sync_test"),
-  checkUpdate: () => invoke<{ current: string; latest: string | null; available: boolean; notes: string }>("check_update"),
+  checkUpdate: (manual = false) => invoke<{ current: string; latest: string | null; available: boolean; notes: string }>("check_update", { manual }),
   installUpdate: () => invoke<void>("install_update"),
   pickRoot: () => invoke<string | null>("pick_library_root"),
   folders: (folder: string) => invoke<{ name: string }[]>("list_folders", { folder }),
