@@ -50,6 +50,7 @@ jobs:
         run: npx tauri build --bundles ${{ matrix.bundles }} ${{ matrix.target && format('--target {0}', matrix.target) || '' }} 2>&1 | tee -a ci.log
 
       - name: Publish release
+        if: github.ref == 'refs/heads/main'
         run: |
           set -e
           version=$(node -p "require('./src-tauri/tauri.conf.json').version")

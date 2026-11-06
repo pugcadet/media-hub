@@ -1,0 +1,59 @@
+name: check
+
+# Compiles and tests a work-in-progress branch (check/...) without making a release.
+# The log goes to the ci-logs branch as check/ci.log.
+on:
+  push:
+    branches: ['check/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: System libraries for Tauri
+        run: sudo apt-get update -q && sudo apt-get install -yq libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev > /dev/null
+      - name: Type check
+        run: |
+          set -o pipefail
+          npm install --no-audit --no-fund > /dev/null 2>&1
+          npx tsc --noEmit 2>&1 | tee -a ci.log
+      - name: Rust tests
+        run: |
+          set -o pipefail
+          cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee -a ci.log
+      - name: Save log
+        if: always()
+        run: |
+          mkdir -p ../w && cd ../w
+          git init -q -b ci-logs
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git fetch -q --depth 1 origin ci-logs || true
+          git checkout -q ci-logs 2>/dev/null || git checkout -q -b ci-logs
+          git reset -q --hard FETCH_HEAD 2>/dev/null || true
+          mkdir -p check
+          cp "$GITHUB_WORKSPACE/ci.log" check/ci.log || echo "no log" > check/ci.log
+          echo "job status: ${{ job.status }}  commit: ${{ github.sha }}  run: ${{ github.run_number }}" > check/status.txt
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          git add -A
+          git commit -q -m "check run ${{ github.run_number }}" || exit 0
+          for i in 1 2 3 4 5; do
+            git push -q origin ci-logs && exit 0
+            git fetch -q --depth 1 origin ci-logs && git rebase -q FETCH_HEAD || true
+            sleep 3
+          done
