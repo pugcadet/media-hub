@@ -220,6 +220,26 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
       ]}
     />
   );
+  /** The whole-library tools, by step, so nothing needs its own page in the menu. */
+  const toolsMenu = (): MenuItem[] => [
+    { label: "Naming", disabled: true },
+    { label: "Rename a whole folder…", run: () => nav.route({ view: "renamer" }) },
+    { label: "Tidy folders (seasons, loose movies)…", run: () => nav.route({ view: "renamer", section: "folders" }) },
+    { label: "Names and years…", run: () => nav.route({ view: "cleanup", section: "names" }) },
+    { sep: true },
+    { label: "Subtitles", disabled: true },
+    { label: "Subtitles for many titles…", run: () => nav.route({ view: "subtitles" }) },
+    { sep: true },
+    { label: "Intros", disabled: true },
+    { label: "Intros and credits for many shows…", run: () => nav.route({ view: "intros" }) },
+    { sep: true },
+    { label: "Clean-up", disabled: true },
+    { label: "Duplicates…", run: () => nav.route({ view: "cleanup", section: "duplicates" }) },
+    { label: "Missing episodes…", run: () => nav.route({ view: "cleanup", section: "missing" }) },
+    { label: "Big files and storage…", run: () => nav.route({ view: "cleanup", section: "storage" }) },
+    { label: "Episodes without a picture…", run: () => nav.route({ view: "cleanup", section: "pictures" }) },
+    { label: "Genres and tags…", run: () => nav.route({ view: "tags" }) },
+  ];
   const viewToggle = <Seg icons value={libraryView} onChange={(v) => setPrefs({ libraryView: v })} options={[{ id: "list", label: "List", title: "List", icon: "list" }, { id: "tiles", label: "Grid", title: "Grid", icon: "grid" }]} />;
   const todoCount = shown.filter((r) => score(r) < 1).length;
   const barTop = (
@@ -229,6 +249,7 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
       {folder !== "@music" && folder !== "@collections" && (
         <>
           <span className="muted small lib-summary">{checking ? "Checking…" : rows ? `${perfect} of ${inFolder.length} complete` : ""}</span>
+          <button onClick={(e) => openMenu(e, toolsMenu())} title="Whole-library tools">More tools <Icon name="chevron" size={12} /></button>
           <button disabled={checking} onClick={() => void reloadData().then(() => load(true)).catch(() => undefined)} title="Reads the library again from Jellyfin and your folders">{checking ? <span className="spinner small-spin" /> : <Icon name="reload" />} Refresh</button>
           <button className="primary" disabled={!canEdit || !rows || !todoCount} onClick={() => void fixAll()} title="Identifies exact matches, adds missing artwork and subtitles, and renames what's certain. Everything can be undone in History."><Icon name="wand" /> Fix what's safe ({todoCount})</button>
         </>

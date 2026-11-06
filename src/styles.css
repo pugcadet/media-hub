@@ -2476,3 +2476,4 @@ button.m-cover-opt { all: unset; cursor: pointer; display: flex; flex-direction:
 label.m-tagdiff-row { display: grid; grid-template-columns: 18px minmax(0, 110px) 90px minmax(0, 1fr) 16px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 13px; color: var(--text); }
 .m-tagdiff-row.off { opacity: .45; }
 .m-tag-from { color: #9a9a9a; text-decoration: line-through; }
+.crumb-bar { display: flex; align-items: center; gap: 10px; padding: 10px 24px; border-bottom: 1px solid #222; font-size: 13px; flex: 0 0 auto; }

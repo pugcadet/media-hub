@@ -26,6 +26,7 @@ pub struct Seg {
     end: f64,
 }
 
+#[cfg(test)]
 impl Seg {
     pub fn new(kind: &str, start: f64, end: f64) -> Seg {
         Seg { id: String::new(), kind: kind.into(), start, end }

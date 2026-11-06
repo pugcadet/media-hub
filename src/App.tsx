@@ -7,7 +7,7 @@ import Renamer from "./Renamer";
 import Settings from "./Settings";
 import Downloads from "./Downloads";
 import ItemPage from "./ItemPage";
-import TopBar from "./TopBar";
+import TopBar, { section } from "./TopBar";
 import { SubtitlesTool } from "./Tools";
 import IntrosTool from "./IntrosTool";
 import Dashboard from "./Dashboard";
@@ -23,6 +23,12 @@ import Cleanup from "./Cleanup";
 import History from "./History";
 
 export type { Route, View } from "./nav";
+
+/** The Library's tools, as the crumb above them says. */
+const TOOL_NAME: Partial<Record<string, string>> = {
+  renamer: "Naming", subtitles: "Subtitles", intros: "Intros", cleanup: "Clean-up", missing: "Missing episodes",
+  duplicates: "Duplicates", tags: "Genres and tags", storage: "Storage", downloads: "Downloads",
+};
 
 interface Open {
   id: string;
@@ -265,6 +271,9 @@ export default function App() {
     <div className="shell top">
       <TopBar status={status} route={route} onRoute={go} />
       <div className="main-col">
+        {!top && section(route.view) === "library" && !["library", "collections", "metadata", "health"].includes(route.view) && (
+          <div className="crumb-bar"><button className="link" onClick={() => go({ view: "library" })}>Library</button><span className="muted">›</span><span>{TOOL_NAME[route.view] ?? "Tool"}</span></div>
+        )}
         <div className="page" key={`${route.view}-${route.n ?? 0}`} ref={listRef} hidden={!!top} onScroll={(e) => { if (!top) listScroll.current = (e.target as HTMLDivElement).scrollTop; }}>{page}</div>
         {top && <div className="page" key={`item-${top.id}-${top.n ?? 0}`}>{itemPage}</div>}
       </div>
