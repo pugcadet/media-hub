@@ -5,12 +5,13 @@
 // download goes to the Trash.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { api, errorText, remoteImageUrl, HealthRow, InboxItem, InboxPlan, InboxTarget, scanAround, SearchResult, Status, stripEditions } from "./api";
+import { api, errorText, imageUrl, remoteImageUrl, HealthRow, InboxItem, InboxPlan, InboxTarget, scanAround, SearchResult, Status, stripEditions } from "./api";
 import { track, useEpoch } from "./activity";
 import { askConfirm } from "./confirm";
 import { IconBtn, PageHead, SearchBox, Seg } from "./kit";
 import { Icon } from "./ui";
 import { nav } from "./nav";
+import { getSubtitles } from "./fixers";
 import { prefs, setPrefs, usePrefs } from "./prefs";
 
 type State = "checking" | "ready" | "look" | "have" | "placing" | "done" | "failed";
@@ -28,6 +29,10 @@ interface Row {
   result?: string;
   /** Online candidates with their posters, to pick from when it needs a look. */
   pics?: SearchResult[];
+  /** A poster for the card (online match). */
+  art?: string | null;
+  /** Look up English subtitles after placing (ticked when the download has none). */
+  look?: boolean;
 }
 
 /* ------------------------------------------------------------------ matching */
@@ -94,7 +99,7 @@ async function detect(item: InboxItem, ctx: Ctx): Promise<Row> {
       const best = found.find((r) => likeness(r.Name ?? "", item.title) >= 0.92 && (!item.year || !r.ProductionYear || r.ProductionYear === item.year));
       const remembered = prefs().inboxShowTop[norm(best?.Name ?? item.title)];
       if (best) {
-        row = { ...base, state: noSeason ? "look" : "ready", ids: best.ProviderIds ?? {}, target: t({ title: best.Name ?? item.title, year: best.ProductionYear ?? item.year, top: remembered ?? defaultTop("tv", ctx) }), why: noSeason ? "New show; some files have no season or episode number" : `New show (${best.SearchProviderName ?? "online"} match)` };
+        row = { ...base, state: noSeason ? "look" : "ready", ids: best.ProviderIds ?? {}, target: t({ title: best.Name ?? item.title, year: best.ProductionYear ?? item.year, top: remembered ?? defaultTop("tv", ctx) }), art: best.ImageUrl ?? null, why: noSeason ? "New show; some files have no season or episode number" : `New show (${best.SearchProviderName ?? "online"} match)` };
       } else {
         row = { ...base, pics: found.slice(0, 4), target: t({ top: remembered ?? defaultTop("tv", ctx) }), why: noSeason ? "No show found and no season or episode in the name" : "No sure match online: pick the show" };
       }
@@ -108,13 +113,14 @@ async function detect(item: InboxItem, ctx: Ctx): Promise<Row> {
       const sure = found.filter((r) => likeness(r.Name ?? "", item.title) >= 0.92 && (!item.year || r.ProductionYear === item.year));
       const best = sure[0];
       row = best && (sure.length === 1 || item.year)
-        ? { ...base, state: "ready", ids: best.ProviderIds ?? {}, target: t({ title: best.Name ?? item.title, year: best.ProductionYear ?? item.year }), why: "New movie" }
+        ? { ...base, state: "ready", ids: best.ProviderIds ?? {}, art: best.ImageUrl ?? null, target: t({ title: best.Name ?? item.title, year: best.ProductionYear ?? item.year }), why: "New movie" }
         : { ...base, pics: (sure.length ? sure : found).slice(0, 4), target: t({}), ids: best?.ProviderIds ?? {}, why: sure.length > 1 ? `${sure.length} movies with this name: pick the right one` : "No sure match online: pick the movie" };
     }
   }
   if (row.target) {
     try {
       row.plan = await api.inboxResolve(item.key, row.target);
+      row.look = (row.target.kind === "tv" || row.target.kind === "movie") && !hasEnglish(row.plan);
       const vids = row.plan.moves.filter((m) => /\.(mkv|mp4|m4v|avi|mov|wmv|ts|m2ts|webm|mpg|mpeg|flac|mp3|m4a|ogg|opus|wav|aac|alac|aiff|aif)$/i.test(m.from));
       if (vids.length && vids.every((m) => m.have)) {
         row.state = "have";
@@ -128,6 +134,27 @@ async function detect(item: InboxItem, ctx: Ctx): Promise<Row> {
     }
   }
   return row;
+}
+
+/** The download brings an English subtitle along. */
+const hasEnglish = (p: InboxPlan | null) => !!p?.moves.some((m) => /\.eng(\.forced|\.sdh)*\.(srt|ass|ssa|vtt|sub|sup)$/i.test(m.to));
+const SUB_EXT = /\.(srt|ass|ssa|vtt|sub|idx|sup)$/i;
+const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|tbn)$/i;
+/** "Sample/sample.mkv, 6 other-language subtitles, RARBG.txt, poster.jpg, .nfo" */
+function trashText(left: string[]): string {
+  if (!left.length) return "nothing";
+  const name = (f: string) => f.split("/").pop() ?? f;
+  const subs = left.filter((f) => SUB_EXT.test(f));
+  const imgs = left.filter((f) => IMG_EXT.test(f));
+  const nfo = left.filter((f) => /\.nfo$/i.test(f));
+  const rest = left.filter((f) => !subs.includes(f) && !imgs.includes(f) && !nfo.includes(f));
+  const parts = [
+    ...rest.slice(0, 3).map(name), rest.length > 3 ? `${rest.length - 3} more files` : "",
+    subs.length ? `${subs.length} other-language subtitle${subs.length === 1 ? "" : "s"}` : "",
+    imgs.length === 1 ? name(imgs[0]) : imgs.length ? `${imgs.length} pictures` : "",
+    nfo.length ? ".nfo" : "",
+  ].filter(Boolean);
+  return parts.join(", ");
 }
 
 /* ------------------------------------------------------------------ the page */
@@ -149,6 +176,8 @@ export default function Inbox({ status }: { status: Status }) {
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [n, setN] = useState(0);
   const doneRows = useRef<Row[]>([]);
+  const rowsRef = useRef<Row[] | null>(null);
+  rowsRef.current = rows;
 
   useEffect(() => {
     let alive = true;
@@ -220,9 +249,27 @@ export default function Inbox({ status }: { status: Status }) {
             const ops = plan?.ops.filter((o) => o.status === "ok" && placed.has(o.from) && sure(o)).map((o) => o.from) ?? [];
             if (plan && ops.length) await api.apply(plan.planId, true, ops).catch(() => undefined);
           }
-          job.update("Asking Jellyfin to look", 0.95);
+          job.update("Asking Jellyfin to look", 0.9);
           await scanAround([...new Set(res.placed.map((p) => p.split("/").slice(0, -1).join("/")))]);
-          const msg = `${res.placed.length} placed${res.skipped ? ` · ${res.skipped} already there` : ""}${res.trashed ? " · download in the Trash" : ""}`;
+          // English subtitles, when you ticked it: once Jellyfin has the title.
+          let subMsg = "";
+          const cur = rowsRef.current?.find((x) => x.item.key === r.item.key) ?? r;
+          if (cur.look && res.placed.length && (r.target!.kind === "tv" || r.target!.kind === "movie")) {
+            const kind = r.target!.kind === "tv" ? "series" : "movie";
+            let id = r.target!.itemId ?? null;
+            for (let i = 0; !id && i < 20 && !job.cancelled; i++) {
+              job.update("Waiting for Jellyfin to add it, then looking up English subtitles", 0.92);
+              await new Promise((ok) => setTimeout(ok, 6000));
+              id = await api.inboxFindItem(r.plan!.folder, r.target!.kind, r.target!.title).catch(() => null);
+            }
+            if (r.target!.itemId) await new Promise((ok) => setTimeout(ok, 15000));
+            if (id) {
+              job.update("Looking up English subtitles", 0.95);
+              const got = await getSubtitles({ id, kind }, ["eng"], job).catch(() => 0);
+              subMsg = got ? ` · ${got} English subtitle${got === 1 ? "" : "s"} found` : " · no English subtitles found yet";
+            } else subMsg = " · Jellyfin hasn't added it yet: look up subtitles from the Library later";
+          }
+          const msg = `${res.placed.length} placed${res.skipped ? ` · ${res.skipped} already there` : ""}${res.trashed ? " · download in the Trash" : ""}${subMsg}`;
           if (res.failed.length) throw `${msg} · ${res.failed.length} didn't work: ${res.failed[0]}`;
           job.update(msg, 1);
           const done = { ...r, state: "done" as State, result: msg };
@@ -243,7 +290,7 @@ export default function Inbox({ status }: { status: Status }) {
     update(r.item.key, { state: "checking" });
     try {
       const plan = await api.inboxResolve(r.item.key, target);
-      update(r.item.key, { target, plan, ids: c.ProviderIds ?? {}, state: "ready", why: `Your choice: ${c.Name}${c.ProductionYear ? ` (${c.ProductionYear})` : ""}` });
+      update(r.item.key, { target, plan, ids: c.ProviderIds ?? {}, art: c.ImageUrl ?? null, look: !hasEnglish(plan), state: "ready", why: `Your choice: ${c.Name}${c.ProductionYear ? ` (${c.ProductionYear})` : ""}` });
       setPicked((s) => new Set(s).add(r.item.key));
     } catch (e) {
       update(r.item.key, { state: "look", why: errorText(e) });
@@ -275,7 +322,7 @@ export default function Inbox({ status }: { status: Status }) {
     <div className="pg inbox">
       <PageHead
         title="Inbox"
-        sub="New downloads, recognised and named for you. Nothing moves until you say so."
+        sub={dir ? `Watching ${dir} · nothing moves until you press the button` : "New downloads, recognised and named for you. Nothing moves until you say so."}
         actions={<>
           <button className="inbox-dir" onClick={() => void api.inboxPick().then((d) => d && setN((x) => x + 1))} title="Choose another downloads folder">
             <Icon name="folder" size={14} /> {dir ? <span className="mono ellipsis">{dir}</span> : "Choose your downloads folder"}
@@ -305,11 +352,10 @@ export default function Inbox({ status }: { status: Status }) {
             <span className="spacer" />
             <SearchBox value={query} onChange={setQuery} placeholder="Find a download" />
           </div>
-          <div className="inbox-list card">
-            <div className="inbox-row head"><span /><span>Found</span><span>Goes to</span><span>Status</span><span /></div>
+          <div className="ibx-list">
             {!rows && <div className="pg-loading"><span className="spinner" /> Looking in the downloads folder…</div>}
             {rows && shown.length === 0 && <p className="muted pad">{all.length ? "Nothing here." : "The downloads folder is empty."}</p>}
-            {shown.map((r) => <InboxRowView key={r.item.key} r={r} onChoose={(c) => void choose(r, c)} picked={picked.has(r.item.key)} onPick={(on) => setPicked((s) => { const x = new Set(s); if (on) x.add(r.item.key); else x.delete(r.item.key); return x; })} onEdit={() => setEditing(r.item.key)} onRemove={() => void removeDownload(r)} onPlaceOne={() => void place([r])} busy={busy} />)}
+            {shown.map((r) => <InboxRowView key={r.item.key} r={r} onChoose={(c) => void choose(r, c)} picked={picked.has(r.item.key)} onPick={(on) => setPicked((s) => { const x = new Set(s); if (on) x.add(r.item.key); else x.delete(r.item.key); return x; })} onEdit={() => setEditing(r.item.key)} onRemove={() => void removeDownload(r)} onPlaceOne={() => void place([r])} busy={busy} onLook={(on) => update(r.item.key, { look: on })} />)}
           </div>
           <div className="inbox-note small muted"><Icon name="check" size={14} /> Files are moved (or copied and checked when the NAS is another drive). Only after that does the download go to the Trash. Jellyfin is asked to look at just those folders.</div>
         </>
@@ -321,41 +367,52 @@ export default function Inbox({ status }: { status: Status }) {
   );
 }
 
-function InboxRowView({ r, picked, onPick, onEdit, onRemove, onPlaceOne, busy, onChoose }: { r: Row; onChoose: (c: SearchResult) => void; picked: boolean; onPick: (on: boolean) => void; onEdit: () => void; onRemove: () => void; onPlaceOne: () => void; busy: boolean }) {
+function InboxRowView({ r, picked, onPick, onEdit, onRemove, onPlaceOne, busy, onChoose, onLook }: { r: Row; onChoose: (c: SearchResult) => void; picked: boolean; onPick: (on: boolean) => void; onEdit: () => void; onRemove: () => void; onPlaceOne: () => void; busy: boolean; onLook: (on: boolean) => void }) {
   const moving = r.plan?.moves.filter((m) => !m.have) ?? [];
-  const first = moving.find((m) => /\.[a-z0-9]{2,4}$/i.test(m.to))?.to ?? r.plan?.folder ?? "";
-  const dest = r.state === "have" ? r.plan?.folder ?? "" : moving.length > 1 ? `${r.plan?.folder}/ (${moving.length} files)` : first;
+  const firstVideo = moving.find((m) => !SUB_EXT.test(m.to))?.to ?? moving[0]?.to;
+  const dest = r.state === "have" ? r.plan?.folder ?? "" : moving.length > 2 ? `${r.plan?.folder}/ (${moving.length} files)` : firstVideo ?? r.plan?.folder ?? "";
   const what = r.target ? `${r.target.title}${r.target.year ? ` (${r.target.year})` : ""}` : r.item.title || r.item.key;
+  const label = r.state === "ready" ? (r.plan?.existing ? "Into your existing folder" : "New folder") : STATE_LABEL[r.state];
+  const tone = r.state === "ready" ? (r.plan?.existing ? "ok" : "new") : r.state === "look" || r.state === "failed" ? "warn" : r.state === "done" ? "ok" : "";
+  const poster = r.target?.itemId ? imageUrl(r.target.itemId, "Primary", 160) : r.art ? remoteImageUrl(r.art) : null;
+  const keeps = moving.map((m) => m.to.split("/").pop() ?? m.to);
+  const media = r.target?.kind === "tv" || r.target?.kind === "movie";
   return (
-    <div className={`inbox-row ${r.state}`}>
+    <div className={`ibx-card s-${r.state} t-${tone}`}>
       <input type="checkbox" aria-label={`Select ${r.item.key}`} disabled={r.state !== "ready" || busy} checked={picked && r.state === "ready"} onChange={(e) => onPick(e.target.checked)} />
-      <div className="inbox-found">
-        <span className="strong ellipsis">{what}</span>
+      <div className="ibx-poster">{poster ? <img src={poster} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /> : <span>{(r.target?.title ?? r.item.title ?? "?").slice(0, 1)}</span>}</div>
+      <div className="ibx-body">
+        <div className="ibx-head">
+          <b className="ellipsis">{what}</b>
+          <span className={`ibx-state t-${tone}`}>{r.state === "checking" ? <><span className="spinner small-spin" /> Looking…</> : label}</span>
+          <span className="spacer" />
+          {r.state === "have" && <button className="link small" onClick={onRemove}>Remove download</button>}
+          {(r.state === "ready" || r.state === "look" || r.state === "failed") && <button className="link small" onClick={onEdit}>{r.state === "look" ? "Fix" : "Change"}</button>}
+          {r.state === "ready" && <button className="link small" disabled={busy} onClick={onPlaceOne}>Put in place</button>}
+          {r.state === "done" && r.plan?.folder && <button className="link small" onClick={() => void api.revealRel(r.plan!.folder)}>Open folder</button>}
+          {r.state === "done" && r.target?.itemId && <button className="link small" onClick={() => nav.open(r.target!.itemId!)}>Open</button>}
+        </div>
         <span className="mono small muted ellipsis" title={r.item.key}>{r.item.key} · {gb(r.item.size)}</span>
-      </div>
-      <div className="inbox-dest">
-        {r.state === "checking" ? <span className="muted small"><span className="spinner small-spin" /> Recognising…</span> : <>
-          <span className="mono small accent ellipsis" title={dest}>{dest || "—"}</span>
-          <span className="small muted ellipsis">{r.result ?? r.why}</span>
-          {r.state === "look" && !!r.pics?.length && (
-            <div className="inbox-pics">
-              {r.pics.map((c, i) => (
-                <button key={i} className="inbox-pic" title={`${c.Name}${c.ProductionYear ? ` (${c.ProductionYear})` : ""}: use this`} onClick={() => onChoose(c)}>
-                  {c.ImageUrl ? <img src={remoteImageUrl(c.ImageUrl)} alt="" loading="lazy" /> : <span className="noart">{c.Name}</span>}
-                  <span className="small ellipsis">{c.Name}{c.ProductionYear ? ` (${c.ProductionYear})` : ""}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </>}
-      </div>
-      <span className={`inbox-state ${r.state}`}>{STATE_LABEL[r.state]}</span>
-      <div className="inbox-act">
-        {r.state === "have" && <button className="link small" onClick={onRemove}>Remove download</button>}
-        {(r.state === "ready" || r.state === "look" || r.state === "failed") && <button className="link small" onClick={onEdit}>{r.state === "look" ? "Fix" : "Change"}</button>}
-        {r.state === "ready" && <button className="link small" disabled={busy} onClick={onPlaceOne}>Put in place</button>}
-        {r.state === "done" && r.plan?.folder && <button className="link small" onClick={() => void api.revealRel(r.plan!.folder)}>Open folder</button>}
-        {r.state === "done" && r.target?.itemId && <button className="link small" onClick={() => nav.open(r.target!.itemId!)}>Open</button>}
+        {r.state !== "checking" && dest && <span className="ibx-dest mono ellipsis" title={dest}>→ {dest}</span>}
+        {r.plan && media && r.state !== "done" && r.state !== "have" && (
+          <div className="ibx-grid">
+            <span className="ibx-k good">Keeps</span><span className="ibx-v">{keeps.length ? keeps.slice(0, 3).join(", ") + (keeps.length > 3 ? ` and ${keeps.length - 3} more` : "") : "nothing new"}</span>
+            <span className="ibx-k warn">Trash</span><span className="ibx-v muted">{trashText(r.plan.leftovers)}{r.plan.leftovers.length ? " (with the download)" : ""}</span>
+            <span className="ibx-k muted">Subtitles</span>
+            <label className="check small ibx-look"><input type="checkbox" checked={!!r.look} disabled={busy || r.state === "placing"} onChange={(e) => onLook(e.target.checked)} />Look up English subtitles after placing<span className="muted"> · {hasEnglish(r.plan) ? "English is included" : "none in the download"}</span></label>
+          </div>
+        )}
+        <span className="small muted">{r.result ?? (r.plan?.note && r.state === "ready" ? `${r.plan.note}${r.why.includes("already there") ? ` · ${r.why.split(" · ").slice(1).join(" · ")}` : ""}` : r.why)}</span>
+        {r.state === "look" && !!r.pics?.length && (
+          <div className="inbox-pics">
+            {r.pics.map((c, i) => (
+              <button key={i} className="inbox-pic" title={`${c.Name}${c.ProductionYear ? ` (${c.ProductionYear})` : ""}: use this`} onClick={() => onChoose(c)}>
+                {c.ImageUrl ? <img src={remoteImageUrl(c.ImageUrl)} alt="" loading="lazy" /> : <span className="noart">{c.Name}</span>}
+                <span className="small ellipsis">{c.Name}{c.ProductionYear ? ` (${c.ProductionYear})` : ""}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -394,7 +451,7 @@ function FixPanel({ row, ctx, onClose, onUse }: { row: Row; ctx: Ctx; onClose: (
     if (!plan) return;
     if (remember && t.kind === "tv" && !t.itemId) setPrefs((p) => ({ inboxShowTop: { ...p.inboxShowTop, [norm(t.title)]: t.top } }));
     if (!t.itemId) setPrefs((p) => ({ inboxTop: { ...p.inboxTop, [t.kind]: t.top } }));
-    onUse({ target: t, plan, ids, state: haveAll ? "have" : "ready", why: t.itemId ? "Adds to what you have" : `Your choice: ${t.kind === "tv" ? "show" : t.kind}` });
+    onUse({ target: t, plan, ids, look: (t.kind === "tv" || t.kind === "movie") && !hasEnglish(plan), state: haveAll ? "have" : "ready", why: t.itemId ? "Adds to what you have" : `Your choice: ${t.kind === "tv" ? "show" : t.kind}` });
   }
   return (
     <div className="overlay" onClick={onClose}>
@@ -476,7 +533,7 @@ function FixPanel({ row, ctx, onClose, onUse }: { row: Row; ctx: Ctx; onClose: (
               {plan.moves.length > 8 && <div className="muted small">… and {plan.moves.length - 8} more</div>}
             </div>
           )}
-          {plan && (t.kind === "tv" || t.kind === "movie") && <span className="muted small">Only the video and subtitles in your languages go; samples, .nfo and other files go to the Trash with the download. Episode titles are added afterwards when they're 100% sure.</span>}
+          {plan && (t.kind === "tv" || t.kind === "movie") && <span className="muted small">Only the video and English subtitles go; samples, .nfo, .txt, pictures and other languages go to the Trash with the download.</span>}
         </div>
 
         <div className="spacer" />

@@ -194,6 +194,32 @@ pub struct MissingReport {
     specials_missing: usize,
 }
 
+/// Every episode title of a show you have, from TMDB (with a key) or TVmaze. None when the show
+/// isn't linked yet or the lists can't be reached (names then go without a title).
+pub async fn episode_titles(state: &AppState, series_id: &str) -> Option<HashMap<(u32, u32), String>> {
+    let c = state.reader().await.ok()?;
+    let item = c.item_json(series_id).await.ok()?;
+    let ids = item.get("ProviderIds").cloned().unwrap_or(Value::Null);
+    let pid = |k: &str| ids.get(k).and_then(Value::as_str).filter(|x| !x.is_empty()).map(String::from);
+    let (tmdb, tvdb, imdb) = (pid("Tmdb"), pid("Tvdb"), pid("Imdb"));
+    let mut list: Option<Vec<EpInfo>> = None;
+    if let Some(t) = crate::rename_cmds::tmdb_client(state) {
+        let id = match tmdb {
+            Some(id) => Some(id),
+            None => t.find_tv(tvdb.as_deref(), imdb.as_deref()).await.ok().flatten(),
+        };
+        if let Some(id) = id {
+            list = t.episode_list(&id).await.ok();
+        }
+    }
+    if list.is_none() {
+        if let Some(id) = sources::tvmaze_lookup(tvdb.as_deref(), imdb.as_deref()).await.ok().flatten() {
+            list = sources::tvmaze_episode_list(&id).await.ok();
+        }
+    }
+    Some(list?.into_iter().filter(|e| !e.title.trim().is_empty()).map(|e| ((e.season, e.episode), e.title)).collect())
+}
+
 /// Compares a show's files with the episode list online (TMDB with a key, else TVmaze).
 #[tauri::command]
 pub async fn missing_episodes(state: State<'_, AppState>, series_id: String) -> Result<MissingReport> {

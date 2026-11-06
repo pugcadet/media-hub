@@ -460,6 +460,10 @@ export interface InboxPlan {
   folder: string;
   existing: boolean;
   moves: InboxMove[];
+  /** Files that stay behind and go to the Trash with the download. */
+  leftovers: string[];
+  /** Why it goes where it goes. */
+  note: string;
 }
 
 export interface MovieFolder {
@@ -1047,6 +1051,7 @@ export const api = {
   tidyNamesPlan: (skip: string[]) => invoke<{ planId: string; titles: { id: string; name: string; kind: "series" | "movie"; folder: string; ops: PlanOp[] }[] }>("tidy_names_plan", { skip }),
   inboxReveal: () => invoke<void>("inbox_reveal"),
   inboxScan: () => invoke<[string | null, InboxItem[]]>("inbox_scan"),
+  inboxFindItem: (folder: string, kind: string, title: string) => invoke<string | null>("inbox_find_item", { folder, kind, title }),
   inboxResolve: (key: string, target: InboxTarget) => invoke<InboxPlan>("inbox_resolve", { key, target }),
   inboxPlace: (key: string, moves: InboxMove[]) => invoke<{ placed: string[]; skipped: number; failed: string[]; trashed: boolean }>("inbox_place", { key, moves }),
   inboxTrash: (key: string) => invoke<void>("inbox_trash", { key }),

@@ -232,6 +232,11 @@ pub struct InboxPlan {
     /// It goes into a show or movie you already have.
     pub existing: bool,
     pub moves: Vec<Placement>,
+    /// Files that stay behind and go to the Trash with the download (samples, .nfo, .txt,
+    /// pictures, subtitles in other languages).
+    pub leftovers: Vec<String>,
+    /// Why it goes where it goes, in plain words.
+    pub note: String,
 }
 
 /// "Season 01" in the style the show already uses ("Season 1", "S01", "Season 01").
@@ -314,10 +319,55 @@ fn is_sample(rel: &str) -> bool {
     l.split(|c: char| !c.is_alphanumeric()).any(|t| t == "sample" || t == "trailer" || t == "featurette")
 }
 
+/// "Episode 5", "Aflevering 3", "TBA": not a real episode title.
+fn generic_title(t: &str) -> bool {
+    let l = t.trim().to_lowercase();
+    l.is_empty() || l == "tba" || l == "tbd" || l.split_whitespace().count() <= 2 && l.split_whitespace().last().map(|w| w.chars().all(|c| c.is_ascii_digit())).unwrap_or(false)
+}
+
+/// A title as a folder name compares: no year, no tags, no punctuation, no accents.
+fn folder_key(name: &str) -> (String, Option<i32>) {
+    let p = parse_name(name);
+    let title = if p.title.is_empty() { name.to_string() } else { p.title };
+    let key: String = crate::naming::fold_accents(&title.to_lowercase()).chars().filter(|c| c.is_alphanumeric()).collect();
+    let key = key.strip_prefix("the").filter(|k| k.len() > 2).map(str::to_string).unwrap_or(key);
+    (key, p.year)
+}
+
+/// A folder you already have for this title (in the chosen main folder first, then any main
+/// folder), so a download never makes a second "Severance" next to "Severance (2022)".
+/// Years only have to match when both have one.
+pub fn find_title_folder(root: &Path, top: &str, title: &str, year: Option<i32>) -> Option<String> {
+    let (want, _) = folder_key(title);
+    if want.is_empty() {
+        return None;
+    }
+    let mut tops: Vec<String> = vec![top.to_string()];
+    tops.extend(sub_dirs(root).into_iter().filter(|d| d != top && !d.starts_with('.')));
+    for t in tops {
+        let hits: Vec<String> = sub_dirs(&root.join(&t))
+            .into_iter()
+            .filter(|d| {
+                let (k, y) = folder_key(d);
+                k == want && (year.is_none() || y.is_none() || y == year)
+            })
+            .collect();
+        if hits.len() == 1 {
+            return Some(join(&t, &hits[0]));
+        }
+    }
+    None
+}
+
+/// What stays behind in the download (and goes to the Trash with it): every file not placed.
+pub fn leftovers(item: &InboxItem, moves: &[Placement]) -> Vec<String> {
+    item.files.iter().filter(|f| !moves.iter().any(|m| m.from == f.rel)).map(|f| f.rel.clone()).collect()
+}
+
 /// Works out every file's place and its clean name (pure apart from reading the target folders).
 /// Only the videos (no samples) and subtitles in your languages go; .nfo, .txt, pictures,
 /// samples and other languages stay behind (and go to the Trash with the download).
-pub fn plan_moves(root: &Path, item: &InboxItem, t: &Target, folder: &str, existing: bool, langs: &[String]) -> Vec<Placement> {
+pub fn plan_moves(root: &Path, item: &InboxItem, t: &Target, folder: &str, existing: bool, langs: &[String], titles: &HashMap<(u32, u32), String>) -> Vec<Placement> {
     let mut moves = Vec::new();
     let name_of = |rel: &str| rel.rsplit('/').next().unwrap_or(rel).to_string();
     let videos: Vec<&InboxFile> = item.files.iter().filter(|f| f.video && (!is_sample(&f.rel) || item.files.iter().filter(|x| x.video).count() == 1)).collect();
@@ -355,6 +405,15 @@ pub fn plan_moves(root: &Path, item: &InboxItem, t: &Target, folder: &str, exist
                 let mut sxe = format!("S{:02}E{:02}", s, v.episodes[0]);
                 for e in &v.episodes[1..] {
                     sxe.push_str(&format!("-E{e:02}"));
+                }
+                // The episode's own title when the online list has it ("Show - S02E05 - Title").
+                let named: Vec<&String> = v.episodes.iter().filter_map(|e| titles.get(&(s, *e))).filter(|n| !generic_title(n)).collect();
+                if !named.is_empty() && named.len() == v.episodes.len() {
+                    let joined = named.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(" + ");
+                    let full = sanitize(&format!("{title_plain} - {sxe} - {joined}"));
+                    if full.chars().count() <= 180 {
+                        return Some(full);
+                    }
                 }
                 Some(sanitize(&format!("{title_plain} - {sxe}")))
             }
@@ -492,15 +551,43 @@ pub async fn inbox_resolve(state: State<'_, AppState>, key: String, target: Targ
                     sanitize(&match target.year { Some(y) if target.kind != "other" => format!("{t} ({y})"), _ => t.to_string() })
                 }
             };
-            (join(&target.top, &name), false)
+            // Never a second folder: one you have with the same title (with or without the year) is used.
+            let found = match target.kind.as_str() {
+                "tv" | "movie" => {
+                    let (r, top, title, year) = (root.clone(), target.top.clone(), target.title.clone(), target.year);
+                    tauri::async_runtime::spawn_blocking(move || find_title_folder(&r, &top, &title, year)).await.ok().flatten()
+                }
+                _ => None,
+            };
+            match found {
+                Some(f) => (f, true),
+                None => (join(&target.top, &name), false),
+            }
         }
     };
+    // Episode titles for a show you have ("Show - S02E05 - Trojan's Horse").
+    let titles = match (target.kind.as_str(), target.item_id.as_deref().filter(|i| valid_item_id(i))) {
+        ("tv", Some(id)) => crate::library::episode_titles(&state, id).await.unwrap_or_default(),
+        _ => HashMap::new(),
+    };
     let (r2, f2, t2) = (root.clone(), folder.clone(), target.clone());
-    let langs = state.settings()?.sub_langs.clone();
-    let moves = tauri::async_runtime::spawn_blocking(move || plan_moves(&r2, &item, &t2, &f2, existing, &langs))
-        .await
-        .map_err(|e| Error::msg(e.to_string()))?;
-    Ok(InboxPlan { folder, existing, moves })
+    // Only English subtitles come along; every other language goes to the Trash.
+    let langs = vec!["eng".to_string()];
+    let (moves, left) = tauri::async_runtime::spawn_blocking(move || {
+        let m = plan_moves(&r2, &item, &t2, &f2, existing, &langs, &titles);
+        let l = leftovers(&item, &m);
+        (m, l)
+    })
+    .await
+    .map_err(|e| Error::msg(e.to_string()))?;
+    let note = if existing && target.item_id.is_none() {
+        format!("You already have a folder “{}”, so it goes in there (no second folder).", folder.rsplit('/').next().unwrap_or(&folder))
+    } else if existing {
+        format!("Into your folder “{}”.", folder.rsplit('/').next().unwrap_or(&folder))
+    } else {
+        "Not in your library yet: a new folder, with no other folder of this title anywhere in your library.".to_string()
+    };
+    Ok(InboxPlan { folder, existing, moves, leftovers: left, note })
 }
 
 /* ------------------------------------------------------------------ putting it in place */
@@ -657,6 +744,28 @@ pub fn inbox_reveal(state: State<'_, AppState>) -> Result<()> {
     Ok(())
 }
 
+/// After placing: the title Jellyfin made for that folder (None until it has scanned it).
+#[tauri::command]
+pub async fn inbox_find_item(state: State<'_, AppState>, folder: String, kind: String, title: String) -> Result<Option<String>> {
+    let last = folder.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_lowercase();
+    if last.is_empty() {
+        return Ok(None);
+    }
+    let t = if kind == "tv" { "Series" } else { "Movie" };
+    let c = state.reader().await?;
+    let search = parse_name(&title).title;
+    let list = c
+        .items_query(vec![("IncludeItemTypes", t.into()), ("Recursive", "true".into()), ("SearchTerm", if search.is_empty() { title.clone() } else { search }), ("Fields", "Path".into())], 60)
+        .await?;
+    Ok(list.iter().find_map(|v| {
+        let p = v.get("Path").and_then(Value::as_str)?.replace('\\', "/").to_lowercase();
+        let p = p.trim_end_matches('/');
+        let dir = if kind == "tv" { p } else { p.rsplit_once('/').map(|x| x.0).unwrap_or(p) };
+        let id = v.get("Id").and_then(Value::as_str)?.replace('-', "");
+        (dir.ends_with(&format!("/{last}")) && valid_item_id(&id)).then_some(id)
+    }))
+}
+
 /// "Remove download": a download you don't need (already in the library) goes to the Trash.
 #[tauri::command]
 pub async fn inbox_trash(state: State<'_, AppState>, key: String) -> Result<()> {
@@ -703,7 +812,7 @@ mod tests {
             files: vec![f("Bluey.S03E47.mkv", Some(3), &[47]), f("Bluey.S03E48.mkv", Some(3), &[48]), f("Bluey.S03E48.en.srt", None, &[]), f("Bluey.S03E47.en.srt", None, &[])],
         };
         let t = Target { kind: "tv".into(), item_id: None, top: "Kids".into(), title: "Bluey".into(), year: Some(2018), season: None, artist: None, album: None };
-        let moves = plan_moves(&root, &item, &t, "Kids/Bluey (2018)", true, &["eng".to_string()]);
+        let moves = plan_moves(&root, &item, &t, "Kids/Bluey (2018)", true, &["eng".to_string()], &HashMap::new());
         let get = |from: &str| moves.iter().find(|m| m.from == from).unwrap();
         assert!(get("Bluey.S03E47.mkv").have, "episode 47 is already there");
         assert!(get("Bluey.S03E47.en.srt").have, "its subtitle is skipped too");
@@ -723,7 +832,7 @@ mod tests {
             files: vec![InboxFile { rel: "Why Bees Dance.mp4".into(), size: 1, video: true, season: None, episodes: vec![] }],
         };
         let t = Target { kind: "tv".into(), item_id: None, top: "YouTube".into(), title: "Kurzgesagt".into(), year: None, season: None, artist: None, album: None };
-        let moves = plan_moves(&root, &item, &t, "YouTube/Kurzgesagt", true, &[]);
+        let moves = plan_moves(&root, &item, &t, "YouTube/Kurzgesagt", true, &[], &HashMap::new());
         assert_eq!(moves[0].to, "YouTube/Kurzgesagt/Why Bees Dance.mp4");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -739,9 +848,64 @@ mod tests {
             files: vec![f("Heat.1995.1080p.BluRay.x264-GRP.mkv"), f("Sample/heat-sample.mkv"), f("Heat.1995.nfo"), f("Subs/2_English.srt"), f("Subs/3_French.srt"), f("Subs/4_English.SDH.srt"), f("RARBG.txt")],
         };
         let t = Target { kind: "movie".into(), item_id: None, top: "Movies".into(), title: "Heat".into(), year: Some(1995), season: None, artist: None, album: None };
-        let moves = plan_moves(&root, &item, &t, "Movies/Heat (1995)", false, &["eng".to_string()]);
+        let moves = plan_moves(&root, &item, &t, "Movies/Heat (1995)", false, &["eng".to_string()], &HashMap::new());
         let to: Vec<&str> = moves.iter().map(|m| m.to.as_str()).collect();
         assert_eq!(to, vec!["Movies/Heat (1995)/Heat (1995).mkv", "Movies/Heat (1995)/Heat (1995).eng.srt", "Movies/Heat (1995)/Heat (1995).eng.sdh.srt"], "{moves:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn episodes_get_their_title_and_junk_stays_behind() {
+        let root = std::env::temp_dir().join(format!("mh-inbox4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("TV/Severance (2022)/Season 02")).unwrap();
+        let f = |rel: &str, s: Option<u32>, e: &[u32]| InboxFile { rel: rel.into(), size: 1, video: is_video(rel), season: s, episodes: e.to_vec() };
+        let item = InboxItem {
+            key: "Severance.S02E05.1080p.WEB.H264-GRP".into(), is_folder: true, size: 9, modified: 0, kind: "tv", title: "Severance".into(), year: None, music: None,
+            files: vec![
+                f("Severance.S02E05.1080p.WEB.H264-GRP.mkv", Some(2), &[5]),
+                f("Sample/sample.mkv", None, &[]),
+                f("Subs/2_English.srt", None, &[]),
+                f("Subs/3_Dutch.srt", None, &[]),
+                f("Subs/4_French.srt", None, &[]),
+                f("RARBG.txt", None, &[]),
+                f("poster.jpg", None, &[]),
+                f("Severance.S02E05.nfo", None, &[]),
+            ],
+        };
+        let t = Target { kind: "tv".into(), item_id: Some("x".into()), top: "TV".into(), title: "Severance".into(), year: Some(2022), season: None, artist: None, album: None };
+        let mut titles = HashMap::new();
+        titles.insert((2, 5), "Trojan's Horse".to_string());
+        let moves = plan_moves(&root, &item, &t, "TV/Severance (2022)", true, &["eng".to_string()], &titles);
+        let to: Vec<&str> = moves.iter().map(|m| m.to.as_str()).collect();
+        assert_eq!(to, vec![
+            "TV/Severance (2022)/Season 02/Severance - S02E05 - Trojan's Horse.mkv",
+            "TV/Severance (2022)/Season 02/Severance - S02E05 - Trojan's Horse.eng.srt",
+        ], "{moves:?}");
+        let left = leftovers(&item, &moves);
+        for junk in ["Sample/sample.mkv", "Subs/3_Dutch.srt", "Subs/4_French.srt", "RARBG.txt", "poster.jpg", "Severance.S02E05.nfo"] {
+            assert!(left.iter().any(|l| l == junk), "{junk} stays behind: {left:?}");
+        }
+        // A generic title is left out.
+        titles.insert((2, 5), "Episode 5".to_string());
+        let moves = plan_moves(&root, &item, &t, "TV/Severance (2022)", true, &["eng".to_string()], &titles);
+        assert_eq!(moves[0].to, "TV/Severance (2022)/Season 02/Severance - S02E05.mkv");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_title_you_have_is_never_given_a_second_folder() {
+        let root = std::env::temp_dir().join(format!("mh-inbox5-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in ["TV/Severance (2022)", "Kids/Bluey", "Movies/Dune (1984)", "Movies/Amélie (2001)", "TV/The Office (US)"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        assert_eq!(find_title_folder(&root, "TV", "Severance", None).as_deref(), Some("TV/Severance (2022)"));
+        assert_eq!(find_title_folder(&root, "TV", "Severance", Some(2022)).as_deref(), Some("TV/Severance (2022)"));
+        assert_eq!(find_title_folder(&root, "TV", "Bluey", Some(2018)).as_deref(), Some("Kids/Bluey"), "found in another main folder");
+        assert_eq!(find_title_folder(&root, "Movies", "Dune", Some(2021)), None, "a different year is a different movie");
+        assert_eq!(find_title_folder(&root, "Movies", "Amelie", Some(2001)).as_deref(), Some("Movies/Amélie (2001)"));
+        assert_eq!(find_title_folder(&root, "Movies", "Heat", Some(1995)), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

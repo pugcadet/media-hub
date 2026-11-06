@@ -220,6 +220,7 @@ pub fn run() {
             inbox::inbox_place,
             inbox::inbox_trash,
             inbox::inbox_reveal,
+            inbox::inbox_find_item,
             moviefolders::movie_folders_plan,
             backend::intro_skipper_libraries,
             backend::set_intro_skipper_libraries,
