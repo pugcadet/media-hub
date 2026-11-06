@@ -7,6 +7,63 @@ import { track, type JobHandle } from "./activity";
 import { askConfirm } from "./confirm";
 import { prefs, setPrefs, usePrefs } from "./prefs";
 
+
+/* ------------------------------------------------------------ saving with a progress list */
+
+/** One line of the Progress list: what happened to one episode. */
+export interface SaveLine { ep: string; mark: "ok" | "warn" | "bad" | "busy"; text: string }
+export interface SaveItem { id: string; label: string; intro: Span | null; credits: Span | null; recap: Span | null; clear: string[] }
+export interface SaveResult { ok: number; hidden: number; failed: number; stopped: boolean }
+
+const busyErr = (t: string) => /busy|500|timed? ?out|network|connection/i.test(t);
+const fatalErr = (t: string) => /install|plugin|switched off|read-only|Unauthorized|key/i.test(t);
+const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
+
+/**
+ * Saves episodes one by one the Segment Editor's way. Every episode is read back from Jellyfin;
+ * a busy server gets one more try. Nothing is hidden: each episode gets a line.
+ */
+export async function saveMany(items: SaveItem[], opts: { job?: JobHandle; onLine?: (l: SaveLine, done: number, total: number) => void } = {}): Promise<SaveResult> {
+  const res: SaveResult = { ok: 0, hidden: 0, failed: 0, stopped: false };
+  const started = Date.now();
+  const total = items.length;
+  for (const [i, it] of items.entries()) {
+    if (opts.job?.cancelled) { res.stopped = true; break; }
+    const left = i > 0 ? Math.round(((Date.now() - started) / i) * (total - i) / 1000) : null;
+    opts.job?.update(`Saving to Jellyfin: ${i} of ${total} episodes done${left ? `, about ${left < 60 ? `${left} s` : `${Math.round(left / 60)} min`} left` : ""}`, total ? i / total : null);
+    opts.onLine?.({ ep: it.label, mark: "busy", text: "Saving now…" }, i, total);
+    let line: SaveLine;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const r = await api.saveSegments(it.id, it.intro, it.credits, it.recap, it.clear);
+        if (r.confirmed) { res.ok++; line = { ep: it.label, mark: "ok", text: r.message === "Nothing to change" ? "Already right, nothing to change" : "Saved and confirmed" }; }
+        else { res.hidden++; line = { ep: it.label, mark: "warn", text: r.message }; }
+        break;
+      } catch (e) {
+        const t = errorText(e);
+        if (attempt === 0 && busyErr(t)) {
+          opts.onLine?.({ ep: it.label, mark: "warn", text: "Jellyfin was busy, trying again" }, i, total);
+          await sleep(1500);
+          continue;
+        }
+        res.failed++;
+        line = { ep: it.label, mark: "bad", text: t };
+        if (fatalErr(t)) res.stopped = true;
+        break;
+      }
+    }
+    opts.onLine?.(line, i + 1, total);
+    if (res.stopped) break;
+  }
+  const parts = [`${res.ok} saved and confirmed`];
+  if (res.hidden) parts.push(`${res.hidden} saved but not shown to players`);
+  if (res.failed) parts.push(`${res.failed} failed`);
+  opts.job?.update(parts.join(", "), 1);
+  return res;
+}
+
+const epLabel = (e: { index: number | null; name: string }) => (e.index != null ? `E${String(e.index).padStart(2, "0")}` : e.name.slice(0, 12));
+
 const autoTried = new Set<string>();
 
 /**
@@ -21,58 +78,61 @@ export async function autoDetectSeason(seasonId: string, seasonLabel: string): P
   if (ov.episodes.some((e) => e.segments.some((x) => x.kind === "Intro" || x.kind === "Outro"))) return;
   await track(`Finding intros: ${seasonLabel}`, async (job) => {
     const un = await listen<{ done: number; total: number; label: string }>("detect-progress", (e) => job.update(e.payload.label, e.payload.total ? e.payload.done / e.payload.total : null));
-    let saved = 0;
     try {
       const { detectIntro, detectCredits } = prefs();
       const res = await api.detectSeason(seasonId, 6 * 60, 5 * 60, detectIntro, detectCredits);
-      for (const r of res) {
-        if (r.problem || (!r.intro && !r.credits)) continue;
-        await api.saveSegments(r.id, r.intro, r.credits, null, []).then(() => saved++).catch(() => undefined);
-      }
+      const names = new Map(ov.episodes.map((e) => [e.id, epLabel(e)]));
+      const items = res.filter((r) => !r.problem && (r.intro || r.credits)).map((r) => ({ id: r.id, label: names.get(r.id) ?? "", intro: r.intro, credits: r.credits, recap: null, clear: [] }));
+      if (!items.length) job.update("Nothing sure enough to save", 1);
+      else await saveMany(items, { job });
     } finally {
       un();
     }
-    job.update(saved ? `Markers saved for ${saved} episodes` : "Nothing sure enough to save", 1);
   }, { reload: false, stop: "detect" }).catch(() => undefined);
 }
 
 /** Finds markers in the given seasons and saves the sure ones (no problem reported). */
-export async function detectAndSave(seasonIds: string[], job?: JobHandle, only?: Set<string>): Promise<number> {
+export async function detectAndSave(seasonIds: string[], job?: JobHandle, only?: Set<string>, onLine?: (l: SaveLine, done: number, total: number) => void, keep?: boolean): Promise<number> {
   const { detectIntro, detectCredits } = prefs();
   let saved = 0;
-  const un = job ? await listen<{ done: number; total: number; label: string }>("detect-progress", (e) => job.update(e.payload.label, e.payload.total ? e.payload.done / e.payload.total : null)) : null;
-  try {
-    for (const sid of seasonIds) {
-      if (job?.cancelled) break;
-      const res = await api.detectSeason(sid, 6 * 60, 5 * 60, detectIntro, detectCredits);
-      for (const r of res) {
-        if (only && !only.has(r.id)) continue;
-        if (r.problem || (!r.intro && !r.credits)) continue;
-        await api.saveSegments(r.id, r.intro, r.credits, null, []).then(() => saved++).catch(() => undefined);
-      }
+  const listenNow = () => (job ? listen<{ done: number; total: number; label: string }>("detect-progress", (e) => job.update(`Listening: ${e.payload.label}`, e.payload.total ? e.payload.done / e.payload.total : null)) : Promise.resolve(() => undefined));
+  for (const sid of seasonIds) {
+    if (job?.cancelled) break;
+    const ov = await api.segmentsOverview(sid);
+    const names = new Map(ov.episodes.map((e) => [e.id, epLabel(e)]));
+    const had = new Set(ov.episodes.filter((e) => e.segments.some((x) => x.kind === "Intro" || x.kind === "Outro")).map((e) => e.id));
+    const un = await listenNow();
+    let res;
+    try {
+      res = await api.detectSeason(sid, 6 * 60, 5 * 60, detectIntro, detectCredits);
+    } finally {
+      un();
     }
-  } finally {
-    un?.();
+    const items: SaveItem[] = [];
+    for (const r of res) {
+      if (only && !only.has(r.id)) continue;
+      if (keep && had.has(r.id)) { onLine?.({ ep: names.get(r.id) ?? "", mark: "ok", text: "Had markers already, kept" }, 0, 0); continue; }
+      if (r.problem || (!r.intro && !r.credits)) { onLine?.({ ep: names.get(r.id) ?? "", mark: "warn", text: r.problem ?? "Nothing found for sure; set it by hand" }, 0, 0); continue; }
+      items.push({ id: r.id, label: names.get(r.id) ?? "", intro: r.intro, credits: r.credits, recap: null, clear: [] });
+    }
+    const out = await saveMany(items, { job, onLine });
+    saved += out.ok;
+    if (out.stopped) break;
   }
-  job?.update(saved ? `Markers saved for ${saved} episodes` : "Nothing sure enough to save", 1);
   return saved;
 }
 
 /** Removes every marker of `kinds` ("Intro" | "Outro" | "Recap") in the given seasons. */
 export async function removeSegments(seasonIds: string[], kinds: string[], job?: JobHandle): Promise<number> {
   let n = 0;
-  for (const [si, sid] of seasonIds.entries()) {
+  for (const sid of seasonIds) {
     if (job?.cancelled) break;
     const ov = await api.segmentsOverview(sid);
     const eps = ov.episodes.filter((e) => e.segments.some((x) => kinds.includes(x.kind)));
-    for (const [i, e] of eps.entries()) {
-      if (job?.cancelled) break;
-      job?.update(e.name, (si + i / Math.max(1, eps.length)) / seasonIds.length);
-      await api.saveSegments(e.id, null, null, null, kinds);
-      n++;
-    }
+    const out = await saveMany(eps.map((e) => ({ id: e.id, label: epLabel(e), intro: null, credits: null, recap: null, clear: kinds })), { job });
+    n += out.ok;
+    if (out.stopped) break;
   }
-  job?.update(`${n} episode${n === 1 ? "" : "s"} cleaned`, 1);
   return n;
 }
 
@@ -170,6 +230,35 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
   const [note, setNote] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // The Progress list: one line per episode, newest at the bottom.
+  const [lines, setLines] = useState<SaveLine[]>([]);
+  const [status, setStatus] = useState<{ text: string; pct: number | null; done: boolean } | null>(null);
+  const [keep, setKeep] = useState(true);
+  const stopRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+  const onLine = (l: SaveLine, done: number, total: number) => {
+    setLines((old) => {
+      const i = old.findIndex((x) => x.ep === l.ep && x.mark === "busy");
+      const next = i >= 0 ? [...old.slice(0, i), l, ...old.slice(i + 1)] : [...old, l];
+      return next.slice(-200);
+    });
+    if (total) setStatus({ text: `Saving to Jellyfin: ${done} of ${total} episodes done`, pct: done / total, done: false });
+  };
+  /** Runs a save with the Progress list and the activity list both showing it. */
+  async function withProgress(label: string, work: (job: JobHandle) => Promise<SaveResult | number>) {
+    setLines([]);
+    stopRef.current = { cancelled: false };
+    setStatus({ text: "Starting…", pct: null, done: false });
+    try {
+      const r = await track(label, async (job) => {
+        const both: JobHandle = { update: (d, pr) => { job.update(d, pr); setStatus({ text: d, pct: pr ?? null, done: false }); }, get cancelled() { return job.cancelled || stopRef.current.cancelled; } };
+        return work(both);
+      }, { cancellable: true, reload: false, stop: "detect" });
+      const sum = typeof r === "number" ? `${r} saved and confirmed` : [`${r.ok} saved and confirmed`, r.hidden ? `${r.hidden} not shown to players` : "", r.failed ? `${r.failed} failed` : "", r.stopped ? "stopped" : ""].filter(Boolean).join(" · ");
+      setStatus({ text: `Done: ${sum}`, pct: 1, done: true });
+    } catch (e) {
+      setStatus({ text: errorText(e), pct: null, done: true });
+    }
+  }
   // whole-season tool
   const [part, setPart] = useState<Part>("credits");
   const [mode, setMode] = useState<"fixed" | "end" | "percent">("end");
@@ -282,23 +371,21 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
     if (ruleSpan(3600, part) === "bad") return setError("Type a time like 3:00 or 1:30.");
     setError(null);
     if (scope === "show" && show) {
-      if (!(await askConfirm(`Set the ${LABEL[part].toLowerCase()} times in every season of ${show.name}? Saved straight to Jellyfin; each one can be undone.`, { okLabel: "Set them" }))) return;
-      await track(`${LABEL[part]} times for ${show.name}`, async (job) => {
-        let n = 0;
-        for (const [si, sid] of show.seasonIds.entries()) {
-          if (job.cancelled) break;
+      if (!(await askConfirm(`Set the ${LABEL[part].toLowerCase()} in every season of ${show.name}${keep ? " (episodes that already have one keep theirs)" : ""}? Saved straight to Jellyfin; each one can be undone.`, { okLabel: "Set them" }))) return;
+      await withProgress(`${LABEL[part]} for ${show.name}`, async (job) => {
+        const items: SaveItem[] = [];
+        for (const sid of show.seasonIds) {
           const o = await api.segmentsOverview(sid);
           for (const e of o.episodes) {
-            if (job.cancelled) break;
-            job.update(e.name, si / show.seasonIds.length);
+            const lab = `${o.episodes.length && show.seasonIds.length > 1 ? `S${String(show.seasonIds.indexOf(sid) + 1).padStart(2, "0")}` : ""}${epLabel(e)}`;
+            if (keep && saved(e, part)) { onLine({ ep: lab, mark: "ok", text: "Had one already, kept" }, 0, 0); continue; }
             const sp = ruleSpan(e.duration, part);
-            if (!sp || sp === "bad" || e.duration <= 0) continue;
-            await api.saveSegments(e.id, part === "intro" ? sp : null, part === "credits" ? sp : null, part === "recap" ? sp : null, []);
-            n++;
+            if (!sp || sp === "bad" || e.duration <= 0) { onLine({ ep: lab, mark: "warn", text: "Length unknown, skipped" }, 0, 0); continue; }
+            items.push({ id: e.id, label: lab, intro: part === "intro" ? sp : null, credits: part === "credits" ? sp : null, recap: part === "recap" ? sp : null, clear: [] });
           }
         }
-        job.update(`${n} episodes set`, 1);
-      }, { cancellable: true, reload: false }).catch((e) => setError(errorText(e)));
+        return saveMany(items, { job, onLine });
+      });
       show.onChanged?.();
       return load();
     }
@@ -307,6 +394,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
     setDrafts((d) => {
       const next = { ...d };
       for (const e of list) {
+        if (keep && saved(e, part)) continue;
         const sp = ruleSpan(e.duration, part);
         if (sp && sp !== "bad") next[e.id] = { ...next[e.id], [part]: sp, source: "manual" };
       }
@@ -319,7 +407,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
     if (scope === "show" && show) {
       const label = pt === "credits" ? "credits" : `${LABEL[pt].toLowerCase()}s`;
       if (!(await askConfirm(`Remove all ${label} in every season of ${show.name}?`, { okLabel: `Remove ${label}`, danger: true }))) return;
-      await track(`Removing ${label}`, (job) => removeSegments(show.seasonIds, [KIND[pt]], job), { cancellable: true, reload: false }).catch(() => undefined);
+      await withProgress(`Removing ${label}`, (job) => removeSegments(show.seasonIds, [KIND[pt]], job));
       show.onChanged?.();
       return load();
     }
@@ -332,8 +420,8 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
 
   async function detectShow() {
     if (!show) return;
-    if (!(await askConfirm(`Listen to every episode of ${show.name} and save the intros and credits that are found for sure? Each one can be undone.`, { okLabel: "Find them" }))) return;
-    await track(`Finding intros: ${show.name}`, (job) => detectAndSave(show.seasonIds, job).then(() => undefined), { cancellable: true, reload: false, stop: "detect" }).catch((e) => setError(errorText(e)));
+    if (!(await askConfirm(`Listen to every episode of ${show.name} and save the intros and credits that are found for sure${keep ? " (episodes with markers keep theirs)" : ""}? Each one can be undone.`, { okLabel: "Find them" }))) return;
+    await withProgress(`Finding intros: ${show.name}`, (job) => detectAndSave(show.seasonIds, job, undefined, onLine, keep));
     show.onChanged?.();
     await load();
   }
@@ -424,25 +512,16 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
   async function saveAll() {
     setSaving(true);
     setError(null);
-    let ok = 0;
-    const failed: string[] = [];
     const byEp = new Map<string, SegEpisode>();
     changes.forEach((c) => byEp.set(c.ep.id, c.ep));
-    for (const e of byEp.values()) {
+    const items: SaveItem[] = [...byEp.values()].map((e) => {
       const d = drafts[e.id];
       const pick = (p: Part) => (same(d[p], saved(e, p)) ? null : d[p]);
       const clear = (["intro", "recap", "credits"] as Part[]).filter((p) => !d[p] && saved(e, p)).map((p) => KIND[p]);
-      try {
-        await api.saveSegments(e.id, pick("intro"), pick("credits"), pick("recap"), clear);
-        ok++;
-      } catch (err) {
-        failed.push(`${e.name}: ${errorText(err)}`);
-        if (/plugin|switched off/i.test(errorText(err))) break;
-      }
-    }
+      return { id: e.id, label: epLabel(e), intro: pick("intro"), credits: pick("credits"), recap: pick("recap"), clear };
+    });
+    await withProgress(`Saving ${items.length} episode${items.length === 1 ? "" : "s"}`, (job) => saveMany(items, { job, onLine }));
     setSaving(false);
-    setNote(`Saved ${ok} episode${ok === 1 ? "" : "s"}. Every change is in the undo list on the episode's page.`);
-    if (failed.length) setError(failed.slice(0, 3).join(" · "));
     await load();
   }
 
@@ -457,13 +536,16 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
       <aside className="seg-side">
         <div className="card form">
           <h2>Set, clear or find</h2>
-          <label>Works on
-            <select value={applyTo} onChange={(e) => setApplyTo(e.target.value as Scope)}>
-              <option value="selected">Selected episodes ({selected.size})</option>
-              <option value="season">{seasonName ?? "This season"} ({eps.length} episodes)</option>
-              {show && <option value="show">The whole show ({show.seasonIds.length} seasons)</option>}
-            </select>
-          </label>
+          <div className="seg-scope">
+            <span className="muted small">Set for</span>
+            <div className="seg wide3">
+              <button className={applyTo === "selected" ? "on" : ""} onClick={() => setApplyTo("selected")} title="The episodes you ticked in the list">{selected.size ? `${selected.size} episode${selected.size === 1 ? "" : "s"}` : "Episode"}</button>
+              <button className={applyTo === "season" ? "on" : ""} onClick={() => setApplyTo("season")}>{seasonName ?? "Season"}</button>
+              {show && <button className={applyTo === "show" ? "on" : ""} onClick={() => setApplyTo("show")}>Whole show</button>}
+            </div>
+            {applyTo === "selected" && !selected.size && <span className="muted small">Tick episodes in the list on the right.</span>}
+            <label className="check small"><input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />Keep existing markers</label>
+          </div>
           <div className="seg wide3">
             {(["intro", "recap", "credits"] as Part[]).map((x) => (
               <button key={x} className={part === x ? "on" : ""} disabled={x === "recap" && recapsOff} onClick={() => setPart(x)}>{LABEL[x]}</button>
@@ -507,8 +589,22 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
             {saving ? "Saving…" : `Save ${changes.length || ""} change${changes.length === 1 ? "" : "s"} to Jellyfin`}
           </button>
           {!canEdit && <p className="muted small">Saving needs changes to Jellyfin switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
-          {canEdit && !ov.canWriteSegments && <p className="muted small">To save, install the “MediaSegments API” plugin in Jellyfin (Dashboard → Plugins → Catalog) and restart Jellyfin.</p>}
+          {canEdit && !ov.canWriteSegments && <p className="muted small">To save, install the “Intro Skipper” plugin in Jellyfin (Jellyfin page → Plugins), then restart Jellyfin.</p>}
         </div>
+
+        {status && (
+          <div className="card form seg-progress" aria-live="polite">
+            <div className="row between"><h2>Progress</h2>{!status.done ? <button className="small-btn" onClick={() => (stopRef.current.cancelled = true)}>Stop</button> : <button className="link small" onClick={() => { setStatus(null); setLines([]); }}>Close</button>}</div>
+            <span className="muted small">{status.text}</span>
+            <div className="seg-progress-bar"><span style={{ width: `${Math.round((status.pct ?? 0) * 100)}%` }} className={status.pct == null && !status.done ? "busy" : ""} /></div>
+            <div className="seg-progress-lines">
+              {lines.slice(-60).map((l, i) => (
+                <div key={i} className={`seg-line ${l.mark}`}><span className="seg-line-m">{l.mark === "ok" ? "✓" : l.mark === "warn" ? "!" : l.mark === "bad" ? "✗" : "…"}</span><span className="mono seg-line-ep">{l.ep}</span><span className="grow">{l.text}</span></div>
+              ))}
+            </div>
+            <span className="muted small">“Saved and confirmed” means Media Hub read it back from Jellyfin, so Infuse and Jellyfin will show the Skip button.</span>
+          </div>
+        )}
 
         <div className="card form">
           <h2>Changes to review</h2>

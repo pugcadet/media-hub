@@ -2404,3 +2404,20 @@ button.coll-row:hover { background: #1a1a1a; }
 .coll-thumb { width: 40px; height: 60px; flex: 0 0 40px; border-radius: 5px; overflow: hidden; background: #262626; }
 .coll-thumb img { width: 100%; height: 100%; object-fit: cover; }
 @media (max-width: 1250px) { .lib2 .lib-bar-row .searchbox { width: 200px; } }
+
+/* Intros: who, keep, and the Progress list */
+.seg-scope { display: flex; flex-direction: column; gap: 8px; }
+.seg-progress { gap: 8px; }
+.seg-progress-bar { height: 6px; border-radius: 999px; background: #262626; overflow: hidden; }
+.seg-progress-bar span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.seg-progress-bar span.busy { width: 30% !important; animation: segbusy 1.2s infinite ease-in-out; }
+@keyframes segbusy { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+.seg-progress-lines { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; }
+.seg-line { display: flex; gap: 10px; font-size: 13px; color: #d6d6d6; }
+.seg-line-m { width: 14px; font-weight: 700; }
+.seg-line-ep { width: 52px; color: var(--muted); flex: 0 0 52px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seg-line.ok .seg-line-m { color: var(--green); }
+.seg-line.warn .seg-line-m { color: var(--amber); }
+.seg-line.bad .seg-line-m, .seg-line.bad { color: var(--red); }
+.seg-line.busy .seg-line-m { color: var(--accent-on); }
+.seg-side button, .seg-side .seg button { white-space: nowrap; }

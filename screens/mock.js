@@ -27,6 +27,7 @@
     journal_all: [{ id: 1, at: Math.floor(Date.now() / 1000) - 60, action: "image", target: hex(1) + "|Primary|0", title: "Bluey", undone: false }],
     missing_episodes: { source: "TMDB", have: 20, known: 24, missing: [{ season: 1, episode: 3, title: "Hotel", airDate: "2019-01-01" }, { season: 0, episode: 1, title: "Special", airDate: null }], upcoming: [], specialsMissing: 1 },
     segment_summary: { episodes: 24, intro: 20, credits: 18, recap: 0 },
+    save_segments: { confirmed: true, message: "Saved and confirmed" },
     segments_overview: { episodes: episodes.map((e) => ({ id: e.Id, name: e.Name, index: e.IndexNumber ?? null, duration: 1320, segments: [{ id: "a", kind: "Intro", start: 5, end: 40 }] })), ffmpeg: "/opt/homebrew/bin/ffmpeg", canWriteSegments: true },
     inbox_list: ["/Users/me/Downloads", []],
     music_source: { folder: null, source: "jellyfin" },
