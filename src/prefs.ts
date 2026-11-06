@@ -135,6 +135,8 @@ export interface Prefs {
   keepCollections: boolean;
   /** Intros and credits: the folders it shows (null: every folder that has shows). */
   introsFolders: string[] | null;
+  /** The duplicates notice on Home was dismissed for this result ("groups:files"). */
+  dupDismissed: string;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -165,7 +167,7 @@ export const DEFAULT_PREFS: Prefs = {
   pickEdits: {},
   musicFolder: null,
   keepSubLangs: ["eng", "dut"],
-  accent: "#6d66f0",
+  accent: "#00a4dc",
   picksFolders: [],
   folderTabs: {},
   tidy: "messy",
@@ -189,11 +191,12 @@ export const DEFAULT_PREFS: Prefs = {
   inboxShowTop: {},
   keepCollections: false,
   introsFolders: null,
+  dupDismissed: "",
 };
 
 /** Ready-made highlight colours for Settings → Look. */
 export const ACCENTS: { name: string; hex: string }[] = [
-  { name: "Indigo", hex: "#6d66f0" }, { name: "Blue", hex: "#3b82f6" }, { name: "Teal", hex: "#14b8a6" },
+  { name: "Jellyfin blue", hex: "#00a4dc" }, { name: "Jellyfin purple", hex: "#aa5cc3" }, { name: "Indigo", hex: "#6d66f0" }, { name: "Teal", hex: "#14b8a6" },
   { name: "Green", hex: "#22c55e" }, { name: "Amber", hex: "#f59e0b" }, { name: "Orange", hex: "#f97316" },
   { name: "Red", hex: "#e5484d" }, { name: "Pink", hex: "#ec4899" }, { name: "Slate", hex: "#94a3b8" },
 ];
@@ -218,7 +221,7 @@ export function applyAccent(hex: string): void {
   st.setProperty("--accent-on", `rgb(${mix(0.45).join(",")})`);
   st.setProperty("--accent-soft", `rgba(${r},${g},${b},.16)`);
   st.setProperty("--nav-on", `rgba(${r},${g},${b},.18)`);
-  st.setProperty("--accent-ink", lum > 0.6 ? "#111827" : "#ffffff");
+  st.setProperty("--accent-ink", lum > 0.45 ? "#04121a" : "#ffffff");
 }
 
 const KEY = "mediahub.prefs.v1";
@@ -228,6 +231,8 @@ function load(): Prefs {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULT_PREFS;
     const p = JSON.parse(raw) as Partial<Prefs>;
+    // The old default colour moves to Jellyfin's blue with the new look.
+    if (!p.accent || p.accent.toLowerCase() === "#6d66f0") p.accent = "#00a4dc";
     return {
       ...DEFAULT_PREFS,
       ...p,

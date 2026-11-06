@@ -45,7 +45,7 @@ export function UpdateSettings() {
 }
 
 /** Small card in the sidebar when a new version is out. */
-export function UpdateBadge() {
+export function UpdateBadge({ compact }: { compact?: boolean } = {}) {
   const [info, setInfo] = useState<Info | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +53,14 @@ export function UpdateBadge() {
     api.checkUpdate().then(setInfo).catch(() => setInfo(null));
   }, []);
   if (!info?.available) return null;
+  if (compact) {
+    return (
+      <button className="tb-btn tb-update" disabled={busy} title={error ?? `Media Hub ${info.latest} is out`} onClick={() => {
+        setBusy(true);
+        install(info).catch((e) => setError(errorText(e))).finally(() => setBusy(false));
+      }}>{busy ? "Updating…" : error ? "Update failed" : `Update to ${info.latest}`}</button>
+    );
+  }
   return (
     <div className="update-card">
       <div className="strong small">Update available · {info.latest}</div>

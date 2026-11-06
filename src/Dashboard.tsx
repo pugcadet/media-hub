@@ -1,24 +1,18 @@
 // Home: new downloads waiting in the Inbox, what needs doing in the library, what was just
 // added and what changed. One button checks everything again (only what changed).
-import { useEffect, useState, type ReactNode } from "react";
-import { Alert, api, Card, imageUrl, InboxItem, JournalRow, Status, Tuning } from "./api";
+import { useEffect, useState } from "react";
+import { Alert, api, Card, imageUrl, InboxItem, ServerOverview, Status } from "./api";
 import { useEpoch } from "./activity";
 import { nav, type Route } from "./nav";
 import { Icon, type IconName } from "./ui";
-import { KIND } from "./History";
 import { setPrefs, usePrefs } from "./prefs";
 import { namesToFix } from "./fixers";
-import { scanEverything, useScanSummary, type ScanResult, type ScanSummary } from "./scan";
+import { scanEverything, useScanSummary, type ScanSummary } from "./scan";
 import { agoText } from "./saved";
 
 function hour(): string {
   const h = new Date().getHours();
   return h < 6 ? "Good night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
-}
-
-function ago(ts: number): string {
-  const m = Math.max(0, Math.round((Date.now() / 1000 - ts) / 60));
-  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 }
 
 export const gbText = (b: number) => (b >= 1e12 ? `${(b / 1e12).toFixed(1)} TB` : `${(b / 1e9).toFixed(b >= 1e10 ? 0 : 1)} GB`);
@@ -79,41 +73,65 @@ function SetupChecklist({ status, inboxDir }: { status: Status; inboxDir: string
   );
 }
 
+/** Episodes of the same show added together become one tile ("Mr. Bean · 20 new episodes"). */
+export interface Added {
+  id: string;
+  artId: string;
+  title: string;
+  sub: string;
+}
+export function groupAdded(cards: Card[], max = 7): Added[] {
+  const out: (Added & { eps: Card[] })[] = [];
+  for (const c of cards) {
+    const show = c.kind === "episode" && c.seriesId ? c.seriesId : null;
+    const g = show ? out.find((x) => x.id === show) : null;
+    if (g) {
+      g.eps.push(c);
+      continue;
+    }
+    if (out.length >= max) continue;
+    out.push({ id: show ?? c.id, artId: c.artId, title: c.kind === "movie" && c.year ? `${c.title} (${c.year})` : c.title, sub: "", eps: [c] });
+  }
+  return out.map(({ eps, ...g }) => {
+    const first = eps[0];
+    let sub = first.kind === "movie" ? "Movie" : first.subtitle;
+    if (eps.length > 1) {
+      const seasons = [...new Set(eps.map((e) => /^S(\d+)/.exec(e.subtitle)?.[1]).filter(Boolean))];
+      sub = `${eps.length} new episodes${seasons.length === 1 ? ` · Season ${Number(seasons[0])}` : ""}`;
+    } else if (first.kind === "episode") {
+      sub = first.subtitle.split(" · ")[0] || "New episode";
+    }
+    return { ...g, sub };
+  });
+}
+
 export default function Dashboard({ status }: { status: Status }) {
   const epoch = useEpoch();
   const sum = useScanSummary();
   const p = usePrefs();
-  const [alerts, setAlerts] = useState<Alert[]>([]);
   const [inbox, setInbox] = useState<{ dir: string | null; items: InboxItem[] } | undefined>(undefined);
-  const [tuning, setTuning] = useState<Tuning | null>(null);
-  const [journal, setJournal] = useState<JournalRow[]>([]);
   const [recent, setRecent] = useState<Card[]>([]);
-  const [names, setNames] = useState<{ toFix: number; sure: number } | null>(null);
+  const [names, setNames] = useState<number | null>(null);
+  const [server, setServer] = useState<ServerOverview | null | undefined>(undefined);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
   const [scanning, setScanning] = useState(false);
-  const [last, setLast] = useState<ScanResult | null>(null);
 
   useEffect(() => {
-    api.healthAlerts().then(setAlerts).catch(() => setAlerts([]));
     api.inboxScan().then(([dir, items]) => setInbox({ dir, items })).catch(() => setInbox({ dir: null, items: [] }));
-    api.backendTuning().then(setTuning).catch(() => setTuning(null));
-    api.journalAll(6).then(setJournal).catch(() => setJournal([]));
-    api.homeFeed().then((f) => setRecent(f.recent.slice(0, 16))).catch(() => setRecent([]));
+    api.homeFeed().then((f) => setRecent(f.recent)).catch(() => setRecent([]));
+    api.serverOverview().then(setServer).catch(() => setServer(null));
+    api.healthAlerts().then(setAlerts).catch(() => setAlerts([]));
   }, [epoch]);
-  // Names to fix, leaving out what you skipped and folders you switched off.
   useEffect(() => {
-    api.namingCheckLast().then((r) => {
-      if (!r) return setNames(null);
-      const todo = r.rows.filter((x) => namesToFix(x));
-      setNames({ toFix: todo.length, sure: todo.filter((x) => x.sure).length });
-    }).catch(() => setNames(null));
+    api.namingCheckLast().then((r) => setNames(r ? r.rows.filter((x) => namesToFix(x)).length : null)).catch(() => setNames(null));
   }, [epoch, p.renameSkip.length, p.renameOff.join("|")]);
 
-  async function scan(force = false) {
+  async function scan() {
     setScanning(true);
     try {
-      setLast(await scanEverything(status, { force }));
+      await scanEverything(status, { force: false });
     } catch {
-      /* shown in the activity bar */
+      /* shown in the activity list */
     } finally {
       setScanning(false);
     }
@@ -121,93 +139,120 @@ export default function Dashboard({ status }: { status: Status }) {
 
   const h = sum.health;
   const titles = h?.titles ?? 0;
-  const share = (bad: number | null | undefined, of: number) => (bad == null || !of ? null : Math.max(0, 1 - bad / of));
-  const series = status.series;
-
-  const todo: Block[] = [
-    { key: "names", icon: "rename", count: names?.toFix ?? sum.names?.toFix ?? null, ok: share(names?.toFix, titles), title: "Names to fix", okTitle: "Names right", detail: names ? `${names.sure} can be renamed in one go.` : "Not checked yet: Refresh everything checks them.", tone: "info", go: { view: "renamer" }, at: sum.names?.at },
-    { key: "identified", icon: "search", count: h?.unidentified ?? null, ok: share(h?.unidentified, titles), title: "Not identified", okTitle: "All identified", detail: "No match with TMDB or TVDB yet.", tone: "bad", go: { view: "library", flag: "identified" }, at: h?.at },
-    { key: "artwork", icon: "image", count: h?.noArt ?? null, ok: share(h?.noArt, titles), title: "Missing artwork", okTitle: "Artwork complete", detail: "A poster, background or logo is missing.", tone: "warn", go: { view: "library", flag: "artwork" }, at: h?.at },
-    { key: "subtitles", icon: "subtitles", count: h?.subsVideos ?? null, ok: share(h?.subsTitles, titles), title: "No subtitles", okTitle: "Subtitles", detail: h ? `In ${h.subsTitles} title${h.subsTitles === 1 ? "" : "s"}, in your first language.` : "", tone: "warn", go: { view: "subtitles" }, at: h?.at },
-    { key: "intros", icon: "skip", count: sum.intros?.withoutIntro ?? null, ok: share(sum.intros?.withoutIntro, sum.intros?.known ?? 0), title: "No intro markers", okTitle: "Intro markers", detail: sum.intros ? `${sum.intros.known} of ${sum.intros.shows} shows read.` : "Not read yet.", tone: "info", go: { view: "intros" }, at: sum.intros?.at },
-    ...cleanupBlocks(sum, series),
+  const lastScan = Math.max(0, h?.at ?? 0, sum.names?.at ?? 0, sum.intros?.at ?? 0);
+  const steps: { n: string; label: string; count: number | null; what: string; okWhat: string; go: Route }[] = [
+    { n: "1", label: "Identify", count: h?.unidentified ?? null, what: "titles without a match", okWhat: "every title matched", go: { view: "library", flag: "identified" } },
+    { n: "2", label: "Artwork", count: h?.noArt ?? null, what: "titles missing a picture", okWhat: "every poster, background, logo", go: { view: "library", flag: "artwork" } },
+    { n: "3", label: "Naming", count: names ?? sum.names?.toFix ?? null, what: "titles with names or folders to fix", okWhat: "every name and folder right", go: { view: "library", flag: "naming" } },
+    { n: "4", label: "Subtitles", count: h?.subsTitles ?? null, what: "titles missing your language", okWhat: "subtitles everywhere", go: { view: "library", flag: "subtitles" } },
+    { n: "5", label: "Intros", count: sum.intros?.withoutIntro ?? null, what: "shows without skip markers", okWhat: "every show can skip its intro", go: { view: "library", flag: "intros" } },
   ];
-  const tuneTodo = tuning?.rows.filter((r) => r.scope === "library" && !r.ok).length ?? 0;
-  const serious = alerts.filter((a) => a.level !== "info");
-  const lastScan = Math.max(0, ...todo.map((b) => b.at ?? 0));
+  const complete = h ? Math.max(0, titles - (h.libraryTodo ?? 0)) : null;
   const waiting = inbox?.items.length ?? 0;
+  const dupKey = sum.duplicates ? `${sum.duplicates.groups}:${sum.duplicates.files}` : "";
+  const showDup = !!sum.duplicates?.groups && p.dupDismissed !== dupKey;
+  const more = cleanupBlocks(sum, status.series).filter((b) => b.key !== "duplicates" && (b.count ?? 0) > 0);
+  const added = groupAdded(recent);
+  const serious = alerts.filter((a) => a.level !== "info");
+  const plugUpdates = server?.plugins.filter((x) => x.update).length ?? 0;
+  const lastLibScan = server?.tasks.find((t) => t.key === "RefreshLibrary")?.lastEnd ?? null;
 
   return (
-    <div className="pg dash">
-      <div className="dash-top">
+    <div className="pg home">
+      <div className="home-head">
         <div className="stack-xs">
-          <div className="dash-hello">{hour()}</div>
-          <h1>Your library</h1>
-          <div className="muted">{status.movies.toLocaleString()} movies · {status.series.toLocaleString()} shows{lastScan ? ` · checked ${agoText(lastScan)}` : ""}</div>
-          {last && <div className="small muted dash-lastscan">{last.changed ? `${last.changed} title${last.changed === 1 ? "" : "s"} changed since the check before.` : "Nothing changed since the check before."}{last.problems.length ? ` Problems: ${last.problems.join(" · ")}` : ""}</div>}
+          <h1>{hour()}</h1>
+          <div className="muted">
+            {titles ? `${titles.toLocaleString()} titles${complete != null ? ` · ${complete.toLocaleString()} complete` : ""}` : `${status.movies.toLocaleString()} movies · ${status.series.toLocaleString()} shows`}
+            {lastScan ? ` · last refreshed ${agoText(lastScan)}` : ""}
+          </div>
         </div>
-        <div className="dash-scan">
-          <button className="primary" disabled={scanning} onClick={() => void scan(false)} title="Checks names, artwork, subtitles, intros, missing episodes, duplicates, folders and storage. Only what changed since the last check is read again.">
-            {scanning ? <span className="spinner" /> : <Icon name="reload" size={16} />} {scanning ? "Refreshing…" : "Refresh everything"}
-          </button>
-        </div>
+        <button className="primary" disabled={scanning} onClick={() => void scan()} title="Checks names, artwork, subtitles, intros, duplicates and folders. Only what changed since last time is read again.">
+          {scanning ? <span className="spinner" /> : <Icon name="reload" size={16} />} {scanning ? "Refreshing…" : "Refresh everything"}
+        </button>
       </div>
 
       <SetupChecklist status={status} inboxDir={inbox ? inbox.dir : undefined} />
 
       {waiting > 0 && (
-        <button className="dash-inbox" onClick={() => nav.route({ view: "add" })}>
-          <span className="dash-inbox-ico"><Icon name="inbox" size={22} /></span>
+        <button className="home-inbox" onClick={() => nav.route({ view: "add" })}>
+          <span className="home-inbox-ico"><Icon name="inbox" size={22} /></span>
           <span className="grow stack-xs">
-            <span className="strong">{waiting} new download{waiting === 1 ? "" : "s"} in your Inbox</span>
-            <span className="muted small ellipsis">{inbox!.items.slice(0, 4).map((i) => i.title || i.key).join(" · ")}{waiting > 4 ? " …" : ""}</span>
+            <b>{waiting} download{waiting === 1 ? " is" : "s are"} waiting</b>
+            <span className="muted ellipsis">{inbox!.items.slice(0, 4).map((i) => i.title || i.key).join(" · ")}{waiting > 4 ? " …" : ""}</span>
           </span>
-          <span className="dash-inbox-go">Open the Inbox <Icon name="chevron" size={12} /></span>
+          <span className="home-link">Open Inbox</span>
         </button>
       )}
 
-      {(serious.length > 0 || tuneTodo > 0) && (
-        <section className="dash-alerts">
-          {serious.map((a) => (
-            <button key={a.title} className={`dash-alert ${a.level}`} onClick={() => nav.route(a.fix.startsWith("settings:plugins") ? { view: "jellyfin" } : a.fix.startsWith("settings:") ? { view: "settings", section: a.fix.slice(9) } : { view: a.fix as Route["view"] })}>
-              <Icon name="warn" /> <span className="grow"><span className="strong">{a.title}</span> <span className="muted small">{a.detail}</span></span> <Icon name="chevron" size={14} />
+      {showDup && (
+        <div className="home-notice" role="status">
+          <b>Duplicate found:</b>
+          <span className="grow">{sum.duplicates!.groups} title{sum.duplicates!.groups === 1 ? " has" : "s have"} more than one video file ({sum.duplicates!.files} files).</span>
+          <button className="link" onClick={() => nav.route({ view: "cleanup", section: "duplicates" })}>Show</button>
+          <button className="link muted-link" onClick={() => setPrefs({ dupDismissed: dupKey })}>Dismiss</button>
+        </div>
+      )}
+      {serious.map((a) => (
+        <button key={a.title} className="home-notice bad" onClick={() => nav.route(a.fix.startsWith("settings:plugins") ? { view: "jellyfin" } : a.fix.startsWith("settings:") ? { view: "settings", section: a.fix.slice(9) } : { view: a.fix as Route["view"] })}>
+          <b>{a.title}</b><span className="grow muted">{a.detail}</span><span className="home-link">Fix</span>
+        </button>
+      ))}
+
+      <section className="home-steps" aria-label="Library">
+        <h2 className="home-cap">Library: what's left</h2>
+        <div className="home-step-grid">
+          {steps.map((x) => (
+            <button key={x.n} className="home-step" onClick={() => nav.route({ ...x.go, n: Date.now() })}>
+              <span className="muted">{x.n} · {x.label}</span>
+              <b className={x.count === null ? "muted" : x.count ? "warn" : "good"}>{x.count === null ? "–" : x.count ? x.count.toLocaleString() : "✓"}</b>
+              <span className="muted small">{x.count === null ? "not checked yet" : x.count ? x.what : x.okWhat}</span>
             </button>
           ))}
-          {tuneTodo > 0 && (
-            <button className="dash-alert" onClick={() => nav.route({ view: "settings", section: "backend" })}>
-              <Icon name="warn" /> <span className="grow"><span className="strong">{tuneTodo} Jellyfin setting{tuneTodo === 1 ? "" : "s"} to look at</span> <span className="muted small">They let Jellyfin overwrite your edits or slow down scans.</span></span> <Icon name="chevron" size={14} />
-            </button>
-          )}
-        </section>
-      )}
+        </div>
+        {more.length > 0 && (
+          <div className="home-more muted small">
+            Also:{" "}
+            {more.map((b, i) => (
+              <span key={b.key}>{i > 0 && " · "}<button className="link" onClick={() => nav.route(b.go)}>{b.count!.toLocaleString()} {b.title.toLowerCase()}</button></span>
+            ))}
+          </div>
+        )}
+      </section>
 
-      <BlockRow title="What needs doing" hint="Click one to fix it" blocks={todo} />
-
-      {recent.length > 0 && (
-        <section className="dash-section">
-          <div className="dash-section-head"><h2>Just added to Jellyfin</h2></div>
-          <div className="dash-recent">
-            {recent.map((c) => (
-              <button key={c.id} className="dash-recent-tile" onClick={() => nav.open(c.seriesId ?? c.id)} title={c.title}>
-                <span className="dash-recent-art"><img src={imageUrl(c.artId, "Primary", 240)} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /></span>
-                <span className="small strong ellipsis">{c.title}</span>
-                <span className="small muted ellipsis">{c.subtitle}</span>
+      <div className="home-split">
+        <section className="home-card" aria-label="Just added">
+          <h2>Just added</h2>
+          {added.length === 0 && <span className="muted small">Nothing new in Jellyfin lately.</span>}
+          <div className="home-added">
+            {added.map((c) => (
+              <button key={c.id} className="home-added-tile" onClick={() => nav.open(c.id)} title={c.title}>
+                <span className="home-added-art">
+                  <img src={imageUrl(c.artId, "Primary", 300)} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+                  <span className="home-added-name">{c.title}</span>
+                </span>
+                <span className="small muted ellipsis">{c.sub}</span>
               </button>
             ))}
           </div>
         </section>
-      )}
-
-      <Panel title="Recent changes" action={<button className="link small" onClick={() => nav.route({ view: "history" })}>History and undo</button>}>
-        {journal.length === 0 && <span className="muted small">Nothing changed yet.</span>}
-        {journal.map((j) => (
-          <div key={j.id} className={`dash-change ${j.undone ? "undone" : ""}`}>
-            <span className="strong small">{KIND[j.action] ?? j.action}</span>
-            <span className="small ellipsis grow">{j.title || "—"}</span>
-            <span className="muted small">{ago(j.at)}</span>
-          </div>
-        ))}
-      </Panel>
+        <section className="home-card" aria-label="Jellyfin">
+          <h2>Jellyfin</h2>
+          {server === undefined && <span className="muted small"><span className="spinner small-spin" /> Asking the server…</span>}
+          {server === null && <span className="bad small">The server didn't answer.</span>}
+          {server && (
+            <>
+              <div className="kv-line"><span className="muted">Server</span><span>{server.version}{server.updateAvailable ? <span className="warn"> · {server.latest} is out</span> : " · up to date"}</span></div>
+              <div className="kv-line"><span className="muted">Internet (DNS)</span>{server.catalogOk ? <span className="good">Works</span> : <span className="bad">Not working</span>}</div>
+              <div className="kv-line"><span className="muted">Last library scan</span><span>{lastLibScan ? agoText(Date.parse(lastLibScan)) : "–"}</span></div>
+              <div className="kv-line"><span className="muted">Plugins</span>{plugUpdates ? <span className="warn">{plugUpdates} update{plugUpdates === 1 ? "" : "s"}</span> : <span>{server.plugins.length} · up to date</span>}</div>
+              {server.pendingRestart && <div className="kv-line"><span className="muted">Restart</span><span className="warn">needed</span></div>}
+            </>
+          )}
+          <span className="spacer" />
+          <button className="link home-link" onClick={() => nav.route({ view: "jellyfin" })}>Open Jellyfin page</button>
+        </section>
+      </div>
     </div>
   );
 }
@@ -251,14 +296,5 @@ function ResultBlock({ b, on, onClick }: { b: Block; on?: boolean; onClick?: () 
       {b.ok != null && <span className="dash-bar"><span style={{ width: `${Math.round(b.ok * 100)}%` }} /></span>}
       <span className="dash-cta">{fine ? "Open" : b.count === null ? "Check" : "Fix"} <Icon name="chevron" size={12} /></span>
     </button>
-  );
-}
-
-function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="card dash-panel">
-      <div className="row between"><h2>{title}</h2>{action}</div>
-      {children}
-    </section>
   );
 }

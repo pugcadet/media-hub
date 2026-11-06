@@ -99,7 +99,7 @@ pub async fn home_feed(state: State<'_, AppState>) -> Result<HomeFeed> {
     Ok(HomeFeed {
         resume: cards(&c.resume().await.unwrap_or_default()),
         next_up: cards(&c.next_up().await.unwrap_or_default()),
-        recent: cards(&c.recently_added(40).await.unwrap_or_default()),
+        recent: cards(&c.recently_added(100).await.unwrap_or_default()),
         collections: cards(&c.collections().await.unwrap_or_default()),
     })
 }

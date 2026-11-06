@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { api, Attention, errorText, Library as Lib, Status } from "./api";
+import { api, errorText, Status } from "./api";
 import Setup from "./Setup";
 import LibraryView from "./LibraryView";
 import Renamer from "./Renamer";
 import Settings from "./Settings";
 import Downloads from "./Downloads";
 import ItemPage from "./ItemPage";
-import Sidebar from "./Sidebar";
+import TopBar from "./TopBar";
 import { SubtitlesTool } from "./Tools";
 import IntrosTool from "./IntrosTool";
 import Dashboard from "./Dashboard";
 import Inbox from "./Inbox";
 import Server from "./Server";
-import { ActivityBar, Icon, reloadData } from "./ui";
+import { reloadData } from "./ui";
 import { UpdateToast } from "./Updates";
 import { setNav, type OpenOpts, type Route, type View } from "./nav";
 import { useEpoch } from "./activity";
@@ -35,8 +35,6 @@ export default function App() {
   const [fatal, setFatal] = useState<string | null>(null);
   const [route, setRoute] = useState<Route>({ view: "home" });
   const [itemStack, setItemStack] = useState<Open[]>([]);
-  const [libraries, setLibraries] = useState<Lib[]>([]);
-  const [attention, setAttention] = useState<Attention | null>(null);
   const epoch = useEpoch();
   const { uiScale } = usePrefs();
   // Always open on the media manager's Home.
@@ -61,8 +59,6 @@ export default function App() {
       const s = await api.status();
       setStatus(s);
       if (s.connected) {
-        api.libraries().then(setLibraries).catch(() => setLibraries([]));
-        api.attention().then(setAttention).catch(() => setAttention(null));
       }
     } catch (e) {
       setFatal(errorText(e));
@@ -188,13 +184,6 @@ export default function App() {
       window.removeEventListener("contextmenu", onCtx);
     };
   }, [travel]);
-  const arrows = (
-    <div className="nav-arrows">
-      <button className="icon-btn" disabled={pos.current <= 0} onClick={() => travel(-1)} title="Back (⌘[)" aria-label="Back"><span className="flip"><Icon name="chevron" size={16} /></span></button>
-      <button className="icon-btn" disabled={pos.current >= hist.current.length - 1} onClick={() => travel(1)} title="Forward (⌘])" aria-label="Forward"><Icon name="chevron" size={16} /></button>
-    </div>
-  );
-
   const top = itemStack[itemStack.length - 1];
   // Where the list was scrolled when a title was opened (put back when you come back).
   const listRef = useRef<HTMLDivElement>(null);
@@ -273,10 +262,9 @@ export default function App() {
   }
 
   return (
-    <div className="shell">
-      <Sidebar status={status} libraries={libraries} attention={attention} route={route} onRoute={go} />
+    <div className="shell top">
+      <TopBar status={status} route={route} onRoute={go} />
       <div className="main-col">
-        <ActivityBar left={arrows} />
         <div className="page" key={`${route.view}-${route.n ?? 0}`} ref={listRef} hidden={!!top} onScroll={(e) => { if (!top) listScroll.current = (e.target as HTMLDivElement).scrollTop; }}>{page}</div>
         {top && <div className="page" key={`item-${top.id}-${top.n ?? 0}`}>{itemPage}</div>}
       </div>
