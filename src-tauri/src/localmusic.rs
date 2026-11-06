@@ -538,6 +538,12 @@ pub fn play_url(id: &str) -> Result<String> {
     Ok(format!("{}/lf/{key}", base()))
 }
 
+/// The first cover picture inside any song of an album.
+fn album_embedded(root: &Path, app: &AppHandle, album_key: &str) -> Option<(Vec<u8>, &'static str)> {
+    let files = with_index(root, Some(app), |ix| ix.tracks.iter().filter(|t| t.album_key == album_key).map(|t| t.path.clone()).collect::<Vec<_>>()).ok()?;
+    files.iter().take(6).find_map(|p| embedded_cover(p))
+}
+
 /// Serves "lf/<track>" (the song) and "lc/<album>" (its cover) for the hubmedia scheme.
 pub fn serve(app: &AppHandle, path: &str) -> Option<(Vec<u8>, String)> {
     use tauri::Manager;
@@ -547,6 +553,11 @@ pub fn serve(app: &AppHandle, path: &str) -> Option<(Vec<u8>, String)> {
     }
     let state = app.state::<AppState>();
     let root = root_of(&state).ok()?;
+    // "le/<album>": the cover inside the album's songs (shown as a choice before it's used).
+    if kind == "le" {
+        let (bytes, ext) = album_embedded(&root, app, key)?;
+        return Some((bytes, if ext == "png" { "image/png" } else { "image/jpeg" }.to_string()));
+    }
     let file = with_index(&root, Some(app), |ix| match kind {
         "lf" => ix.tracks.iter().find(|t| t.key == key).map(|t| t.path.clone()),
         "lc" => ix.covers.get(key).cloned(),
@@ -1098,7 +1109,24 @@ pub struct ArtOption {
 
 /// Pictures for an album or artist from Deezer and the Cover Art Archive, best match first.
 #[tauri::command]
-pub async fn music_art_options(kind: String, name: String, artist: Option<String>) -> Result<Vec<ArtOption>> {
+pub async fn music_art_options(app: AppHandle, state: State<'_, AppState>, kind: String, name: String, artist: Option<String>, id: Option<String>) -> Result<Vec<ArtOption>> {
+    let mut first: Vec<ArtOption> = Vec::new();
+    // The cover already inside the songs, first.
+    if let (Some(key), Ok(root)) = (id.as_deref().and_then(|i| i.strip_prefix('A')).filter(|k| k.len() == 16 && k.chars().all(|c| c.is_ascii_hexdigit())), root_of(&state)) {
+        let (k2, a2) = (key.to_string(), app.clone());
+        if tauri::async_runtime::spawn_blocking(move || album_embedded(&root, &a2, &k2).is_some()).await.unwrap_or(false) {
+            first.push(ArtOption { url: format!("{}/le/{key}", base()), label: "The cover inside your files".into(), source: "Your files" });
+        }
+    }
+    let mut rest = art_options_online(kind, name, artist).await?;
+    first.append(&mut rest);
+    Ok(first)
+}
+
+/// TheAudioDB's free, public test key (no account needed).
+const AUDIODB: &str = "https://www.theaudiodb.com/api/v1/json/123";
+
+async fn art_options_online(kind: String, name: String, artist: Option<String>) -> Result<Vec<ArtOption>> {
     let name: String = name.trim().chars().take(200).collect();
     let artist: String = artist.unwrap_or_default().trim().chars().take(200).collect();
     if name.is_empty() {
@@ -1117,6 +1145,14 @@ pub async fn music_art_options(kind: String, name: String, artist: Option<String
         }
         list.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
         out.extend(list.into_iter().map(|x| x.2));
+        for a in get_json(&format!("{AUDIODB}/search.php?s={}", enc(&name))).await.and_then(|v| v.get("artists").and_then(|d| d.as_array()).cloned()).unwrap_or_default() {
+            let n = a.get("strArtist").and_then(|x| x.as_str()).unwrap_or("");
+            for k in ["strArtistThumb", "strArtistWideThumb"] {
+                if let Some(pic) = a.get(k).and_then(|x| x.as_str()).filter(|p| p.starts_with("https://")) {
+                    out.push(ArtOption { url: pic.to_string(), label: n.to_string(), source: "TheAudioDB" });
+                }
+            }
+        }
         return Ok(out);
     }
     let q = if artist.is_empty() { name.clone() } else { format!("{artist} {name}") };
@@ -1133,7 +1169,15 @@ pub async fn music_art_options(kind: String, name: String, artist: Option<String
         let Some(id) = rg.get("id").and_then(|x| x.as_str()) else { continue };
         let t = rg.get("title").and_then(|x| x.as_str()).unwrap_or("");
         let who = rg.pointer("/artist-credit/0/name").and_then(|x| x.as_str()).unwrap_or("");
-        out.push(ArtOption { url: format!("https://coverartarchive.org/release-group/{id}/front-500"), label: format!("{t} · {who}"), source: "MusicBrainz" });
+        out.push(ArtOption { url: format!("https://coverartarchive.org/release-group/{id}/front-500"), label: format!("{t} · {who}"), source: "Cover Art Archive" });
+    }
+    if !artist.is_empty() {
+        let url = format!("{AUDIODB}/searchalbum.php?s={}&a={}", enc(&artist), enc(&name));
+        for a in get_json(&url).await.and_then(|v| v.get("album").and_then(|d| d.as_array()).cloned()).unwrap_or_default() {
+            let Some(pic) = a.get("strAlbumThumb").and_then(|x| x.as_str()).filter(|p| p.starts_with("https://")) else { continue };
+            let t = a.get("strAlbum").and_then(|x| x.as_str()).unwrap_or("");
+            out.push(ArtOption { url: pic.to_string(), label: format!("{t} · {artist}"), source: "TheAudioDB" });
+        }
     }
     Ok(out)
 }
@@ -1142,7 +1186,7 @@ pub async fn music_art_options(kind: String, name: String, artist: Option<String
 fn allowed_art_url(u: &str) -> bool {
     let Ok(p) = url::Url::parse(u) else { return false };
     let host = p.host_str().unwrap_or("");
-    p.scheme() == "https" && (host.ends_with(".dzcdn.net") || host == "coverartarchive.org" || host.ends_with(".archive.org") || host == "archive.org")
+    p.scheme() == "https" && (host.ends_with(".dzcdn.net") || host == "coverartarchive.org" || host.ends_with(".archive.org") || host == "archive.org" || host == "theaudiodb.com" || host.ends_with(".theaudiodb.com"))
 }
 
 /// Uses a picture for an album or artist from the music folder: one of the choices (`url`),
@@ -1151,7 +1195,12 @@ fn allowed_art_url(u: &str) -> bool {
 pub async fn music_local_set_art(app: AppHandle, state: State<'_, AppState>, id: String, url: Option<String>) -> Result<bool> {
     let root = root_of(&state)?;
     let target = target_of(&root, &id)?;
+    let embedded_key = url.as_deref().and_then(|u| u.rsplit_once("/le/").map(|x| x.1.to_string())).filter(|k| k.len() == 16 && k.chars().all(|c| c.is_ascii_hexdigit()));
     let (bytes, ext) = match url {
+        Some(_) if embedded_key.is_some() => {
+            let (r2, a2, k2) = (root.clone(), app.clone(), embedded_key.clone().unwrap_or_default());
+            tauri::async_runtime::spawn_blocking(move || album_embedded(&r2, &a2, &k2)).await.map_err(|e| Error::msg(e.to_string()))?.ok_or_else(|| Error::msg("There's no cover inside these songs."))?
+        }
         Some(u) => {
             if !allowed_art_url(&u) {
                 return Err(Error::msg("bad picture address"));
@@ -1208,6 +1257,421 @@ pub async fn music_local_set_art(app: AppHandle, state: State<'_, AppState>, id:
     }
     let _ = app.emit("music-updated", ());
     Ok(true)
+}
+
+/* ------------------------------------------------------------------ song details from MusicBrainz */
+
+/// The fields Media Hub can correct in a song's tags.
+const TAG_FIELDS: &[&str] = &["title", "artist", "albumArtist", "album", "track", "disc", "year", "genre"];
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SongTags {
+    title: Option<String>,
+    artist: Option<String>,
+    album_artist: Option<String>,
+    album: Option<String>,
+    track: Option<i64>,
+    disc: Option<i64>,
+    year: Option<i64>,
+    genre: Option<String>,
+}
+
+impl SongTags {
+    fn get(&self, f: &str) -> Option<String> {
+        match f {
+            "title" => self.title.clone(),
+            "artist" => self.artist.clone(),
+            "albumArtist" => self.album_artist.clone(),
+            "album" => self.album.clone(),
+            "track" => self.track.map(|n| n.to_string()),
+            "disc" => self.disc.map(|n| n.to_string()),
+            "year" => self.year.map(|n| n.to_string()),
+            "genre" => self.genre.clone(),
+            _ => None,
+        }
+    }
+}
+
+fn read_song_tags(path: &Path) -> Option<SongTags> {
+    use lofty::prelude::*;
+    let file = lofty::probe::Probe::open(path).ok()?.options(lofty::config::ParseOptions::new().read_cover_art(false).read_properties(false)).read().ok()?;
+    let Some(tag) = file.primary_tag().or_else(|| file.first_tag()) else { return Some(SongTags::default()) };
+    let clean = |s: Option<std::borrow::Cow<'_, str>>| s.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+    Some(SongTags {
+        title: clean(tag.title()),
+        artist: clean(tag.artist()),
+        album_artist: tag.get_string(&ItemKey::AlbumArtist).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()),
+        album: clean(tag.album()),
+        track: tag.track().map(i64::from).filter(|n| *n > 0),
+        disc: tag.disk().map(i64::from).filter(|n| *n > 0),
+        year: tag.year().map(i64::from).filter(|y| (1000..3000).contains(y)).or_else(|| tag.get_string(&ItemKey::RecordingDate).and_then(|d| d.get(..4)).and_then(|y| y.parse().ok())),
+        genre: clean(tag.genre()),
+    })
+}
+
+/// Writes the given fields (None clears a field) into a song file's own tags.
+fn write_song_tags(path: &Path, fields: &[(String, Option<String>)]) -> Result<()> {
+    use lofty::config::WriteOptions;
+    use lofty::prelude::*;
+    use lofty::tag::Tag;
+    let mut file = lofty::read_from_path(path).map_err(|e| Error::msg(format!("{} can't be read as music ({e}).", path.display())))?;
+    if file.primary_tag().is_none() {
+        let t = file.primary_tag_type();
+        file.insert_tag(Tag::new(t));
+    }
+    let tag = file.primary_tag_mut().ok_or_else(|| Error::msg("no tag"))?;
+    for (f, v) in fields {
+        let num = |v: &Option<String>| v.as_deref().and_then(|x| x.parse::<u32>().ok());
+        match (f.as_str(), v) {
+            ("title", Some(x)) => { tag.set_title(x.clone()); }
+            ("title", None) => { tag.remove_title(); }
+            ("artist", Some(x)) => { tag.set_artist(x.clone()); }
+            ("artist", None) => { tag.remove_artist(); }
+            ("album", Some(x)) => { tag.set_album(x.clone()); }
+            ("album", None) => { tag.remove_album(); }
+            ("genre", Some(x)) => { tag.set_genre(x.clone()); }
+            ("genre", None) => { tag.remove_genre(); }
+            ("albumArtist", Some(x)) => { tag.insert_text(ItemKey::AlbumArtist, x.clone()); }
+            ("albumArtist", None) => { tag.retain(|i| i.key() != &ItemKey::AlbumArtist); }
+            ("track", v) => { match num(v) { Some(n) => tag.set_track(n), None => tag.remove_track() } }
+            ("disc", v) => { match num(v) { Some(n) => tag.set_disk(n), None => tag.remove_disk() } }
+            ("year", v) => { match num(v) { Some(n) => tag.set_year(n), None => tag.remove_year() } }
+            _ => {}
+        }
+    }
+    tag.save_to_path(path, WriteOptions::default()).map_err(|e| Error::msg(format!("{} couldn't be saved ({e}).", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())))
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Release {
+    id: String,
+    title: String,
+    artist: String,
+    date: String,
+    country: String,
+    tracks: usize,
+    score: i64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TagChange {
+    /// The song file, relative to the music folder.
+    rel: String,
+    /// "#3" or the song's current title, for the list.
+    song: String,
+    field: String,
+    from: Option<String>,
+    to: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TagCheck {
+    /// The release the changes come from (None: nothing found on MusicBrainz).
+    release: Option<Release>,
+    /// Other releases to choose from (other editions, countries …).
+    others: Vec<Release>,
+    changes: Vec<TagChange>,
+    /// Songs that couldn't be matched to a track of the release.
+    unmatched: Vec<String>,
+}
+
+fn credit(v: Option<&serde_json::Value>) -> String {
+    v.and_then(|a| a.as_array())
+        .map(|a| a.iter().map(|c| format!("{}{}", c.get("name").and_then(|x| x.as_str()).unwrap_or(""), c.get("joinphrase").and_then(|x| x.as_str()).unwrap_or(""))).collect::<String>())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn release_of(r: &serde_json::Value) -> Release {
+    let st = |k: &str| r.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    Release {
+        id: st("id"),
+        title: st("title"),
+        artist: credit(r.get("artist-credit")),
+        date: st("date"),
+        country: st("country"),
+        tracks: r.get("track-count").and_then(|x| x.as_u64()).map(|n| n as usize).or_else(|| r.get("media").and_then(|m| m.as_array()).map(|m| m.iter().map(|x| x.get("track-count").and_then(|t| t.as_u64()).unwrap_or(0) as usize).sum())).unwrap_or(0),
+        score: r.get("score").and_then(|x| x.as_i64()).unwrap_or(0),
+    }
+}
+
+/// A title for comparing, and without an "Artist - " in front ("drake - controlla").
+fn title_variants(t: &str) -> Vec<String> {
+    let mut v = vec![title_words(t)];
+    if let Some((_, rest)) = t.split_once(" - ") {
+        v.push(title_words(rest));
+    }
+    v.retain(|x| !x.is_empty());
+    v
+}
+
+/// Words of a title for comparing ("Controlla (prod. Boi-1da) [Explicit]" ~ "Controlla").
+fn title_words(t: &str) -> String {
+    let t = t.to_lowercase();
+    let cut = t.find(" (feat").or_else(|| t.find(" [")).or_else(|| t.find(" (prod")).map(|i| &t[..i]).unwrap_or(&t);
+    crate::naming::fold_accents(cut).chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+/// Pairs your songs with the release's tracks: by disc and track number when the numbers are
+/// there and the counts agree, otherwise by title. Returns (song index, track) pairs.
+pub fn pair_tracks(songs: &[(Option<i64>, Option<i64>, String)], tracks: &[(i64, i64, String)]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let numbered = songs.iter().all(|s| s.1.is_some()) && songs.len() == tracks.len();
+    if numbered {
+        for (i, s) in songs.iter().enumerate() {
+            let disc = s.0.unwrap_or(1);
+            if let Some(j) = tracks.iter().position(|t| t.0 == disc && Some(t.1) == s.1) {
+                out.push((i, j));
+            }
+        }
+        if out.len() == songs.len() {
+            return out;
+        }
+        out.clear();
+    }
+    let mut used = vec![false; tracks.len()];
+    for (i, s) in songs.iter().enumerate() {
+        let ws = title_variants(&s.2);
+        if ws.is_empty() {
+            continue;
+        }
+        let same = |tw: &str| ws.iter().any(|w| tw == w.as_str() || (w.len() > 4 && tw.len() > 4 && (tw.starts_with(w.as_str()) || w.starts_with(tw))));
+        let hit = tracks.iter().enumerate().find(|(j, t)| !used[*j] && { let tw = title_words(&t.2); !tw.is_empty() && same(&tw) });
+        if let Some((j, _)) = hit {
+            used[j] = true;
+            out.push((i, j));
+        }
+    }
+    // Same number of songs and tracks, and most matched by title: the rest by number.
+    if songs.len() == tracks.len() && out.len() * 2 >= songs.len() {
+        for (i, s) in songs.iter().enumerate() {
+            if out.iter().any(|p| p.0 == i) {
+                continue;
+            }
+            if let Some(j) = tracks.iter().position(|t| Some(t.1) == s.1 && t.0 == s.0.unwrap_or(1)).filter(|j| !used[*j]) {
+                used[j] = true;
+                out.push((i, j));
+            }
+        }
+    }
+    out
+}
+
+/// The album's song files in disc/track order: (the file's full path as text, path). Works for an
+/// album from the music folder ("A…") and for one in Jellyfin (its id; files found on this computer).
+async fn album_songs(state: &AppState, id: &str) -> Result<Vec<(String, PathBuf)>> {
+    if let Some(key) = id.strip_prefix('A').filter(|k| k.len() == 16 && k.chars().all(|c| c.is_ascii_hexdigit())) {
+        let root = root_of(state)?;
+        let g = index().lock().map_err(|_| Error::msg("internal error"))?;
+        let ix = g.as_ref().filter(|i| i.root == root).ok_or_else(|| Error::msg("Open Music first so the folder is read."))?;
+        let mut t: Vec<&Track> = ix.tracks.iter().filter(|t| t.album_key == key).collect();
+        t.sort_by_key(|x| (x.disc.unwrap_or(1), x.index.unwrap_or(999), x.title.to_lowercase()));
+        if t.is_empty() {
+            return Err(Error::msg("That album isn't in the music folder any more."));
+        }
+        return Ok(t.iter().map(|x| (x.path.to_string_lossy().into_owned(), x.path.clone())).collect());
+    }
+    if !crate::jellyfin::valid_item_id(id) {
+        return Err(Error::msg("bad id"));
+    }
+    let c = state.reader().await?;
+    let mut items = c
+        .items_query(vec![("ParentId", id.to_string()), ("IncludeItemTypes", "Audio".into()), ("Recursive", "true".into()), ("Fields", "Path".into()), ("EnableImages", "false".into())], 500)
+        .await?;
+    items.sort_by_key(|v| (v.get("ParentIndexNumber").and_then(|x| x.as_i64()).unwrap_or(1), v.get("IndexNumber").and_then(|x| x.as_i64()).unwrap_or(999)));
+    let mut out = Vec::new();
+    for v in &items {
+        let server = v.get("Path").and_then(|x| x.as_str()).unwrap_or("");
+        let p = crate::local::to_local(state, server)?;
+        out.push((p.to_string_lossy().into_owned(), p));
+    }
+    if out.is_empty() {
+        return Err(Error::msg("No songs found for this album."));
+    }
+    Ok(out)
+}
+
+/// Looks the album up on MusicBrainz and lists what would change in each song's tags.
+/// `release` picks another edition from `others`. Nothing is written here.
+#[tauri::command]
+pub async fn music_tags_check(state: State<'_, AppState>, id: String, release: Option<String>) -> Result<TagCheck> {
+    let songs = album_songs(&state, &id).await?;
+    let paths: Vec<PathBuf> = songs.iter().map(|s| s.1.clone()).collect();
+    let current: Vec<SongTags> = tauri::async_runtime::spawn_blocking(move || paths.iter().map(|p| read_song_tags(p).unwrap_or_default()).collect())
+        .await
+        .map_err(|e| Error::msg(e.to_string()))?;
+    let artist = current.iter().find_map(|t| t.album_artist.clone().or(t.artist.clone())).unwrap_or_default();
+    let album = current.iter().find_map(|t| t.album.clone()).unwrap_or_else(|| songs[0].1.parent().and_then(|d| d.file_name()).map(|a| parse_album(&a.to_string_lossy()).0).unwrap_or_default());
+    let main_artist = crate::inbox::main_artist(&artist);
+    // Search: same title and artist; best score, and editions with the same number of songs first.
+    let q = if main_artist.is_empty() { format!("release:\"{}\"", lucene(&album)) } else { format!("release:\"{}\" AND artist:\"{}\"", lucene(&album), lucene(&main_artist)) };
+    let found = get_json(&format!("https://musicbrainz.org/ws/2/release/?query={}&fmt=json&limit=8", enc(&q))).await;
+    let mut others: Vec<Release> = found.as_ref().and_then(|v| v.get("releases")).and_then(|r| r.as_array()).map(|a| a.iter().map(release_of).collect()).unwrap_or_default();
+    let n = songs.len();
+    others.sort_by(|a, b| (b.score >= 90 && b.tracks == n).cmp(&(a.score >= 90 && a.tracks == n)).then(b.score.cmp(&a.score)));
+    let pick = release.filter(|r| r.len() == 36 && r.chars().all(|c| c.is_ascii_hexdigit() || c == '-')).or_else(|| others.iter().find(|r| r.score >= 80).map(|r| r.id.clone()));
+    let Some(rid) = pick else { return Ok(TagCheck { release: None, others, changes: Vec::new(), unmatched: Vec::new() }) };
+    // MusicBrainz allows one request a second.
+    let _ = tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(1100))).await;
+    let r = get_json(&format!("https://musicbrainz.org/ws/2/release/{rid}?inc=recordings+artist-credits+genres+release-groups&fmt=json"))
+        .await
+        .ok_or_else(|| Error::msg("MusicBrainz didn't answer. Try again in a moment."))?;
+    let rel = release_of(&r);
+    let mut tracks: Vec<(i64, i64, String, String)> = Vec::new();
+    for m in r.get("media").and_then(|m| m.as_array()).into_iter().flatten() {
+        let disc = m.get("position").and_then(|x| x.as_i64()).unwrap_or(1);
+        for t in m.get("tracks").and_then(|t| t.as_array()).into_iter().flatten() {
+            let pos = t.get("position").and_then(|x| x.as_i64()).unwrap_or(0);
+            let title = t.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let who = credit(t.get("artist-credit"));
+            tracks.push((disc, pos, title, if who.is_empty() { rel.artist.clone() } else { who }));
+        }
+    }
+    let discs = tracks.iter().map(|t| t.0).max().unwrap_or(1);
+    let year = r.get("date").and_then(|d| d.as_str()).and_then(|d| d.get(..4)).and_then(|y| y.parse::<i64>().ok())
+        .or_else(|| r.pointer("/release-group/first-release-date").and_then(|d| d.as_str()).and_then(|d| d.get(..4)).and_then(|y| y.parse().ok()));
+    let genre = r.get("genres").or_else(|| r.pointer("/release-group/genres")).and_then(|g| g.as_array()).and_then(|g| g.iter().max_by_key(|x| x.get("count").and_then(|c| c.as_i64()).unwrap_or(0)))
+        .and_then(|g| g.get("name").and_then(|n| n.as_str()))
+        .map(|g| g.split(' ').map(|w| { let mut c = w.chars(); c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default() }).collect::<Vec<_>>().join(" ").replace("Hip Hop", "Hip-Hop"));
+    let keys: Vec<(Option<i64>, Option<i64>, String)> = current
+        .iter()
+        .zip(&songs)
+        .map(|(t, s)| (t.disc, t.track, t.title.clone().unwrap_or_else(|| parse_file(&s.1.file_stem().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default()).0)))
+        .collect();
+    let pairs = pair_tracks(&keys, &tracks.iter().map(|t| (t.0, t.1, t.2.clone())).collect::<Vec<_>>());
+    let mut changes = Vec::new();
+    let mut unmatched = Vec::new();
+    for (i, (rel_path, _)) in songs.iter().enumerate() {
+        let Some(&(_, j)) = pairs.iter().find(|p| p.0 == i) else {
+            unmatched.push(rel_path.rsplit(['/', '\\']).next().unwrap_or(rel_path).to_string());
+            continue;
+        };
+        let t = &tracks[j];
+        let want = SongTags {
+            title: Some(t.2.clone()),
+            artist: Some(t.3.clone()),
+            album_artist: Some(rel.artist.clone()).filter(|a| !a.is_empty()),
+            album: Some(rel.title.clone()),
+            track: Some(t.1),
+            disc: if discs > 1 || current[i].disc.is_some() { Some(t.0) } else { None },
+            year,
+            genre: genre.clone(),
+        };
+        let song = current[i].track.map(|n| format!("#{n}")).unwrap_or_else(|| keys[i].2.clone());
+        for f in TAG_FIELDS {
+            let (from, to) = (current[i].get(f), want.get(f));
+            // Only real changes; a field MusicBrainz has nothing for stays as it is.
+            if to.is_some() && from.as_deref().map(str::trim) != to.as_deref() {
+                changes.push(TagChange { rel: rel_path.clone(), song: song.clone(), field: f.to_string(), from, to });
+            }
+        }
+    }
+    if !others.iter().any(|o| o.id == rel.id) {
+        others.insert(0, rel.clone());
+    }
+    Ok(TagCheck { release: Some(rel), others, changes, unmatched })
+}
+
+/// Old values of the fields changed, per song file (for undo).
+#[derive(Serialize, Deserialize)]
+struct TagUndo {
+    /// Jellyfin album to refresh after undo (empty for the music folder).
+    #[serde(default)]
+    item: String,
+    songs: Vec<(String, Vec<(String, Option<String>)>)>,
+}
+
+/// Writes the chosen changes into the song files. The old values are kept for undo (History).
+#[tauri::command]
+pub async fn music_tags_apply(app: AppHandle, state: State<'_, AppState>, id: String, changes: Vec<(String, String, Option<String>)>) -> Result<usize> {
+    let songs = album_songs(&state, &id).await?;
+    let jf = crate::jellyfin::valid_item_id(&id);
+    if jf {
+        // Writing files of a Jellyfin album changes your library: needs changes switched on.
+        let _ = state.writer().await?;
+    }
+    let mut per: Vec<(String, PathBuf, Vec<(String, Option<String>)>)> = Vec::new();
+    for (rel, field, to) in changes {
+        if !TAG_FIELDS.contains(&field.as_str()) {
+            continue;
+        }
+        let Some((_, path)) = songs.iter().find(|s| s.0 == rel) else { continue };
+        let to = to.map(|v| v.trim().chars().take(300).collect::<String>()).filter(|v| !v.is_empty());
+        match per.iter_mut().find(|p| p.0 == rel) {
+            Some(p) => p.2.push((field, to)),
+            None => per.push((rel.clone(), path.clone(), vec![(field, to)])),
+        }
+    }
+    if per.is_empty() {
+        return Ok(0);
+    }
+    let item = if jf { id.clone() } else { String::new() };
+    let (undo, n) = tauri::async_runtime::spawn_blocking(move || -> Result<(TagUndo, usize)> {
+        let mut undo = TagUndo { item, songs: Vec::new() };
+        let mut n = 0;
+        for (rel, path, fields) in &per {
+            let before = read_song_tags(path).unwrap_or_default();
+            write_song_tags(path, fields)?;
+            undo.songs.push((rel.clone(), fields.iter().map(|(f, _)| (f.clone(), before.get(f))).collect()));
+            n += fields.len();
+        }
+        Ok((undo, n))
+    })
+    .await
+    .map_err(|e| Error::msg(e.to_string()))??;
+    let folder = Path::new(&undo.songs[0].0).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    let record = serde_json::to_string(&undo).map_err(|e| Error::msg(e.to_string()))?;
+    state.store()?.journal_add("music_tags", &folder, &record, &format!("{n} song details"))?;
+    if jf {
+        if let Ok(w) = state.writer().await {
+            let _ = w.refresh(&id, false).await;
+        }
+    } else if let Ok(root) = root_of(&state) {
+        refresh_in_background(root, Some(app.clone()));
+    }
+    let _ = app.emit("music-updated", ());
+    Ok(n)
+}
+
+/// Reads the music folder again in the background (after an undo).
+pub fn music_rescan_quiet(state: &AppState) -> Result<()> {
+    refresh_in_background(root_of(state)?, None);
+    Ok(())
+}
+
+/// Undo: writes the old values back.
+pub fn undo_music_tags(record: &str) -> Result<Option<String>> {
+    let u: TagUndo = serde_json::from_str(record).map_err(|_| Error::msg("bad journal entry"))?;
+    for (file, fields) in &u.songs {
+        let p = Path::new(file);
+        if !p.is_absolute() || !p.is_file() || p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            return Err(Error::msg(format!("{file} isn't there any more.")));
+        }
+        write_song_tags(p, fields)?;
+    }
+    Ok(Some(u.item).filter(|i| !i.is_empty()))
+}
+
+#[cfg(test)]
+mod tag_tests {
+    use super::*;
+
+    #[test]
+    fn songs_pair_with_tracks_by_number_then_title() {
+        let tracks = vec![(1, 1, "Keep the Family Close".to_string()), (1, 2, "9".to_string()), (1, 3, "U With Me?".to_string()), (1, 4, "Controlla".to_string())];
+        let by_num = vec![(None, Some(1), "keep the family close".to_string()), (None, Some(2), "9".to_string()), (None, Some(3), "u with me".to_string()), (None, Some(4), "x".to_string())];
+        assert_eq!(pair_tracks(&by_num, &tracks), vec![(0, 0), (1, 1), (2, 2), (3, 3)]);
+        // No numbers: by title, ignoring "(prod. …) [Explicit]".
+        let by_title = vec![(None, None, "drake - controlla (prod. boi-1da) [explicit]".to_string()), (None, None, "Keep the Family Close".to_string())];
+        let p = pair_tracks(&by_title, &tracks);
+        assert!(p.contains(&(1, 0)), "{p:?}");
+        assert_eq!(title_words("Controlla (prod. Boi-1da) [Explicit]"), "controlla");
+    }
 }
 
 #[cfg(test)]

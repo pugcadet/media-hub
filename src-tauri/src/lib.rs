@@ -199,6 +199,8 @@ pub fn run() {
             localmusic::music_local_reset,
             localmusic::music_art_options,
             localmusic::music_local_set_art,
+            localmusic::music_tags_check,
+            localmusic::music_tags_apply,
             cleanup::remove_subtitle_files,
             cleanup::episodes_without_picture,
             naming_check::naming_check,

@@ -2,13 +2,14 @@
 // (cover, year, artist), fix names and numbers right there, choose pictures, and choose where
 // your music comes from.
 import { useEffect, useMemo, useState } from "react";
-import { api, errorText, MusicItem } from "./api";
+import { api, ArtOption, errorText, MusicItem, TagCheck } from "./api";
+import { askConfirm } from "./confirm";
 import { followEvent, track } from "./activity";
 import { usePageState } from "./saved";
 import { KTabs, SearchBox, Seg, StatusIcons, Toolbar, type StatusIcon } from "./kit";
 import { Studio, type StudioItem } from "./Studio";
 import { Icon } from "./ui";
-import { Art, chooseMusicArt, editMusicInfo } from "./MusicEdit";
+import { Art, artSrc, artVersion, chooseMusicArt, editMusicInfo } from "./MusicEdit";
 import { fmt } from "./Intros";
 
 type MTab = "albums" | "artists" | "source";
@@ -204,10 +205,12 @@ function AlbumDetail({ album, changed }: { album: MusicItem; changed: () => void
             <span className="spacer" />
             {isLocal(album.id) && <button className="link small" disabled={busy} onClick={() => void reset()} title="Forget your changes to this album and its songs">Back to the files</button>}
           </div>
-          <p className="muted small">{isLocal(album.id) ? "Media Hub keeps your changes itself; the music files are not changed." : "Saved in Jellyfin; History can undo it."}</p>
+          <p className="muted small">{isLocal(album.id) ? "Changes here are kept by Media Hub; the files only change with “Song details” below." : "Saved in Jellyfin; History can undo it."}</p>
         </div>
       </div>
       {error && <p className="error small">{error}</p>}
+      {!album.hasArt && <CoverChoices album={album} changed={changed} />}
+      <SongInfo album={album} changed={() => { setN((x) => x + 1); changed(); }} />
       <div className="m-edit-tracks">
         <div className="m-et-head muted small"><span>Disc</span><span>#</span><span>Title</span><span>Artist</span><span /></div>
         {!tracks && <div className="pg-loading"><span className="spinner" /> Loading songs…</div>}
@@ -225,6 +228,130 @@ function AlbumDetail({ album, changed }: { album: MusicItem; changed: () => void
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/** A missing cover: the choices right here, from the files and online. */
+function CoverChoices({ album, changed }: { album: MusicItem; changed: () => void }) {
+  const [opts, setOpts] = useState<ArtOption[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.musicArtOptions("album", album.name, album.artist, isLocal(album.id) ? album.id : null).then((o) => setOpts(o.slice(0, 6))).catch(() => setOpts([]));
+  }, [album.id, album.name, album.artist]);
+  async function use(url: string | null) {
+    setBusy(url ?? "file");
+    setError(null);
+    try {
+      const ok = await track(`Cover for “${album.name}”`, async () => {
+        if (isLocal(album.id)) return api.musicLocalSetArt(album.id, url);
+        if (url) { await api.setImageFromLink(album.id, "Primary", url); return true; }
+        return api.uploadImageFile(album.id, "Primary");
+      }, { reload: false });
+      if (ok) { artVersion.set(Date.now()); changed(); }
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+  return (
+    <div className="m-covers">
+      <div className="m-covers-head">
+        <b>Cover for “{album.name}”</b>
+        <span className="muted small">{opts === null ? "Looking…" : opts.length ? "Found · pick one" : "Nothing found online"}</span>
+        <button className="link small" disabled={!!busy} onClick={() => void use(null)}>Use my own file…</button>
+      </div>
+      {error && <p className="error small">{error}</p>}
+      <div className="m-covers-row">
+        {opts === null && <span className="spinner" />}
+        {opts?.map((o) => (
+          <button key={o.url} className="m-cover-opt" disabled={!!busy} onClick={() => void use(o.url)} title={o.label}>
+            <img src={artSrc(o.url)} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+            {busy === o.url && <span className="m-artpick-busy"><span className="spinner" /></span>}
+            <span className="small ellipsis">{o.source}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const FIELD: Record<string, string> = { title: "title", artist: "artist", albumArtist: "album artist", album: "album", track: "track", disc: "disc", year: "year", genre: "genre" };
+
+/** Song names, artists and tags checked against MusicBrainz; you pick what to write into the files. */
+function SongInfo({ album, changed }: { album: MusicItem; changed: () => void }) {
+  const [check, setCheck] = useState<TagCheck | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [off, setOff] = useState<Set<number>>(new Set());
+  async function run(release: string | null = null) {
+    setBusy(true);
+    setError(null);
+    try {
+      const c = await api.musicTagsCheck(album.id, release);
+      setCheck(c);
+      setOff(new Set());
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function apply() {
+    if (!check) return;
+    const list = check.changes.filter((_, i) => !off.has(i));
+    if (!list.length) return;
+    if (!(await askConfirm(`Write ${list.length} change${list.length === 1 ? "" : "s"} into the song files of “${album.name}”?\n\nThe old values are kept: History can put them back.`, { okLabel: "Write them" }))) return;
+    setBusy(true);
+    try {
+      const n = await track(`Song details for “${album.name}”`, () => api.musicTagsApply(album.id, list.map((c) => [c.rel, c.field, c.to])), { reload: false });
+      setCheck({ ...check, changes: [] });
+      setError(null);
+      if (n) changed();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const on = check ? check.changes.length - off.size : 0;
+  return (
+    <div className={`m-songinfo ${check?.changes.length ? "warn" : ""}`}>
+      <div className="m-songinfo-head">
+        <div className="grow stack-xs">
+          <b>{!check ? "Song details" : check.release ? `Song details for “${check.release.title}” · ${check.changes.length ? `${check.changes.length} fix${check.changes.length === 1 ? "" : "es"} found` : "all correct"}` : "Not found on MusicBrainz"}</b>
+          <span className="muted small">
+            {!check ? "Checks song names, artists, featured artists, track numbers, year and genre against MusicBrainz. Nothing changes until you press Apply; History can undo it." : check.release ? `${check.release.artist}${check.release.date ? ` · ${check.release.date}` : ""}${check.release.country ? ` · ${check.release.country}` : ""} · ${check.release.tracks} songs${check.unmatched.length ? ` · ${check.unmatched.length} of your songs didn't match a track` : ""}` : "Try fixing the album or artist name above, then check again."}
+          </span>
+        </div>
+        {check && check.others.length > 1 && (
+          <select value={check.release?.id ?? ""} disabled={busy} onChange={(e) => void run(e.target.value)} title="Another edition of this album">
+            {check.others.map((o) => <option key={o.id} value={o.id}>{o.title} · {o.date || "?"}{o.country ? ` · ${o.country}` : ""} · {o.tracks} songs</option>)}
+          </select>
+        )}
+        {!check || !check.changes.length ? (
+          <button disabled={busy} onClick={() => void run()}>{busy ? <span className="spinner small-spin" /> : null} {check ? "Check again" : "Check with MusicBrainz"}</button>
+        ) : (
+          <button className="primary" disabled={busy || !on} onClick={() => void apply()}>{busy ? <span className="spinner small-spin" /> : null} Apply {on}</button>
+        )}
+      </div>
+      {error && <p className="error small">{error}</p>}
+      {check && check.changes.length > 0 && (
+        <div className="m-tagdiff">
+          {check.changes.map((c, i) => (
+            <label key={i} className={`m-tagdiff-row ${off.has(i) ? "off" : ""}`}>
+              <input type="checkbox" checked={!off.has(i)} onChange={() => setOff((s) => { const x = new Set(s); if (x.has(i)) x.delete(i); else x.add(i); return x; })} />
+              <span className="muted ellipsis">{c.song}</span>
+              <span className="muted">{FIELD[c.field] ?? c.field}</span>
+              <span className="m-tag-from ellipsis" title={c.from ?? ""}>{c.from ?? "empty"}</span>
+              <span className="muted">→</span>
+              <span className="ellipsis" title={c.to ?? ""}>{c.to ?? "empty"}</span>
+            </label>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

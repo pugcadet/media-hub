@@ -23,6 +23,7 @@ const REMOTE_HOSTS: &[&str] = &[
     "dzcdn.net",
     "coverartarchive.org",
     "archive.org",
+    "theaudiodb.com",
 ];
 const MAX_REMOTE_BYTES: usize = 15 * 1024 * 1024;
 

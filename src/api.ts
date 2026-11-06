@@ -508,6 +508,11 @@ export interface SaveReport {
   message: string;
 }
 
+/** Song details from MusicBrainz compared with the files' tags. */
+export interface TagRelease { id: string; title: string; artist: string; date: string; country: string; tracks: number; score: number }
+export interface TagChange { rel: string; song: string; field: string; from: string | null; to: string | null }
+export interface TagCheck { release: TagRelease | null; others: TagRelease[]; changes: TagChange[]; unmatched: string[] }
+
 export interface Span {
   start: number;
   end: number;
@@ -1075,7 +1080,9 @@ export const api = {
   musicFetchArt: (again = false) => invoke<{ covers: number; artists: number; missingCovers: number }>("music_fetch_art", { again }),
   musicLocalEdit: (id: string, edit: MusicEdit) => invoke<void>("music_local_edit", { id, edit }),
   musicLocalReset: (id: string) => invoke<void>("music_local_reset", { id }),
-  musicArtOptions: (kind: "album" | "artist", name: string, artist: string | null) => invoke<ArtOption[]>("music_art_options", { kind, name, artist }),
+  musicArtOptions: (kind: "album" | "artist", name: string, artist: string | null, id: string | null = null) => invoke<ArtOption[]>("music_art_options", { kind, name, artist, id }),
+  musicTagsCheck: (id: string, release: string | null = null) => invoke<TagCheck>("music_tags_check", { id, release }),
+  musicTagsApply: (id: string, changes: [string, string, string | null][]) => invoke<number>("music_tags_apply", { id, changes }),
   musicLocalSetArt: (id: string, url: string | null) => invoke<boolean>("music_local_set_art", { id, url }),
   musicList: (view: string, parent: string | null, query: string | null, start: number, limit: number) =>
     invoke<MusicItem[]>("music_list", { view, parent, query, start, limit }),

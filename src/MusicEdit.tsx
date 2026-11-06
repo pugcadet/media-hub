@@ -138,7 +138,7 @@ function ArtHost() {
     if (!m || !query.trim()) return;
     setOpts(null);
     const t = setTimeout(() => {
-      api.musicArtOptions(kind, query, kind === "album" ? m.artist : null).then(setOpts).catch((e) => { setOpts([]); setError(errorText(e)); });
+      api.musicArtOptions(kind, query, kind === "album" ? m.artist : null, kind === "album" && target?.id && isLocal(target as MusicItem) ? target.id : null).then(setOpts).catch((e) => { setOpts([]); setError(errorText(e)); });
     }, 350);
     return () => clearTimeout(t);
   }, [m, query, kind]);
@@ -182,16 +182,17 @@ function ArtHost() {
           <label className="searchbox grow"><Icon name="search" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={kind === "artist" ? "Artist name" : "Album name"} /></label>
           <button onClick={() => void use(null)} disabled={!!busy}><Icon name="folder" /> From a file…</button>
         </div>
-        <p className="muted small">{kind === "artist" ? "From Deezer. The best known artist with exactly this name is first." : "From Deezer and MusicBrainz."} Click one to use it.</p>
+        <p className="muted small">{kind === "artist" ? "From Deezer and TheAudioDB. The best known artist with exactly this name is first." : "From your files, the Cover Art Archive, Deezer and TheAudioDB."} Click one to use it.</p>
         {error && <p className="error small">{error}</p>}
         <div className={`m-artpick-grid ${kind === "artist" ? "round" : ""}`}>
           {opts === null && <div className="pg-loading"><span className="spinner" /> Looking…</div>}
           {opts?.length === 0 && <p className="muted">Nothing found. Try another spelling, or choose a picture file.</p>}
           {opts?.map((o) => (
             <button key={o.url} className="m-artpick-tile" disabled={!!busy} onClick={() => void use(o.url)} title={`${o.label} (${o.source})`}>
-              <img src={remoteImageUrl(o.url)} alt="" loading="lazy" />
+              <img src={artSrc(o.url)} alt="" loading="lazy" />
               {busy === o.url && <span className="m-artpick-busy"><span className="spinner" /></span>}
-              <span className="small ellipsis">{o.label}</span>
+              <span className="small ellipsis">{o.source}</span>
+              <span className="small muted ellipsis">{o.label}</span>
             </button>
           ))}
         </div>
@@ -199,6 +200,9 @@ function ArtHost() {
     </div>
   );
 }
+
+/** An option's picture: from the files (served by the app) or online (through the picture proxy). */
+export const artSrc = (url: string) => (url.includes("localhost/le/") ? url : remoteImageUrl(url));
 
 export function MusicEditHost() {
   return (
