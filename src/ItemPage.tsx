@@ -500,34 +500,30 @@ function TitleHealth({ d, kind, canEdit, subLangs, onTab, onIdentify }: { d: Det
   );
 }
 
-/** The Overview's at-a-glance cards: match, artwork, subtitles, intros, names. */
+/** The five library steps for this title, in order, each with one button (same as the Library). */
 function StatusCards({ d, kind, onTab, onIdentify }: { d: Details; kind: "series" | "movie"; onTab: (t: TabId) => void; onIdentify: () => void }) {
   const item = d.item;
   const { check, seg, identified, noSubs, row, has } = useTitleState(d, kind);
   const ids = Object.entries(item.ProviderIds ?? {}).filter(([k, v]) => v && ["Tmdb", "Tvdb", "Imdb"].includes(k));
   const artKinds: ImageKind[] = ["Primary", "Backdrop", "Logo", "Thumb"];
-  const artHave = artKinds.filter((k) => has(k)).length;
+  const artNames: Record<string, string> = { Primary: "poster", Backdrop: "background", Logo: "logo", Thumb: "thumbnail" };
+  const missingArt = artKinds.filter((k) => !has(k));
   const names = check ? check.toRename + check.folders : null;
-  const card = (key: string, icon: IconName, title: string, ok: boolean | null, line: React.ReactNode, action: React.ReactElement<{ onClick?: () => void }>) => (
-    <div key={key} className={`stat-card clickable ${ok === null ? "" : ok ? "ok" : "warn"}`} role="button" tabIndex={0}
-      onClick={(e) => { if (!(e.target as HTMLElement).closest("button")) action.props.onClick?.(); }}
-      onKeyDown={(e) => e.key === "Enter" && action.props.onClick?.()}>
-      <div className="stat-card-head"><span className="stat-ico"><Icon name={icon} size={16} /></span><span className="strong">{title}</span>{ok !== null && <Icon name={ok ? "check" : "warn"} size={14} />}</div>
-      <div className="small muted stat-line">{line}</div>
-      <div className="stat-act">{action}</div>
+  const step = (n: number, label: string, ok: boolean | null, line: React.ReactNode, button: string, run: () => void) => (
+    <div key={n} className={`step-row ${ok === null ? "s-unknown" : ok ? "s-ok" : "s-warn"}`}>
+      <span className="step-mark">{ok === null ? "?" : ok ? <Icon name="check" size={14} /> : "!"}</span>
+      <span className="grow stack-xs step-text"><b>{n} · {label}</b><span className="muted small ellipsis">{line}</span></span>
+      <button className={ok === false ? "primary" : ""} disabled={!d.canEdit && ok === false} onClick={run}>{button}</button>
     </div>
   );
+  const introOk = seg ? seg.episodes > 0 && seg.intro >= seg.episodes * 0.8 : null;
   return (
-    <div className="stat-cards">
-      {card("match", "search", "Match", identified, identified ? ids.map(([k, v]) => `${k} ${v}`).join(" · ") || "Identified" : "Not identified yet", <button className="link small" onClick={onIdentify}>{identified ? "Identify again…" : "Identify…"}</button>)}
-      {card("art", "image", "Artwork", artHave === artKinds.length, (
-        <span className="mini-art">
-          {artKinds.map((k) => <span key={k} className={`mini-art-k ${has(k) ? "on" : ""}`} title={k}>{has(k) ? <img src={artSrc(item.Id, k, 120, d.images)} alt="" loading="lazy" /> : null}</span>)}
-        </span>
-      ), <button className="link small" onClick={() => onTab("art")}>{artHave === artKinds.length ? "Change…" : `${artKinds.length - artHave} missing · fix…`}</button>)}
-      {card("subs", "subtitles", "Subtitles", kind === "series" && !row ? null : noSubs === 0, kind === "movie" ? (noSubs ? "None yet" : <Icon name="check" size={14} />) : row ? (noSubs ? `${noSubs} of ${row.videos} episodes without` : `All ${row.videos} episodes`) : "Not checked yet", <button className="link small" onClick={() => onTab("subs")}>Open…</button>)}
-      {kind === "series" && card("intros", "skip", "Intros & credits", seg ? seg.episodes > 0 && seg.intro >= seg.episodes * 0.8 : null, seg ? `Intro in ${seg.intro}, credits in ${seg.credits} of ${seg.episodes}` : "Not checked yet", <button className="link small" onClick={() => onTab("intros")}>Open…</button>)}
-      {card("names", "rename", "File names", names === null ? null : names === 0, names === null ? "Not checked yet" : names ? `${names} to fix` : "Named right", <button className="link small" onClick={() => nav.route({ view: "renamer", item: item.Id })}>Open in the Renamer…</button>)}
+    <div className="step-rows">
+      {step(1, "Identify", identified, identified ? `Matched${ids.length ? `: ${ids.map(([k, v]) => `${k.toUpperCase()} ${v}`).join(" · ")}` : ""}` : "No match with TMDB or TVDB yet", identified ? "Change" : "Identify", onIdentify)}
+      {step(2, "Artwork", missingArt.length === 0, missingArt.length ? `Missing: ${missingArt.map((k) => artNames[k]).join(", ")}` : "Poster, background, logo and thumbnail are there", missingArt.length ? "Add artwork" : "Change", () => onTab("art"))}
+      {step(3, "Naming", names === null ? null : names === 0, names === null ? "Not checked yet" : names ? `${names} file${names === 1 ? "" : "s"} or folder${names === 1 ? "" : "s"} to rename` : "Files and folders are named right", names ? `Fix names (${names})` : "Open", () => nav.route({ view: "renamer", item: item.Id }))}
+      {step(4, "Subtitles", kind === "series" && !row ? null : noSubs === 0, kind === "movie" ? (noSubs ? "No subtitles in your language yet" : "Subtitles in your language are there") : row ? (noSubs ? `${noSubs} of ${row.videos} episodes without your language` : `All ${row.videos} episodes have them`) : "Not checked yet", noSubs ? "Find subtitles" : "Open", () => onTab("subs"))}
+      {kind === "series" && step(5, "Intros", introOk, seg ? `${seg.intro} of ${seg.episodes} episodes have an intro · ${seg.credits} have credits` : "Not read yet", introOk ? "Open" : "Set intros", () => onTab("intros"))}
     </div>
   );
 }

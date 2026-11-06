@@ -60,6 +60,9 @@ pub struct HealthRow {
     /// Where it is, as Jellyfin sees it (for "leave this folder alone" settings).
     #[serde(default)]
     path: String,
+    /// When it was added to Jellyfin (for "Recently added"; older checks: empty).
+    #[serde(default)]
+    added: String,
 }
 
 fn has_img(v: &Value, kind: &str) -> bool {
@@ -143,7 +146,7 @@ async fn health_rows(app: &AppHandle, state: &AppState) -> Result<Vec<HealthRow>
             vec![
                 ("IncludeItemTypes", "Series,Movie".into()),
                 ("Recursive", "true".into()),
-                ("Fields", "ProviderIds,Path,RecursiveItemCount,ProductionYear".into()),
+                ("Fields", "ProviderIds,Path,RecursiveItemCount,ProductionYear,DateCreated".into()),
                 ("SortBy", "SortName".into()),
                 ("EnableUserData", "false".into()),
                 ("ImageTypeLimit", "1".into()),
@@ -905,6 +908,7 @@ fn make_row(v: &Value, count: &HashMap<String, i64>, root: Option<&str>, map: Op
         no_subs: count.get(&id).copied().unwrap_or(0),
         library_folder: lib,
         path: path.to_string(),
+        added: s(v, "DateCreated").to_string(),
         id,
     })
 }
@@ -918,7 +922,7 @@ pub async fn health_row(state: State<'_, AppState>, id: String) -> Result<Option
         .items_query(
             vec![
                 ("Ids", id.clone()),
-                ("Fields", "ProviderIds,Path,RecursiveItemCount,ProductionYear".into()),
+                ("Fields", "ProviderIds,Path,RecursiveItemCount,ProductionYear,DateCreated".into()),
                 ("EnableUserData", "false".into()),
                 ("ImageTypeLimit", "1".into()),
             ],

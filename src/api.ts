@@ -662,6 +662,8 @@ export interface HealthRow {
   libraryFolder: string;
   /** Server path (older checks: empty). */
   path?: string;
+  /** When it was added to Jellyfin (ISO date; older checks: empty). */
+  added?: string;
 }
 
 export interface EpInfo {
