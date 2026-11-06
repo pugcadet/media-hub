@@ -1773,6 +1773,17 @@ impl Client {
         Ok(v.as_array().cloned().unwrap_or_default())
     }
 
+    /// Who is watching what right now (sessions active in the last 15 minutes with something playing).
+    pub async fn sessions_playing(&self) -> Result<Vec<serde_json::Value>> {
+        let v: serde_json::Value = self.get_json("/Sessions", &[("activeWithinSeconds", "960".to_string())]).await?;
+        Ok(v.as_array().cloned().unwrap_or_default().into_iter().filter(|s| s.get("NowPlayingItem").is_some()).collect())
+    }
+
+    /// Free and used space of the library folders (Jellyfin 10.10 and newer; None before).
+    pub async fn storage_info(&self) -> Result<serde_json::Value> {
+        self.get_json("/System/Info/Storage", &[]).await
+    }
+
     /// The server's recent activity (scans, errors, logins …), newest first.
     pub async fn activity(&self, limit: u32) -> Result<Vec<serde_json::Value>> {
         let v: serde_json::Value = self.get_json("/System/ActivityLog/Entries", &[("limit", limit.min(100).to_string())]).await?;

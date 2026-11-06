@@ -57,6 +57,39 @@ pub struct ServerEvent {
     date: String,
 }
 
+/// Someone watching something now.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Playing {
+    title: String,
+    /// Item to show the poster of (the show for an episode).
+    art_id: String,
+    user: String,
+    device: String,
+    /// "Direct play" or "Transcoding: HEVC → H.264 (reason)".
+    how: String,
+    transcoding: bool,
+    paused: bool,
+    progress: Option<f64>,
+}
+
+/// Something watched lately (from Jellyfin's activity log).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Watched {
+    title: String,
+    user: String,
+    date: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Disk {
+    path: String,
+    free: u64,
+    total: u64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerOverview {
@@ -72,6 +105,89 @@ pub struct ServerOverview {
     plugins: Vec<ServerPlugin>,
     tasks: Vec<ServerTask>,
     events: Vec<ServerEvent>,
+    playing: Vec<Playing>,
+    watched: Vec<Watched>,
+    disks: Vec<Disk>,
+}
+
+fn playing_of(v: &Value) -> Option<Playing> {
+    let it = v.get("NowPlayingItem")?;
+    let ps = v.get("PlayState");
+    let series = s(it, "SeriesName");
+    let title = if !series.is_empty() {
+        match (it.get("ParentIndexNumber").and_then(|x| x.as_i64()), it.get("IndexNumber").and_then(|x| x.as_i64())) {
+            (Some(a), Some(b)) => format!("{series} · S{a:02}E{b:02}"),
+            _ => format!("{series} · {}", s(it, "Name")),
+        }
+    } else {
+        match it.get("ProductionYear").and_then(|y| y.as_i64()) {
+            Some(y) => format!("{} ({y})", s(it, "Name")),
+            None => s(it, "Name").to_string(),
+        }
+    };
+    let art = if s(it, "SeriesId").is_empty() { s(it, "Id") } else { s(it, "SeriesId") }.replace('-', "");
+    let method = ps.map(|p| s(p, "PlayMethod")).unwrap_or("");
+    let ti = v.get("TranscodingInfo");
+    let transcoding = method == "Transcode";
+    let how = if transcoding {
+        let src = it.get("MediaStreams").and_then(|m| m.as_array()).and_then(|a| a.iter().find(|x| s(x, "Type") == "Video")).map(|x| s(x, "Codec").to_uppercase()).unwrap_or_default();
+        let to = ti.map(|t| s(t, "VideoCodec").to_uppercase()).unwrap_or_default();
+        let why: Vec<String> = ti
+            .and_then(|t| t.get("TranscodeReasons"))
+            .and_then(|r| r.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str()).map(|x| x.replace("NotSupported", " not supported")).collect())
+            .unwrap_or_default();
+        let codecs = if !src.is_empty() && !to.is_empty() && src != to { format!(": {src} → {to}") } else { String::new() };
+        format!("Transcoding{codecs}{}", if why.is_empty() { String::new() } else { format!(" ({})", why.join(", ")) })
+    } else if method == "DirectStream" {
+        "Direct stream".into()
+    } else {
+        "Direct play".into()
+    };
+    let pos = ps.and_then(|p| p.get("PositionTicks")).and_then(|x| x.as_f64());
+    let total = it.get("RunTimeTicks").and_then(|x| x.as_f64()).filter(|t| *t > 0.0);
+    Some(Playing {
+        title,
+        art_id: art,
+        user: s(v, "UserName").into(),
+        device: [s(v, "Client"), s(v, "DeviceName")].iter().filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(" · "),
+        how,
+        transcoding,
+        paused: ps.and_then(|p| p.get("IsPaused")).and_then(|b| b.as_bool()).unwrap_or(false),
+        progress: pos.zip(total).map(|(p, t)| (p / t).clamp(0.0, 1.0)),
+    })
+}
+
+/// "Anna has finished playing Heat on Apple TV" → ("Heat", "Anna").
+fn watched_of(e: &Value) -> Option<Watched> {
+    let kind = s(e, "Type");
+    if kind != "VideoPlaybackStopped" && kind != "VideoPlayback" {
+        return None;
+    }
+    let name = s(e, "Name");
+    let (user, rest) = name.split_once(" has finished playing ").or_else(|| name.split_once(" is playing "))?;
+    let title = rest.rsplit_once(" on ").map(|x| x.0).unwrap_or(rest);
+    Some(Watched { title: title.trim().to_string(), user: user.trim().to_string(), date: s(e, "Date").into() })
+}
+
+fn disks_of(v: &Value) -> Vec<Disk> {
+    let mut out: Vec<Disk> = Vec::new();
+    for lib in v.get("Libraries").and_then(|l| l.as_array()).into_iter().flatten() {
+        for f in lib.get("Folders").and_then(|l| l.as_array()).into_iter().flatten() {
+            let free = f.get("FreeSpace").and_then(|x| x.as_u64()).unwrap_or(0);
+            let used = f.get("UsedSpace").and_then(|x| x.as_u64()).unwrap_or(0);
+            let dev = s(f, "DeviceId");
+            if free == 0 && used == 0 {
+                continue;
+            }
+            // One line per drive.
+            if out.iter().any(|d| d.free == free && (dev.is_empty() || d.path == dev || d.total == free + used)) {
+                continue;
+            }
+            out.push(Disk { path: s(f, "Path").into(), free, total: free + used });
+        }
+    }
+    out
 }
 
 /// Picks the newest catalogue version of `name` that this server can run.
@@ -102,11 +218,13 @@ async fn latest_release() -> Option<String> {
 pub async fn server_overview(state: State<'_, AppState>) -> Result<ServerOverview> {
     let c = state.reader().await?;
     use tauri::async_runtime::spawn;
-    let (c1, c2, c3, c4) = (c.clone(), c.clone(), c.clone(), c.clone());
+    let (c1, c2, c3, c4, c5, c6) = (c.clone(), c.clone(), c.clone(), c.clone(), c.clone(), c.clone());
     let tasks = spawn(async move { c1.scheduled_tasks().await });
     let plugins = spawn(async move { c2.plugins().await });
     let packages = spawn(async move { c3.packages().await });
-    let events = spawn(async move { c4.activity(30).await });
+    let events = spawn(async move { c4.activity(100).await });
+    let sessions = spawn(async move { c5.sessions_playing().await });
+    let storage = spawn(async move { c6.storage_info().await });
     let latest = spawn(latest_release());
     let info = c.system_info_raw().await?;
     let flat = |r: std::result::Result<Result<Vec<Value>>, tauri::Error>| r.ok().and_then(|x| x.ok());
@@ -142,9 +260,24 @@ pub async fn server_overview(state: State<'_, AppState>) -> Result<ServerOvervie
             }
         })
         .collect();
-    let events = events
-        .unwrap_or_default()
+    let all_events = events.unwrap_or_default();
+    let watched: Vec<Watched> = {
+        let mut w: Vec<Watched> = Vec::new();
+        for x in all_events.iter().filter_map(watched_of) {
+            // "is playing" and "has finished playing" of the same thing: once.
+            if !w.iter().any(|y| y.title == x.title && y.user == x.user) {
+                w.push(x);
+            }
+        }
+        w.truncate(12);
+        w
+    };
+    let playing: Vec<Playing> = sessions.await.ok().and_then(|x| x.ok()).unwrap_or_default().iter().filter_map(playing_of).collect();
+    let disks = storage.await.ok().and_then(|x| x.ok()).map(|v| disks_of(&v)).unwrap_or_default();
+    let events = all_events
         .iter()
+        .filter(|e| !s(e, "Type").starts_with("VideoPlayback") && !s(e, "Type").starts_with("AudioPlayback") && s(e, "Type") != "SessionStarted" && s(e, "Type") != "SessionEnded" && s(e, "Type") != "AuthenticationSucceeded")
+        .take(30)
         .map(|e| ServerEvent {
             name: s(e, "Name").into(),
             overview: (if s(e, "ShortOverview").is_empty() { s(e, "Overview") } else { s(e, "ShortOverview") }).chars().take(400).collect(),
@@ -163,6 +296,9 @@ pub async fn server_overview(state: State<'_, AppState>) -> Result<ServerOvervie
         plugins,
         tasks,
         events,
+        playing,
+        watched,
+        disks,
     })
 }
 
@@ -194,6 +330,22 @@ pub async fn server_restart(state: State<'_, AppState>) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn playing_and_watched_read_plainly() {
+        let v = json!({"UserName":"Anna","Client":"Infuse","DeviceName":"Apple TV","PlayState":{"PlayMethod":"Transcode","PositionTicks":300,"IsPaused":false},
+            "TranscodingInfo":{"VideoCodec":"h264","TranscodeReasons":["VideoCodecNotSupported"]},
+            "NowPlayingItem":{"Name":"Hotel","SeriesName":"Bluey","SeriesId":"aa-bb","ParentIndexNumber":3,"IndexNumber":12,"RunTimeTicks":1000,"MediaStreams":[{"Type":"Video","Codec":"hevc"}]}});
+        let p = playing_of(&v).unwrap();
+        assert_eq!(p.title, "Bluey · S03E12");
+        assert_eq!(p.art_id, "aabb");
+        assert_eq!(p.how, "Transcoding: HEVC → H264 (VideoCodec not supported)");
+        assert_eq!(p.device, "Infuse · Apple TV");
+        assert!((p.progress.unwrap() - 0.3).abs() < 1e-9);
+        let w = watched_of(&json!({"Type":"VideoPlaybackStopped","Name":"Anna has finished playing Heat on Apple TV","Date":"2026-11-05T21:40:00Z"})).unwrap();
+        assert_eq!((w.title.as_str(), w.user.as_str()), ("Heat", "Anna"));
+        assert!(watched_of(&json!({"Type":"SessionStarted","Name":"Anna is online"})).is_none());
+    }
 
     #[test]
     fn versions_compare() {

@@ -54,6 +54,9 @@
       { id: hex(104), title: "Coco", year: 2017, video: "Movies/Pixar/Coco.mkv", folder: "Movies/Pixar", top: "Movies", kind: "shared", group: "Movies/Pixar", expected: "Coco (2017)", ok: false, collection: null },
     ],
     server_overview: { name: "Jellyfin", version: "10.10.3", os: "Linux", catalogOk: true, pendingRestart: true, latest: "10.10.7", updateAvailable: true,
+      playing: [{ title: "Severance · S02E04", artId: hex(3), user: "You", device: "Infuse · Apple TV", how: "Direct play", transcoding: false, paused: false, progress: 0.62 }, { title: "Bluey · S03E12", artId: hex(4), user: "Kids", device: "Jellyfin Web · iPad", how: "Transcoding: HEVC → H264 (VideoCodec not supported)", transcoding: true, paused: false, progress: 0.18 }],
+      watched: [{ title: "Heat", user: "You", date: new Date(Date.now() - 3e6).toISOString() }, { title: "Bluey - S03E11", user: "Kids", date: new Date(Date.now() - 9e6).toISOString() }, { title: "Alien: Romulus", user: "You", date: new Date(Date.now() - 9e7).toISOString() }],
+      disks: [{ path: "/data", free: 2.1e12, total: 8e12 }],
       plugins: [{ name: "Intro Skipper", version: "1.10.10.1", status: "Active", update: "1.10.10.5" }, { name: "MediaSegments API", version: "1.0", status: "Active", update: null }, { name: "Open Subtitles", version: "20.0", status: "Malfunctioned", update: null }],
       tasks: [
         { id: "a1", name: "Scan media library", category: "Library", key: "RefreshLibrary", state: "Running", progress: 42, lastStatus: "Completed", lastEnd: new Date(Date.now() - 3600e3).toISOString(), lastError: null },

@@ -1217,4 +1217,7 @@ export interface ServerOverview {
   plugins: { name: string; version: string; status: string; update: string | null }[];
   tasks: ServerTask[];
   events: { name: string; overview: string; severity: string; date: string }[];
+  playing: { title: string; artId: string; user: string; device: string; how: string; transcoding: boolean; paused: boolean; progress: number | null }[];
+  watched: { title: string; user: string; date: string }[];
+  disks: { path: string; free: number; total: number }[];
 }

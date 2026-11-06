@@ -2440,3 +2440,22 @@ button.coll-row:hover { background: #1a1a1a; }
 .ibx-k { font-weight: 600; } .ibx-k.good { color: var(--green); } .ibx-k.warn { color: var(--amber); }
 .ibx-v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #d6d6d6; }
 .ibx-look { font-size: 13px; }
+
+/* ================================================================ Jellyfin page */
+.pg.jf2 { gap: 16px; padding: 22px 28px 32px; }
+.jf-head { display: flex; align-items: center; gap: 12px; }
+.jf-head h1 { font-size: 24px; }
+.jf-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.jf-col { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border-radius: 12px; background: #1a1a1a; border: 1px solid #262626; min-width: 0; }
+.jf-col h2 { font-size: 15px; }
+.jf-sub { margin-top: 8px !important; }
+.jf-play { display: flex; gap: 12px; padding: 10px; border-radius: 10px; background: #141414; min-width: 0; }
+.jf-play img { width: 48px; height: 70px; border-radius: 6px; object-fit: cover; background: #262626; flex: 0 0 48px; }
+.jf-bar { height: 4px; border-radius: 999px; background: #2a2a2a; overflow: hidden; margin-top: 4px; }
+.jf-bar span { display: block; height: 100%; background: var(--accent); }
+.jf-watched { display: flex; gap: 10px; font-size: 13px; min-width: 0; }
+.jf-watched > span:first-child { width: 72px; flex: 0 0 72px; }
+.plugin-mark { width: 18px; font-weight: 700; text-align: center; }
+.plugin-mark.good { color: var(--green); } .plugin-mark.warn { color: var(--amber); } .plugin-mark.bad { color: var(--red); }
+.jf-foot { margin-top: auto; }
+@media (max-width: 1150px) { .jf-cols { grid-template-columns: 1fr 1fr; } }

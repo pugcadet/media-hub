@@ -1,18 +1,18 @@
 // The Jellyfin page: is the server up to date, are the plugins Media Hub needs there, which
 // scheduled jobs ran (and which failed), and what went wrong lately. Run a scan or a job from here.
 import { useEffect, useState } from "react";
-import { api, errorText, ServerOverview, ServerTask, Status } from "./api";
+import { api, errorText, imageUrl, ServerOverview, ServerTask, Status } from "./api";
 import { track, useEpoch } from "./activity";
 import { askConfirm } from "./confirm";
 import { agoText } from "./saved";
 import { Icon } from "./ui";
-import { PageHead } from "./kit";
 
 const NEEDED: { names: string[]; label: string; why: string; need: boolean }[] = [
-  { names: ["MediaSegments"], label: "MediaSegments API", why: "Saving intro, credits and recap markers (Infuse's Skip buttons).", need: true },
+  { names: ["Intro Skipper"], label: "Intro Skipper", why: "Skip markers: Media Hub saves intros and credits through it (like the Segment Editor), and it can find them itself.", need: true },
+  { names: ["Segment Editor"], label: "Segment Editor", why: "Edit skip markers in Jellyfin's own web page.", need: false },
   { names: ["Open Subtitles", "OpenSubtitles"], label: "Open Subtitles", why: "Subtitles. Sign in in the plugin's settings; free accounts get a few downloads a day.", need: true },
   { names: ["subbuzz"], label: "SubBuzz", why: "More free subtitle sites in one plugin, so you're not stuck at one site's daily limit.", need: false },
-  { names: ["Intro Skipper"], label: "Intro Skipper", why: "Lets Jellyfin find intros and credits itself. Media Hub can start it from Intros and credits.", need: false },
+  { names: ["Playback Reporting"], label: "Playback Reporting", why: "A longer watch history.", need: false },
   { names: ["Fanart"], label: "Fanart", why: "Logos, banners, clear art and disc pictures.", need: true },
   { names: ["TheTVDB", "TVDB"], label: "TheTVDB", why: "Banners and episode data for shows.", need: true },
 ];
@@ -70,115 +70,122 @@ export default function Server({ status }: { status: Status }) {
     await act("restart", "Restarting Jellyfin", () => api.serverRestart());
   };
 
+  const gbs = (b: number) => (b >= 1e12 ? `${(b / 1e12).toFixed(1)} TB` : `${Math.round(b / 1e9)} GB`);
+  const transcoding = data?.playing.filter((x) => x.transcoding) ?? [];
+
   return (
-    <div className="pg jf-page">
-      <PageHead
-        title="Jellyfin"
-        sub={data ? `${data.name} · version ${data.version}${data.os ? ` · ${data.os}` : ""}` : "Your server at a glance"}
-        actions={<>
-          <button onClick={() => setTick((n) => n + 1)}><Icon name="reload" /> Refresh</button>
-          <button className="primary" disabled={readOnly || busy === "scan"} onClick={() => void act("scan", "Scanning all libraries", () => api.serverTaskRunKey("RefreshLibrary"))}>
-            {busy === "scan" ? <span className="spinner small-spin" /> : <Icon name="reload" />} Scan all libraries
-          </button>
-        </>}
-      />
+    <div className="pg jf-page jf2">
+      <div className="jf-head">
+        <div className="stack-xs">
+          <h1>Jellyfin</h1>
+          <span className="muted">{data ? `${data.name} · version ${data.version} · ${data.updateAvailable ? `${data.latest ?? "a newer version"} is out` : "up to date"}` : "Your server at a glance"}</span>
+        </div>
+        <span className="spacer" />
+        <button onClick={() => setTick((n) => n + 1)}><Icon name="reload" /> Refresh</button>
+        <button disabled={readOnly || busy === "scan"} onClick={() => void act("scan", "Scanning all libraries", () => api.serverTaskRunKey("RefreshLibrary"))}>
+          {busy === "scan" ? <span className="spinner small-spin" /> : null} Scan all libraries
+        </button>
+        <button className="danger-outline" disabled={readOnly || busy === "restart"} onClick={() => void restart()}>Restart Jellyfin</button>
+      </div>
       {error && <p className="error">{error}</p>}
       {!data && !error && <div className="pg-loading"><span className="spinner" /> Asking Jellyfin…</div>}
       {data && (
-        <div className="jf-grid">
-          <section className="card jf-card">
-            <h2>Server</h2>
-            <div className={`jf-state ${data.updateAvailable ? "warn" : "ok"}`}>
-              <Icon name={data.updateAvailable ? "warn" : "check"} />
-              <div className="grow">
-                <div className="strong">{data.updateAvailable ? `Jellyfin ${data.latest ?? "update"} is out` : "Jellyfin is up to date"}</div>
-                <div className="muted small">
-                  {data.updateAvailable
-                    ? "You have " + data.version + ". Update it where Jellyfin is installed (on a NAS: its app centre or Docker image). Media Hub can't do that part for you."
-                    : `Version ${data.version}${data.latest ? ` is the newest` : ""}.`}
-                </div>
-              </div>
-            </div>
-            {!data.catalogOk && (
-              <div className="jf-state warn">
-                <Icon name="warn" />
-                <div className="grow"><div className="strong">Jellyfin can't reach the internet</div><div className="muted small">Its plugin catalogue doesn't load, so Identify finds no artwork and plugin updates fail too. Usually the container's DNS setting: on a Synology, set DSM's DNS (Control Panel → Network) to 1.1.1.1, or add a dns: line to Jellyfin's compose file, then restart the container.</div></div>
-              </div>
-            )}
-            {data.pendingRestart && (
-              <div className="jf-state warn">
-                <Icon name="warn" />
-                <div className="grow"><div className="strong">Jellyfin wants a restart</div><div className="muted small">Usually after plugin updates. They only start working after it.</div></div>
-                <button disabled={readOnly || busy === "restart"} onClick={() => void restart()}>Restart</button>
-              </div>
-            )}
-            {failed.length + broken.length + problems.length === 0 && !data.pendingRestart && data.catalogOk && (
-              <div className="jf-state ok"><Icon name="check" /><div className="grow"><div className="strong">Nothing's wrong</div><div className="muted small">No failed jobs, broken plugins or recent errors.</div></div></div>
-            )}
-          </section>
-
-          <section className="card jf-card">
-            <div className="row between">
-              <h2>Plugins</h2>
-              {updates.length > 0 && (
-                <button disabled={readOnly || busy === "plugins"} onClick={() => void act("plugins", "Updating plugins", () => api.serverTaskRunKey("PluginUpdates"))}>
-                  {busy === "plugins" ? <span className="spinner small-spin" /> : <Icon name="download" />} Update {updates.length}
-                </button>
-              )}
-            </div>
-            {updates.length > 0 && <p className="muted small">After updating, Jellyfin needs a restart for the new versions to work.</p>}
-            {NEEDED.map((r) => {
-              const p = has(r.names);
-              return (
-                <div key={r.label} className="plugin-row">
-                  <span className={p ? "ok" : r.need ? "warn" : "muted"}><Icon name={p ? "check" : r.need ? "warn" : "plus"} /></span>
-                  <div className="grow"><div className="strong small">{r.label}{!r.need && <span className="muted"> · optional</span>}</div><div className="muted small">{r.why}</div></div>
-                  <span className={`small ${p ? (p.update ? "warn" : "ok") : r.need ? "warn" : "muted"}`}>
-                    {p ? (p.update ? `${p.version} → ${p.update}` : p.version) : "Not installed"}
-                  </span>
-                </div>
-              );
-            })}
-            {broken.map((p) => (
-              <div key={p.name} className="plugin-row"><span className="bad"><Icon name="warn" /></span><div className="grow strong small">{p.name}</div><span className="small bad">{p.status === "Restart" ? "Needs a restart" : "Not working"}</span></div>
-            ))}
-            <details className="small">
-              <summary className="muted">All {data.plugins.length} installed plugins</summary>
-              <div className="plugin-all">
-                {data.plugins.map((p) => <span key={p.name} className="chip static">{p.name} <span className="muted">{p.version}{p.update ? ` → ${p.update}` : ""}</span></span>)}
-              </div>
-            </details>
-            <p className="muted small">Install new ones in Jellyfin: Dashboard → Plugins → Catalog, then restart.</p>
-          </section>
-
-          <section className="card jf-card jf-wide">
-            <h2>Jobs</h2>
-            <p className="muted small">Jellyfin runs these on its own schedule. Start one now if you don't want to wait.</p>
-            <div className="jf-tasks">
-              {main.map((t) => <TaskRow key={t.id} t={t} busy={busy} readOnly={readOnly} act={act} />)}
-            </div>
-            {rest.length > 0 && (
-              <details className="small">
-                <summary className="muted">{rest.length} more jobs</summary>
-                <div className="jf-tasks">{rest.map((t) => <TaskRow key={t.id} t={t} busy={busy} readOnly={readOnly} act={act} />)}</div>
-              </details>
-            )}
-          </section>
-
-          <section className="card jf-card jf-wide">
-            <h2>Lately</h2>
-            {data.events.length === 0 && <p className="muted small">Nothing happened lately.</p>}
-            <div className="jf-events">
-              {data.events.slice(0, 20).map((e, i) => (
-                <div key={i} className={`jf-event ${/error|fatal|critical/i.test(e.severity) ? "bad" : /warn/i.test(e.severity) ? "warn" : ""}`}>
-                  <span className="muted small mono">{when(e.date)}</span>
-                  <div className="grow"><div className="small strong">{e.name}</div>{e.overview && <div className="muted small">{e.overview}</div>}</div>
+        <>
+          {!data.catalogOk && (
+            <div className="home-notice bad"><b>Jellyfin can't reach the internet.</b><span className="grow">Its plugin catalogue doesn't load, so Identify finds no artwork and plugin updates fail. Usually the container's DNS: on a Synology set DSM's DNS (Control Panel → Network) to 1.1.1.1, or add a dns: line to Jellyfin's compose file, then restart the container.</span></div>
+          )}
+          {data.pendingRestart && (
+            <div className="home-notice"><b>Jellyfin wants a restart</b><span className="grow">Usually after plugin updates; they only start working after it.</span><button className="link" disabled={readOnly} onClick={() => void restart()}>Restart</button></div>
+          )}
+          <div className="jf-cols">
+            <section className="jf-col" aria-label="Playing now">
+              <h2>Playing now{data.playing.length ? ` · ${data.playing.length}` : ""}</h2>
+              {data.playing.length === 0 && <p className="muted small">Nobody is watching right now.</p>}
+              {data.playing.map((x, i) => (
+                <div key={i} className="jf-play">
+                  <img src={imageUrl(x.artId, "Primary", 120)} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+                  <div className="grow stack-xs">
+                    <b className="ellipsis">{x.title}</b>
+                    <span className="muted small ellipsis">{x.user}{x.device ? ` · ${x.device}` : ""}{x.paused ? " · paused" : ""}</span>
+                    <span className={`small ${x.transcoding ? "warn" : "good"}`}>{x.how}</span>
+                    {x.progress != null && <div className="jf-bar"><span style={{ width: `${Math.round(x.progress * 100)}%` }} /></div>}
+                  </div>
                 </div>
               ))}
-            </div>
-          </section>
+              <h2 className="jf-sub">Watched lately</h2>
+              {data.watched.length === 0 && <p className="muted small">Nothing in Jellyfin's activity list yet.</p>}
+              {data.watched.map((w, i) => (
+                <div key={i} className="jf-watched"><span className="muted">{when(w.date)}</span><span className="grow ellipsis">{w.title}</span><span className="muted">{w.user}</span></div>
+              ))}
+            </section>
+
+            <section className="jf-col" aria-label="Plugins">
+              <div className="row between">
+                <h2>Plugins</h2>
+                {updates.length > 0 && (
+                  <button className="primary" disabled={readOnly || busy === "plugins"} onClick={() => void act("plugins", "Updating plugins", () => api.serverTaskRunKey("PluginUpdates"))}>
+                    {busy === "plugins" ? <span className="spinner small-spin" /> : null} Update {updates.length}
+                  </button>
+                )}
+              </div>
+              {updates.length > 0 && <p className="muted small">After updating, Jellyfin needs a restart for the new versions to work.</p>}
+              {NEEDED.map((r) => {
+                const p = has(r.names);
+                return (
+                  <div key={r.label} className="plugin-row">
+                    <span className={`plugin-mark ${p ? (p.update ? "warn" : "good") : r.need ? "warn" : "muted"}`}>{p ? (p.update ? "↑" : "✓") : r.need ? "!" : "+"}</span>
+                    <div className="grow"><div className="strong small">{r.label}{!r.need && <span className="muted"> · optional</span>}</div><div className="muted small">{r.why}</div></div>
+                    <span className={`small ${p ? (p.update ? "warn" : "good") : r.need ? "warn" : "muted"}`}>{p ? (p.update ? `${p.version} → ${p.update}` : p.version) : "Not installed"}</span>
+                  </div>
+                );
+              })}
+              {broken.map((p) => (
+                <div key={p.name} className="plugin-row"><span className="plugin-mark bad">!</span><div className="grow strong small">{p.name}</div><span className="small bad">{p.status === "Restart" ? "Needs a restart" : "Not working"}</span></div>
+              ))}
+              <details className="small">
+                <summary className="muted">All {data.plugins.length} installed plugins</summary>
+                <div className="plugin-all">
+                  {data.plugins.map((p) => <span key={p.name} className="chip static">{p.name} <span className="muted">{p.version}{p.update ? ` → ${p.update}` : ""}</span></span>)}
+                </div>
+              </details>
+              <p className="muted small jf-foot">Add new ones in Jellyfin: Dashboard → Plugins → Catalog, then restart.</p>
+            </section>
+
+            <section className="jf-col" aria-label="Health and jobs">
+              <h2>Server health</h2>
+              <div className="kv-line"><span className="muted">Internet (DNS)</span>{data.catalogOk ? <span className="good">Works</span> : <span className="bad">Not working</span>}</div>
+              {data.disks.map((d, i) => (
+                <div key={i} className="kv-line" title={d.path}><span className="muted">Disk free{data.disks.length > 1 ? ` (${d.path.split(/[\\/]/).filter(Boolean).slice(-1)[0] ?? ""})` : " on the NAS"}</span><span className={d.free / Math.max(1, d.total) < 0.1 ? "warn" : ""}>{gbs(d.free)} of {gbs(d.total)}</span></div>
+              ))}
+              <div className="kv-line"><span className="muted">Transcoding now</span><span>{transcoding.length ? `${transcoding.length} stream${transcoding.length === 1 ? "" : "s"}` : "none"}</span></div>
+              {(failed.length > 0 || problems.length > 0) && <div className="kv-line"><span className="muted">Problems lately</span><span className="warn">{failed.length + problems.length}</span></div>}
+              <h2 className="jf-sub">Jobs</h2>
+              <div className="jf-tasks">
+                {main.map((t) => <TaskRow key={t.id} t={t} busy={busy} readOnly={readOnly} act={act} />)}
+              </div>
+              {rest.length > 0 && (
+                <details className="small">
+                  <summary className="muted">{rest.length} more jobs</summary>
+                  <div className="jf-tasks">{rest.map((t) => <TaskRow key={t.id} t={t} busy={busy} readOnly={readOnly} act={act} />)}</div>
+                </details>
+              )}
+              {data.events.length > 0 && (
+                <details className="small">
+                  <summary className="muted">What happened lately ({data.events.length})</summary>
+                  <div className="jf-events">
+                    {data.events.slice(0, 20).map((e, i) => (
+                      <div key={i} className={`jf-event ${/error|fatal|critical/i.test(e.severity) ? "bad" : /warn/i.test(e.severity) ? "warn" : ""}`}>
+                        <span className="muted small mono">{when(e.date)}</span>
+                        <div className="grow"><div className="small strong">{e.name}</div>{e.overview && <div className="muted small">{e.overview}</div>}</div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </section>
+          </div>
           <PicksLeftovers readOnly={readOnly} />
-        </div>
+        </>
       )}
     </div>
   );
@@ -201,7 +208,7 @@ function TaskRow({ t, busy, readOnly, act }: { t: ServerTask; busy: string | nul
         <button disabled={readOnly || busy === t.id} onClick={() => void act(t.id, `Stopping ${t.name}`, () => api.serverTaskStop(t.id))}>Stop</button>
       ) : (
         <button disabled={readOnly || busy === t.id} onClick={() => void act(t.id, t.name, () => api.serverTaskRun(t.id))}>
-          {busy === t.id ? <span className="spinner small-spin" /> : <Icon name="play" />} Run
+          {busy === t.id ? <span className="spinner small-spin" /> : null} Run
         </button>
       )}
     </div>
