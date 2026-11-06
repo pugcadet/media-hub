@@ -17,6 +17,15 @@ pub struct FakeState {
     pub subtitle: (u16, String),
     /// Every request: "METHOD /path?query"
     pub log: Vec<String>,
+    /// Skip markers: 0 = no plugin (404 everywhere), 1 = older Intro Skipper (editor read
+    /// without an ETag; one-by-one writes), 2 = current Intro Skipper (ETag + guarded PUT).
+    pub seg_mode: u8,
+    pub segs: Vec<serde_json::Value>,
+    pub etag: u64,
+    /// Intro Skipper switched off for the library: players' list leaves its markers out.
+    pub hide_from_players: bool,
+    /// Answer the next PUT with 412 (changed meanwhile), as when Intro Skipper is analysing.
+    pub put_conflict_once: bool,
 }
 
 pub struct Fake {
@@ -45,6 +54,7 @@ pub fn start() -> Fake {
                 let method = parts.next().unwrap_or("").to_string();
                 let target = parts.next().unwrap_or("").to_string();
                 let mut len = 0usize;
+                let mut if_match: Option<String> = None;
                 loop {
                     let mut h = String::new();
                     if reader.read_line(&mut h).is_err() || h == "\r\n" || h.is_empty() {
@@ -53,20 +63,27 @@ pub fn start() -> Fake {
                     if let Some(v) = h.to_lowercase().strip_prefix("content-length:") {
                         len = v.trim().parse().unwrap_or(0);
                     }
+                    if let Some(v) = h.to_lowercase().strip_prefix("if-match:") {
+                        if_match = Some(v.trim().to_string());
+                    }
                 }
                 let mut body = vec![0u8; len];
                 let _ = reader.read_exact(&mut body);
                 let body = String::from_utf8_lossy(&body).to_string();
-                let (status, out) = answer(&st, &method, &target, &body);
+                let (status, out) = answer(&st, &method, &target, &body, if_match.as_deref());
+                let etag = {
+                    let g = st.lock().unwrap();
+                    (g.seg_mode == 2 && target.starts_with("/MediaSegmentsApi/")).then(|| format!("ETag: \"{}\"\r\n", g.etag)).unwrap_or_default()
+                };
                 let mut s = stream;
-                let _ = write!(s, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}", out.len());
+                let _ = write!(s, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n{etag}Content-Length: {}\r\nConnection: close\r\n\r\n{out}", out.len());
             });
         }
     });
     Fake { url, state }
 }
 
-fn answer(st: &Arc<Mutex<FakeState>>, method: &str, target: &str, body: &str) -> (u16, String) {
+fn answer(st: &Arc<Mutex<FakeState>>, method: &str, target: &str, body: &str, if_match: Option<&str>) -> (u16, String) {
     let mut s = st.lock().unwrap();
     s.log.push(format!("{method} {target}"));
     let path = target.split('?').next().unwrap_or("");
@@ -92,7 +109,41 @@ fn answer(st: &Arc<Mutex<FakeState>>, method: &str, target: &str, body: &str) ->
             let (code, text) = s.subtitle.clone();
             (code, text)
         }
-        ("GET", p) if p.starts_with("/MediaSegments/") => (404, String::new()),
+        ("GET", p) if p.starts_with("/MediaSegments/") => {
+            if s.seg_mode == 0 {
+                return (404, String::new());
+            }
+            let shown: Vec<serde_json::Value> = if s.hide_from_players { vec![] } else { s.segs.clone() };
+            (200, serde_json::json!({ "Items": shown }).to_string())
+        }
+        (_, p) if p.starts_with("/MediaSegmentsApi/") && s.seg_mode == 0 => (404, String::new()),
+        ("GET", p) if p.starts_with("/MediaSegmentsApi/") => (200, serde_json::Value::Array(s.segs.clone()).to_string()),
+        ("PUT", p) if p.starts_with("/MediaSegmentsApi/") => {
+            if s.seg_mode != 2 {
+                return (405, String::new());
+            }
+            if s.put_conflict_once || if_match != Some(format!("\"{}\"", s.etag).as_str()) {
+                s.put_conflict_once = false;
+                s.etag += 1;
+                return (412, String::new());
+            }
+            s.segs = serde_json::from_str(body).unwrap_or_default();
+            s.etag += 1;
+            (200, serde_json::Value::Array(s.segs.clone()).to_string())
+        }
+        ("POST", p) if p.starts_with("/MediaSegmentsApi/") => {
+            assert!(target.contains("providerId=IntroSkipper"), "{target}");
+            let mut v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+            let n = s.segs.len() + 1;
+            v["Id"] = serde_json::json!(format!("{n:032x}"));
+            s.segs.push(v);
+            (200, String::new())
+        }
+        ("DELETE", p) if p.starts_with("/MediaSegmentsApi/") => {
+            let id = p.trim_start_matches("/MediaSegmentsApi/").to_string();
+            s.segs.retain(|x| x.get("Id").and_then(|i| i.as_str()) != Some(id.as_str()));
+            (204, String::new())
+        }
         ("GET", p) if p == format!("/Items/{ITEM}/Images/Backdrop/0") || p == format!("/Items/{ITEM}/Images/Backdrop") => (200, "\u{FFD8}fakejpeg".into()),
         _ => (404, String::new()),
     }
@@ -168,5 +219,91 @@ mod tests {
         assert!(e.contains("plugin"), "{e}");
         let gone = tauri::async_runtime::block_on(c.item_json("cccccccccccccccccccccccccccccccc")).unwrap_err().to_string();
         assert!(gone.contains("no longer in Jellyfin"), "{gone}");
+    }
+
+    fn seg(id: &str, kind: &str, start: f64, end: f64) -> serde_json::Value {
+        serde_json::json!({ "Id": id, "ItemId": ITEM, "Type": kind, "StartTicks": (start * 1e7) as i64, "EndTicks": (end * 1e7) as i64 })
+    }
+
+    fn intro(start: f64, end: f64) -> Vec<crate::seg_cmds::Seg> {
+        vec![crate::seg_cmds::Seg::new("Intro", start, end)]
+    }
+
+    #[test]
+    fn markers_are_saved_like_the_segment_editor_and_confirmed() {
+        let f = start();
+        {
+            let mut g = f.state.lock().unwrap();
+            g.seg_mode = 2;
+            g.segs = vec![seg("11111111111111111111111111111111", "Intro", 1.0, 20.0), seg("22222222222222222222222222222222", "Outro", 1300.0, 1400.0)];
+        }
+        let w = client(&f).into_writer();
+        let r = tauri::async_runtime::block_on(crate::seg_cmds::store_markers(&w, ITEM, &["Intro".into()], &intro(0.0, 75.0))).unwrap();
+        assert!(r.confirmed, "{r:?}");
+        let g = f.state.lock().unwrap();
+        assert!(g.log.iter().any(|l| l.starts_with("PUT /MediaSegmentsApi/")), "{:?}", g.log);
+        assert_eq!(g.segs.len(), 2, "credits kept, intro replaced");
+        assert!(g.segs.iter().any(|s| s["Type"] == "Outro"));
+        assert!(g.segs.iter().any(|s| s["Type"] == "Intro" && s["EndTicks"] == 750_000_000i64));
+    }
+
+    #[test]
+    fn a_conflict_reads_again_and_still_saves() {
+        let f = start();
+        {
+            let mut g = f.state.lock().unwrap();
+            g.seg_mode = 2;
+            g.put_conflict_once = true;
+        }
+        let w = client(&f).into_writer();
+        let r = tauri::async_runtime::block_on(crate::seg_cmds::store_markers(&w, ITEM, &["Intro".into()], &intro(0.0, 60.0))).unwrap();
+        assert!(r.confirmed);
+        assert_eq!(f.state.lock().unwrap().log.iter().filter(|l| l.starts_with("PUT")).count(), 2);
+    }
+
+    #[test]
+    fn older_intro_skipper_gets_delete_then_add() {
+        let f = start();
+        {
+            let mut g = f.state.lock().unwrap();
+            g.seg_mode = 1;
+            g.segs = vec![seg("11111111111111111111111111111111", "Intro", 1.0, 20.0)];
+        }
+        let w = client(&f).into_writer();
+        let r = tauri::async_runtime::block_on(crate::seg_cmds::store_markers(&w, ITEM, &["Intro".into()], &intro(0.0, 60.0))).unwrap();
+        assert!(r.confirmed);
+        let g = f.state.lock().unwrap();
+        assert_eq!(g.segs.len(), 1);
+        assert!(g.log.iter().any(|l| l.starts_with("DELETE /MediaSegmentsApi/11111111111111111111111111111111?")), "{:?}", g.log);
+    }
+
+    #[test]
+    fn hidden_from_players_is_said_not_called_saved() {
+        let f = start();
+        {
+            let mut g = f.state.lock().unwrap();
+            g.seg_mode = 2;
+            g.hide_from_players = true;
+        }
+        let w = client(&f).into_writer();
+        let r = tauri::async_runtime::block_on(crate::seg_cmds::store_markers(&w, ITEM, &["Intro".into()], &intro(0.0, 60.0))).unwrap();
+        assert!(!r.confirmed);
+        assert!(r.message.contains("switched off"), "{}", r.message);
+    }
+
+    #[test]
+    fn clearing_removes_only_that_kind() {
+        let f = start();
+        {
+            let mut g = f.state.lock().unwrap();
+            g.seg_mode = 2;
+            g.segs = vec![seg("11111111111111111111111111111111", "Intro", 1.0, 20.0), seg("22222222222222222222222222222222", "Outro", 1300.0, 1400.0)];
+        }
+        let w = client(&f).into_writer();
+        let r = tauri::async_runtime::block_on(crate::seg_cmds::store_markers(&w, ITEM, &["Outro".into()], &[])).unwrap();
+        assert!(r.confirmed);
+        let g = f.state.lock().unwrap();
+        assert_eq!(g.segs.len(), 1);
+        assert_eq!(g.segs[0]["Type"], "Intro");
     }
 }

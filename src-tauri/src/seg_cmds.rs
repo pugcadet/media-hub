@@ -13,9 +13,9 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
-/// The MediaSegments API plugin's own provider: it never regenerates, so Jellyfin never deletes
-/// what is saved under it (the chapter provider wiped saved markers on every segment scan).
-const PROVIDER: &str = "MediaSegments API";
+/// Only for servers without Intro Skipper's editor endpoint: the MediaSegments API plugin's
+/// provider (it never regenerates, so Jellyfin keeps what is saved under it).
+const LEGACY_PROVIDER: &str = "MediaSegments API";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +24,12 @@ pub struct Seg {
     kind: String,
     start: f64,
     end: f64,
+}
+
+impl Seg {
+    pub fn new(kind: &str, start: f64, end: f64) -> Seg {
+        Seg { id: String::new(), kind: kind.into(), start, end }
+    }
 }
 
 fn read_segs(list: &[Value]) -> Vec<Seg> {
@@ -92,7 +98,9 @@ pub async fn segments_overview(state: State<'_, AppState>, season_id: String) ->
     }
     let s = state.settings()?;
     let ffmpeg = media_tools::locate_ffmpeg(s.ffmpeg_path.as_deref()).map(|p| p.to_string_lossy().into_owned());
-    let can_write_segments = c.segment_api().await.ok().flatten().is_some();
+    let first = episodes.first().map(|e| e.id.clone()).unwrap_or_default();
+    let editor = if first.is_empty() { false } else { c.segments_editor(&first).await.ok().flatten().is_some() };
+    let can_write_segments = editor || c.segment_api().await.ok().flatten().is_some();
     Ok(Overview { episodes, ffmpeg, can_write_segments })
 }
 
@@ -260,16 +268,11 @@ pub async fn save_segments(
     credits: Option<Span>,
     recap: Option<Span>,
     clear: Vec<String>,
-) -> Result<()> {
+) -> Result<SaveReport> {
     if !valid_item_id(&item_id) {
         return Err(Error::msg("bad id"));
     }
     let w = state.writer().await?;
-    let api = w
-        .reader()
-        .segment_api()
-        .await?
-        .ok_or_else(|| Error::msg("Saving needs the “MediaSegments API” plugin in Jellyfin (Dashboard → Plugins → Catalog), then restart Jellyfin."))?;
     let item = w.reader().item_json(&item_id).await?;
     let duration = item.get("RunTimeTicks").and_then(Value::as_f64).map(|t| t / TICKS_PER_SECOND);
 
@@ -289,7 +292,7 @@ pub async fn save_segments(
         }
     }
     if wanted.is_empty() {
-        return Ok(());
+        return Ok(SaveReport { confirmed: true, message: "Nothing to change".into() });
     }
     for (_, s) in &wanted {
         if let Some(s) = s {
@@ -299,44 +302,160 @@ pub async fn save_segments(
         }
     }
 
-    let before = read_segs(&w.reader().segments(&item_id).await?);
     let kinds: Vec<String> = wanted.iter().map(|(k, _)| k.clone()).collect();
     let created: Vec<Seg> = wanted
         .iter()
         .filter_map(|(k, s)| s.map(|s| Seg { id: String::new(), kind: k.clone(), start: s.start, end: s.end }))
         .collect();
+    let before = current(&w, &item_id).await?;
     let record = serde_json::to_string(&SegRecord { before: before.clone(), kinds: kinds.clone(), created: created.clone() })
         .map_err(|e| Error::msg(e.to_string()))?;
     state.store()?.journal_add("segment", &item_id, &record, &kinds.join(","))?;
 
-    for old in before.iter().filter(|s| kinds.contains(&s.kind)) {
-        w.segment_delete(&api, &old.id).await?;
-    }
-    for s in &created {
-        w.segment_create(&api, &item_id, &s.kind, s.start, s.end, PROVIDER).await?;
-    }
+    let report = store_markers(&w, &item_id, &kinds, &created).await?;
     if let Some(series) = item.get("SeriesId").and_then(Value::as_str) {
         crate::library::seg_invalidate(&state.dir, series);
     }
-    Ok(())
+    Ok(report)
+}
+
+/// What happened to one episode's markers, in plain words for the progress list.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveReport {
+    /// Read back from Jellyfin and found exactly as sent: players will offer "Skip".
+    pub confirmed: bool,
+    pub message: String,
+}
+
+/// The markers as the editor endpoint sees them (every provider), else as players see them.
+async fn current(w: &Writer, item_id: &str) -> Result<Vec<Seg>> {
+    Ok(match w.reader().segments_editor(item_id).await? {
+        Some(r) => read_segs(&r.items),
+        None => read_segs(&w.reader().segments(item_id).await?),
+    })
+}
+
+/// A new segment id in the form Jellyfin uses (a random GUID).
+fn new_guid(salt: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let h = Sha256::digest(format!("{salt}{nanos}{n}").as_bytes());
+    let mut b: Vec<u8> = h[..16].to_vec();
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let x: String = b.iter().map(|v| format!("{v:02x}")).collect();
+    format!("{}-{}-{}-{}-{}", &x[0..8], &x[8..12], &x[12..16], &x[16..20], &x[20..32])
+}
+
+fn wire(item_id: &str, id: &str, kind: &str, start: f64, end: f64) -> Value {
+    serde_json::json!({
+        "Id": id,
+        "ItemId": item_id,
+        "Type": kind,
+        "StartTicks": (start * TICKS_PER_SECOND).round() as i64,
+        "EndTicks": (end * TICKS_PER_SECOND).round() as i64,
+    })
+}
+
+/// The whole set to send: everything of other kinds untouched, plus the new markers.
+fn replacement(item_id: &str, existing: &[Value], kinds: &[String], new: &[Seg]) -> Vec<Value> {
+    let mut out: Vec<Value> = existing
+        .iter()
+        .filter(|s| !kinds.iter().any(|k| Some(k.as_str()) == s.get("Type").and_then(Value::as_str)))
+        .cloned()
+        .collect();
+    out.extend(new.iter().map(|s| wire(item_id, &new_guid(item_id), &s.kind, s.start, s.end)));
+    out
+}
+
+/// Did the read-back find what was saved? Times within a second count (ticks get rounded).
+fn matches(read: &[Seg], kinds: &[String], new: &[Seg]) -> bool {
+    let all_new_there = new
+        .iter()
+        .all(|n| read.iter().any(|r| r.kind == n.kind && (r.start - n.start).abs() < 1.0 && (r.end - n.end).abs() < 1.0));
+    let cleared_gone = kinds
+        .iter()
+        .filter(|k| !new.iter().any(|n| &n.kind == *k))
+        .all(|k| !read.iter().any(|r| &r.kind == k));
+    all_new_there && cleared_gone
+}
+
+/// Saves the markers of `kinds` the way Jellyfin's Segment Editor does, then reads them back:
+/// 1. read the set with its version tag, replace it in one guarded step (PUT + If-Match);
+/// 2. older Intro Skipper: delete the old ones and add the new ones under its provider;
+/// 3. no Intro Skipper at all: the MediaSegments API plugin.
+/// Finally reads back what players get, so "saved" only ever means "saved and confirmed".
+pub async fn store_markers(w: &Writer, item_id: &str, kinds: &[String], new: &[Seg]) -> Result<SaveReport> {
+    let mut wrote = false;
+    for _ in 0..2 {
+        match w.reader().segments_editor(item_id).await? {
+            Some(read) if read.etag.is_some() => {
+                let body = replacement(item_id, &read.items, kinds, new);
+                if w.segments_put(item_id, read.etag.as_deref().unwrap_or(""), &body).await? {
+                    wrote = true;
+                    break;
+                }
+                // 412: changed meanwhile (Intro Skipper was busy); read again and retry once.
+            }
+            Some(read) => {
+                for old in read_segs(&read.items).iter().filter(|s| kinds.contains(&s.kind) && !s.id.is_empty()) {
+                    w.segment_delete_editor(&old.id, item_id, &old.kind).await?;
+                }
+                for s in new {
+                    w.segment_post_editor(item_id, &s.kind, s.start, s.end).await?;
+                }
+                wrote = true;
+                break;
+            }
+            None => {
+                let api = w.reader().segment_api().await?.ok_or_else(|| {
+                    Error::msg("Jellyfin has no way to store skip markers yet: install the “Intro Skipper” plugin (Jellyfin → Dashboard → Plugins → Catalog) and restart Jellyfin.")
+                })?;
+                for old in read_segs(&w.reader().segments(item_id).await?).iter().filter(|s| kinds.contains(&s.kind)) {
+                    w.segment_delete(&api, &old.id).await?;
+                }
+                for s in new {
+                    w.segment_create(&api, item_id, &s.kind, s.start, s.end, LEGACY_PROVIDER).await?;
+                }
+                wrote = true;
+                break;
+            }
+        }
+    }
+    if !wrote {
+        return Err(Error::msg("The markers kept changing on the server while saving (Intro Skipper may be analysing this show). Try again in a minute."));
+    }
+
+    // Read back. Players read the filtered list; the editor list shows what was stored at all.
+    for wait in [300u64, 1200, 2500] {
+        tokio_sleep_ms(wait).await;
+        let seen = read_segs(&w.reader().segments(item_id).await.unwrap_or_default());
+        if matches(&seen, kinds, new) {
+            return Ok(SaveReport { confirmed: true, message: "Saved and confirmed".into() });
+        }
+    }
+    let stored = w.reader().segments_editor(item_id).await.ok().flatten().map(|r| read_segs(&r.items)).unwrap_or_default();
+    if matches(&stored, kinds, new) {
+        return Ok(SaveReport {
+            confirmed: false,
+            message: "Saved, but players won't see it: “Intro Skipper” is switched off as a segment provider for this library. Turn it on under Intros → Options (or Jellyfin → Libraries → Manage library).".into(),
+        });
+    }
+    Err(Error::msg("Jellyfin accepted the markers but didn't keep them. Check that Intro Skipper is up to date (Jellyfin page → Plugins), then save again."))
+}
+
+async fn tokio_sleep_ms(ms: u64) {
+    tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_millis(ms))).await.ok();
 }
 
 /// Puts the segments of the touched kinds back to how they were.
 pub async fn undo_segments(w: &Writer, item_id: &str, record_json: &str) -> Result<()> {
     let rec: SegRecord = serde_json::from_str(record_json).map_err(|_| Error::msg("bad journal entry"))?;
-    let api = w
-        .reader()
-        .segment_api()
-        .await?
-        .ok_or_else(|| Error::msg("The MediaSegments API plugin is not available."))?;
-    let now = read_segs(&w.reader().segments(item_id).await?);
-    for s in now.iter().filter(|s| rec.kinds.contains(&s.kind)) {
-        w.segment_delete(&api, &s.id).await?;
-    }
-    for s in rec.before.iter().filter(|s| rec.kinds.contains(&s.kind)) {
-        w.segment_create(&api, item_id, &s.kind, s.start, s.end, PROVIDER).await?;
-    }
-    Ok(())
+    let back: Vec<Seg> = rec.before.iter().filter(|s| rec.kinds.contains(&s.kind)).cloned().collect();
+    store_markers(w, item_id, &rec.kinds, &back).await.map(|_| ())
 }
 
 #[derive(Serialize)]
@@ -467,7 +586,6 @@ pub async fn segments_carry(app: AppHandle, state: State<'_, AppState>, snapshot
 }
 
 async fn carry(w: &Writer, snap: &[SegSnap], folder_name: &str, old_id: &str) -> Result<usize> {
-    let api = w.reader().segment_api().await?.ok_or_else(|| Error::msg("The MediaSegments API plugin is not available."))?;
     let suffix = format!("/{}", folder_name.to_lowercase());
     for _ in 0..48 {
         tokio_sleep(5).await;
@@ -489,13 +607,17 @@ async fn carry(w: &Writer, snap: &[SegSnap], folder_name: &str, old_id: &str) ->
         let mut n = 0;
         for (season, episode, id) in eps {
             let have = read_segs(&w.reader().segments(&id).await.unwrap_or_default());
-            for s in snap.iter().filter(|s| s.season == season && s.episode == episode) {
-                if have.iter().any(|h| h.kind == s.kind) {
-                    continue;
-                }
-                if w.segment_create(&api, &id, &s.kind, s.start, s.end, PROVIDER).await.is_ok() {
-                    n += 1;
-                }
+            let todo: Vec<Seg> = snap
+                .iter()
+                .filter(|s| s.season == season && s.episode == episode && !have.iter().any(|h| h.kind == s.kind))
+                .map(|s| Seg { id: String::new(), kind: s.kind.clone(), start: s.start, end: s.end })
+                .collect();
+            if todo.is_empty() {
+                continue;
+            }
+            let kinds: Vec<String> = todo.iter().map(|s| s.kind.clone()).collect();
+            if store_markers(w, &id, &kinds, &todo).await.is_ok() {
+                n += todo.len();
             }
         }
         return Ok(n);

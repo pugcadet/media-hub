@@ -561,6 +561,17 @@ impl Client {
     }
 }
 
+/// An item's markers as the Segment Editor endpoint returns them.
+#[derive(Debug, Clone)]
+pub struct SegRead {
+    pub items: Vec<serde_json::Value>,
+    /// Present when the provider supports one atomic, guarded replace (PUT with If-Match).
+    pub etag: Option<String>,
+}
+
+/// The provider id the Segment Editor writes under (Intro Skipper's own).
+pub const EDITOR_PROVIDER: &str = "IntroSkipper";
+
 /// Where the MediaSegments API plugin accepts new segments and deletions. Found in the
 /// server's own API description, so the app adapts to the installed plugin version.
 #[derive(Debug, Clone, PartialEq)]
@@ -737,6 +748,38 @@ impl Client {
         let v: serde_json::Value = self.get_json(&format!("/MediaSegments/{id}"), &[]).await?;
         Ok(v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default())
     }
+
+    /// Sends with the key but leaves every status to the caller (for answers that are not errors
+    /// here, like 404/405 "no such endpoint" or 412 "changed meanwhile").
+    async fn send_raw(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        req.header("Authorization", &self.auth)
+            .send()
+            .await
+            .map_err(|e| Error::Network(e.without_url().to_string()))
+    }
+
+    /// The Segment Editor's read: every provider's markers for the item (unfiltered) and the
+    /// version tag (ETag) a guarded replace needs. `None` when the server has no such endpoint.
+    pub async fn segments_editor(&self, id: &str) -> Result<Option<SegRead>> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let resp = self.send_raw(self.http.get(self.url(&format!("/MediaSegmentsApi/{id}")))).await?;
+        match resp.status().as_u16() {
+            404 | 405 => Ok(None),
+            401 | 403 => Err(Error::Unauthorized),
+            200..=299 => {
+                let etag = resp.headers().get("etag").and_then(|v| v.to_str().ok()).map(str::to_string);
+                let v: serde_json::Value = Self::read_json(resp).await?;
+                let items = match v {
+                    serde_json::Value::Array(a) => a,
+                    other => other.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default(),
+                };
+                Ok(Some(SegRead { items, etag }))
+            }
+            s => Err(Error::msg(format!("Jellyfin couldn't read the skip markers (status {s}).")))
+        }
+    }
 }
 
 /// The current time as Jellyfin writes dates ("2026-10-25T12:00:00.000Z").
@@ -888,6 +931,52 @@ impl Writer {
             Err(e) if e.to_string().contains("500") => {
                 tokio_sleep(900).await;
                 self.c.send(self.c.http.delete(self.c.url(&path))).await.map(|_| ())
+            }
+            r => r.map(|_| ()),
+        }
+    }
+
+    /// Replaces the item's whole marker set in one step, guarded by the version read before
+    /// (the Segment Editor's way). `Ok(false)`: someone changed them meanwhile (412).
+    pub async fn segments_put(&self, id: &str, etag: &str, all: &[serde_json::Value]) -> Result<bool> {
+        if !valid_item_id(id) {
+            return Err(Error::msg("bad id"));
+        }
+        let url = self.c.url(&format!("/MediaSegmentsApi/{id}"));
+        for attempt in 0..2 {
+            let req = self.c.http.put(&url).header("If-Match", etag).json(&serde_json::Value::Array(all.to_vec()));
+            let resp = self.c.send_raw(req).await?;
+            match resp.status().as_u16() {
+                200..=299 => return Ok(true),
+                412 => return Ok(false),
+                401 | 403 => return Err(Error::Unauthorized),
+                500..=599 if attempt == 0 => tokio_sleep(900).await,
+                s => {
+                    let body = resp.text().await.unwrap_or_default();
+                    let why: String = body.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
+                    return Err(Error::msg(format!("Jellyfin didn't accept the skip markers (status {s}). {why}").trim().to_string()));
+                }
+            }
+        }
+        Err(Error::msg("Jellyfin was busy and didn't accept the skip markers. Try again in a moment."))
+    }
+
+    /// Older Intro Skipper: one marker at a time, under Intro Skipper's provider.
+    pub async fn segment_post_editor(&self, id: &str, kind: &str, start: f64, end: f64) -> Result<()> {
+        let api = SegmentApi { create: "/MediaSegmentsApi/{itemId}".into(), delete: "/MediaSegmentsApi/{segmentId}".into() };
+        self.segment_create(&api, id, kind, start, end, EDITOR_PROVIDER).await
+    }
+
+    pub async fn segment_delete_editor(&self, segment_id: &str, item_id: &str, kind: &str) -> Result<()> {
+        if !valid_segment_id(segment_id) || !valid_item_id(item_id) {
+            return Err(Error::msg("bad segment id"));
+        }
+        let url = self.c.url(&format!("/MediaSegmentsApi/{segment_id}"));
+        let q = [("itemId", item_id.to_string()), ("type", kind.to_string())];
+        match self.c.send(self.c.http.delete(&url).query(&q)).await {
+            Err(e) if e.to_string().contains("500") => {
+                tokio_sleep(900).await;
+                self.c.send(self.c.http.delete(&url).query(&q)).await.map(|_| ())
             }
             r => r.map(|_| ()),
         }

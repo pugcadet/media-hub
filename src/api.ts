@@ -498,6 +498,12 @@ export interface AutoResult {
   name: string | null;
 }
 
+/** One episode's save: confirmed means read back from Jellyfin exactly as sent. */
+export interface SaveReport {
+  confirmed: boolean;
+  message: string;
+}
+
 export interface Span {
   start: number;
   end: number;
@@ -951,7 +957,7 @@ export const api = {
   detectSeason: (seasonId: string, introMax: number, creditsMax: number, findIntro = true, findCredits = true) =>
     invoke<Suggestion[]>("detect_season", { seasonId, introMax, creditsMax, findIntro, findCredits }),
   saveSegments: (itemId: string, intro: Span | null, credits: Span | null, recap: Span | null, clear: string[]) =>
-    invoke<void>("save_segments", { itemId, intro, credits, recap, clear }),
+    invoke<SaveReport>("save_segments", { itemId, intro, credits, recap, clear }),
   ffmpegInfo: () => invoke<{ path: string | null; version: string | null }>("ffmpeg_info"),
   pickFfmpeg: () => invoke<string | null>("pick_ffmpeg"),
   /** A piece of an episode straight from the library folder (fast); fails when it can't be done. */
