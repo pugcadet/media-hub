@@ -1,11 +1,11 @@
 
-added 75 packages in 5s
+added 75 packages in 8s
 [1m[92m    Updating[0m crates.io index
-[1m[92m   Compiling[0m media-hub v0.25.8 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 2m 19s
-[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-4f7e46adcf52aedc)
+[1m[92m   Compiling[0m media-hub v0.26.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 3m 10s
+[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-a0f9bacf8c36910e)
 
-running 186 tests
+running 196 tests
 test backend::tests::versions ... ok
 test backend::tests::schedules_read_nicely ... ok
 test backend::tests::library_rows_compare_with_recommended ... ok
@@ -23,22 +23,27 @@ test bulk::tests::drops_release_tags ... ok
 test detect::tests::windows_and_snapping ... ok
 test downloads::tests::audio_mode ... ok
 test downloads::tests::builds_safe_arguments ... ok
-test downloads::tests::plain_error_text ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
+test downloads::tests::plain_error_text ... ok
 test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
-test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
 test downloads::tests::search_targets_and_results ... ok
+test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
 test downloads::tests::summarizes_playlists ... ok
 test bulk::tests::plans_files_sidecars_and_folder ... ok
 test fake_jellyfin::tests::a_missing_picture_is_none_not_an_error ... ok
+test fake_jellyfin::tests::a_conflict_reads_again_and_still_saves ... ok
+test fake_jellyfin::tests::clearing_removes_only_that_kind ... ok
 test fake_jellyfin::tests::missing_markers_plugin_is_not_called_a_missing_title ... ok
+test fake_jellyfin::tests::older_intro_skipper_gets_delete_then_add ... ok
+test fake_jellyfin::tests::markers_are_saved_like_the_segment_editor_and_confirmed ... ok
 test fake_jellyfin::tests::position_is_saved_and_read_back ... ok
+test fake_jellyfin::tests::position_falls_back_to_the_older_route_when_the_new_one_keeps_nothing ... ok
 test fingerprint::tests::fft_matches_a_plain_dft ... ok
 test fake_jellyfin::tests::subtitle_download_limit_is_reported_not_hidden ... ok
-test fake_jellyfin::tests::position_falls_back_to_the_older_route_when_the_new_one_keeps_nothing ... ok
 test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
 test fingerprint::tests::silence_does_not_match ... ok
+test fake_jellyfin::tests::hidden_from_players_is_said_not_called_saved ... ok
 test fingerprint::tests::survives_noise_like_a_different_encode ... ok
 test fsops::tests::apply_then_undo_restores_everything ... ok
 test fsops::tests::case_only_rename_works ... ok
@@ -53,6 +58,8 @@ test images::tests::remote_hosts_are_allow_listed ... ok
 test import::tests::describes_a_show_folder ... ok
 test import::tests::folder_names ... ok
 test inbox::tests::a_movie_brings_only_the_video_and_your_subtitles_with_clean_names ... ok
+test inbox::tests::a_title_you_have_is_never_given_a_second_folder ... ok
+test inbox::tests::episodes_get_their_title_and_junk_stays_behind ... ok
 test inbox::tests::episodes_without_a_season_go_in_the_show_folder ... ok
 test inbox::tests::plans_episodes_into_the_show_and_skips_what_is_there ... ok
 test inbox::tests::season_folders_follow_the_show ... ok
@@ -67,6 +74,7 @@ test jellyfin::tests::id_and_image_kind_checks ... ok
 test jellyfin::tests::missing_null_and_value_are_different ... ok
 test jellyfin::tests::not_found_names_the_right_thing ... ok
 test jellyfin::tests::parses_a_jellyfin_page ... ok
+test jfserver::tests::playing_and_watched_read_plainly ... ok
 test jfserver::tests::update_respects_server_version ... ok
 test jfserver::tests::versions_compare ... ok
 test library::tests::best_version_wins_on_resolution_then_hdr ... ok
@@ -74,10 +82,12 @@ test library::tests::different_shows_are_not_duplicates ... ok
 test library::tests::merging_genres ... ok
 test library::tests::missing_skips_unaired_and_counts_specials ... ok
 test library::tests::today_looks_like_a_date ... ok
+test local::tests::finds_titles_that_were_renamed_since_jellyfin_last_looked ... ok
 test local::tests::relative_paths_use_forward_slashes ... ok
 test localmusic::edit_tests::edits_go_over_the_files_and_reset ... ok
 test localmusic::edit_tests::names_compare_loosely ... ok
 test localmusic::edit_tests::only_picture_hosts_from_the_choices ... ok
+test localmusic::tag_tests::songs_pair_with_tracks_by_number_then_title ... ok
 test localmusic::tests::file_and_folder_names ... ok
 test localmusic::tests::reads_tags_and_cover_when_available ... ok
 test localmusic::tests::scans_a_folder ... ok
@@ -180,7 +190,7 @@ test subs::tests::parses_jellyfin_json ... ok
 test subs::tests::ranking_sorts_and_drops_empty_ids ... ok
 test subs::tests::same_release_beats_other_release ... ok
 test subs::tests::wrong_episode_is_zero ... ok
-test subsync::tests::finds_a_shift ... ok
+test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test subsync::tests::reads_and_writes_srt_and_vtt ... ok
 test subsync::tests::speech_detection_follows_loudness ... ok
 test tidy::tests::movies_get_one_name_for_folder_video_and_subtitles ... ok
@@ -189,13 +199,13 @@ test tidy::tests::years_only_come_out_of_episode_names ... ok
 test updater::tests::checksums_and_assets ... ok
 test updater::tests::swap_keeps_old_when_new_is_missing ... ok
 test updater::tests::versions_compare ... ok
+test subsync::tests::finds_a_shift ... ok
 test fingerprint::tests::unrelated_audio_has_no_match ... ok
-test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 186 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.37s
+test result: ok. 196 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.77s
 
-[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-52eb3b60542fdff6)
+[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-1d09d03fcd7373b8)
 
 running 0 tests
 
@@ -210,7 +220,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         Info Looking up installed tauri packages to check mismatched versions...
      Running beforeBuildCommand `npm run build`
 
-> media-hub@0.25.8 build
+> media-hub@0.26.0 build
 > tsc && vite build
 
 [36mvite v5.4.21 [32mbuilding for production...[36m[39m
@@ -278,16 +288,16 @@ computing gzip size...
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-400-normal-6-qcROiO.woff       [39m[1m[2m   27.50 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32minter-latin-wght-normal-Dx4kXJAl.woff2              [39m[1m[2m   48.26 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32minter-latin-ext-wght-normal-DO1Apj_S.woff2          [39m[1m[2m   85.07 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[35mindex-CzV901G0.css                                  [39m[1m[2m  193.78 kB[22m[1m[22m[2m │ gzip:  52.31 kB[22m
-[2mdist/[22m[2massets/[22m[36mindex-DCd79Bau.js                                   [39m[1m[33m1,194.82 kB[39m[22m[2m │ gzip: 367.33 kB[22m
+[2mdist/[22m[2massets/[22m[35mindex-BHhUMKyw.css                                  [39m[1m[2m  207.59 kB[22m[1m[22m[2m │ gzip:  54.64 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-_ISrIbRg.js                                   [39m[1m[33m1,212.94 kB[39m[22m[2m │ gzip: 372.98 kB[22m
 [33m
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 7.55s[39m
-[1m[92m   Compiling[0m media-hub v0.25.8 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 10m 37s
+[32m✓ built in 5.24s[39m
+[1m[92m   Compiling[0m media-hub v0.26.0 (/Users/runner/work/media-hub/media-hub/src-tauri)
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 14m 04s
        Built application at: /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/media-hub
     Bundling Media Hub.app (/Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app)
      Signing with identity "-"
@@ -298,9 +308,9 @@ Signing with identity "-"
 Signing /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app
 /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app: replacing existing signature
         Warn skipping app notarization, no APPLE_ID & APPLE_PASSWORD & APPLE_TEAM_ID or APPLE_API_KEY & APPLE_API_ISSUER & APPLE_API_KEY_PATH environment variables found
-    Bundling Media Hub_0.25.8_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Media Hub_0.25.8_aarch64.dmg)
+    Bundling Media Hub_0.26.0_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Media Hub_0.26.0_aarch64.dmg)
      Running bundle_dmg.sh
     Finished 2 bundles at:
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app (16.84 MiB)
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Media Hub_0.25.8_aarch64.dmg (7.99 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app (17.36 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Media Hub_0.26.0_aarch64.dmg (8.24 MiB)
 
