@@ -1413,7 +1413,9 @@ fn title_variants(t: &str) -> Vec<String> {
 /// Words of a title for comparing ("Controlla (prod. Boi-1da) [Explicit]" ~ "Controlla").
 fn title_words(t: &str) -> String {
     let t = t.to_lowercase();
-    let cut = t.find(" (feat").or_else(|| t.find(" [")).or_else(|| t.find(" (prod")).map(|i| &t[..i]).unwrap_or(&t);
+    // Cut at the first of " (feat", " (prod", " [", " feat. ", " ft. ".
+    let end = [" (feat", " (prod", " (with", " [", " feat. ", " ft. "].iter().filter_map(|m| t.find(m)).min().unwrap_or(t.len());
+    let cut = &t[..end];
     crate::naming::fold_accents(cut).chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
