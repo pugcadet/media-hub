@@ -31,7 +31,7 @@ interface Row {
   pics?: SearchResult[];
   /** A poster for the card (online match). */
   art?: string | null;
-  /** Look up English subtitles after placing (ticked when the download has none). */
+  /** Look up English subtitles after uploading (ticked when the download has none). */
   look?: boolean;
 }
 
@@ -181,7 +181,7 @@ function trashText(left: string[]): string {
 
 /* ------------------------------------------------------------------ the page */
 
-const STATE_LABEL: Record<State, string> = { checking: "Looking…", ready: "Ready", look: "Needs a look", have: "Already have it", placing: "Putting in place…", done: "Done", failed: "Didn't work" };
+const STATE_LABEL: Record<State, string> = { checking: "Looking…", ready: "Ready", look: "Needs a look", have: "Already have it", placing: "Uploading…", done: "Done", failed: "Didn't work" };
 const gb = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
 
 export default function Inbox({ status }: { status: Status }) {
@@ -240,20 +240,21 @@ export default function Inbox({ status }: { status: Status }) {
   async function place(list: Row[]) {
     if (!list.length) return;
     const files = list.reduce((a, r) => a + (r.plan?.moves.filter((m) => !m.have).length ?? 0), 0);
-    if (!(await askConfirm(`Put ${list.length} download${list.length === 1 ? "" : "s"} in place (${files} file${files === 1 ? "" : "s"})?\n\nThey go to the NAS with the right names. Once a file has arrived and its size checks out, the download goes to the Trash (you can put it back from there). Anything already in your library is skipped.`, { okLabel: "Put in place" }))) return;
+    if (!(await askConfirm(`Upload ${list.length} download${list.length === 1 ? "" : "s"} (${files} file${files === 1 ? "" : "s"})?\n\nThey go to the NAS with the right names. Once a file has arrived and its size checks out, the download goes to the Trash (you can put it back from there). Anything already in your library is skipped.`, { okLabel: "Upload" }))) return;
     setBusy(true);
     const args = (await import("./Renamer")).namingArgs();
     for (const r of list) {
       if (!r.plan || !r.target) continue;
       update(r.item.key, { state: "placing" });
       try {
-        await track(`Putting ${placeLabel(r.target, r.plan)} in place`, async (job) => {
-          const un = await listen<{ key: string; done: number; total: number; file: string; fileDone: number; fileSize: number }>("inbox-progress", (e) => {
+        await track(`Uploading ${placeLabel(r.target, r.plan)}`, async (job) => {
+          const un = await listen<{ key: string; done: number; total: number; file: string; fileDone: number; fileSize: number; n: number; of: number }>("inbox-progress", (e) => {
             const x = e.payload;
             if (x.key !== r.item.key) return;
             const name = x.file ? x.file.split("/").pop() ?? "" : "Checking";
-            const pct = x.fileSize > 0 ? ` · ${Math.min(100, Math.floor((x.fileDone / x.fileSize) * 100))}%` : "";
-            job.update(`${name}${pct}`, x.total ? (x.done / x.total) * 0.8 : null);
+            const count = x.of > 0 ? `${x.n}/${x.of} · ` : "";
+            const pct = x.fileSize > 0 && x.file ? ` · ${Math.min(100, Math.floor((x.fileDone / x.fileSize) * 100))}%` : "";
+            job.update(`${count}${name}${pct}`, x.total ? (x.done / x.total) * 0.8 : null);
           });
           let res;
           try {
@@ -327,7 +328,7 @@ export default function Inbox({ status }: { status: Status }) {
               subMsg += ok ? ` · added to “${coll.name}”` : ` · couldn't add it to “${coll.name}”`;
             } else subMsg += ` · Jellyfin hasn't added it yet: add it to “${coll.name}” later`;
           }
-          const msg = `${res.placed.length} placed${res.skipped ? ` · ${res.skipped} already there` : ""}${res.trashed ? " · download in the Trash" : ""}${subMsg}`;
+          const msg = `${res.placed.length} uploaded${res.skipped ? ` · ${res.skipped} already there` : ""}${res.trashed ? " · download in the Trash" : ""}${subMsg}`;
           if (res.failed.length) throw `${msg} · ${res.failed.length} didn't work: ${res.failed[0]}`;
           job.update(msg, 1);
           const done = { ...r, state: "done" as State, result: msg };
@@ -388,7 +389,7 @@ export default function Inbox({ status }: { status: Status }) {
           {dir && <IconBtn icon="external" title="Open the downloads folder" onClick={() => void api.inboxReveal().catch((e) => setError(errorText(e)))} />}
           <button onClick={() => setN((x) => x + 1)}><Icon name="reload" /> Refresh</button>
           <button className="primary" disabled={busy || !ready.length || status.readOnly} onClick={() => void place(ready)}>
-            {busy ? <span className="spinner" /> : <Icon name="check" />} Put {ready.length || ""} in place
+            {busy ? <span className="spinner" /> : <Icon name="check" />} Upload {ready.length || ""}
           </button>
         </>}
       />
@@ -447,7 +448,7 @@ function InboxRowView({ r, picked, onPick, onEdit, onRemove, onPlaceOne, busy, o
           <span className="spacer" />
           {r.state === "have" && <button className="link small" onClick={onRemove}>Remove download</button>}
           {(r.state === "ready" || r.state === "look" || r.state === "failed") && <button className="link small" onClick={onEdit}>{r.state === "look" ? "Fix" : "Change"}</button>}
-          {r.state === "ready" && <button className="link small" disabled={busy} onClick={onPlaceOne}>Put in place</button>}
+          {r.state === "ready" && <button className="link small" disabled={busy} onClick={onPlaceOne}>Upload</button>}
           {r.state === "done" && r.plan?.folder && <button className="link small" onClick={() => void api.revealRel(r.plan!.folder)}>Open folder</button>}
           {r.state === "done" && r.target?.itemId && <button className="link small" onClick={() => nav.open(r.target!.itemId!)}>Open</button>}
         </div>
@@ -458,7 +459,7 @@ function InboxRowView({ r, picked, onPick, onEdit, onRemove, onPlaceOne, busy, o
             <span className="ibx-k good">Keeps</span><span className="ibx-v">{keeps.length ? keeps.slice(0, 3).join(", ") + (keeps.length > 3 ? ` and ${keeps.length - 3} more` : "") : "nothing new"}</span>
             <span className="ibx-k warn">Trash</span><span className="ibx-v muted">{trashText(r.plan.leftovers)}{r.plan.leftovers.length ? " (with the download)" : ""}</span>
             <span className="ibx-k muted">Subtitles</span>
-            <label className="check small ibx-look"><input type="checkbox" checked={!!r.look} disabled={busy || r.state === "placing"} onChange={(e) => onLook(e.target.checked)} />Look up English subtitles after placing<span className="muted"> · {r.target?.kind === "pack" ? (newWithoutEnglish(r.plan).length ? `${newWithoutEnglish(r.plan).length} new movie${newWithoutEnglish(r.plan).length === 1 ? "" : "s"} without English` : "English is included") : hasEnglish(r.plan) ? "English is included" : "none in the download"}</span></label>
+            <label className="check small ibx-look"><input type="checkbox" checked={!!r.look} disabled={busy || r.state === "placing"} onChange={(e) => onLook(e.target.checked)} />Look up English subtitles after uploading<span className="muted"> · {r.target?.kind === "pack" ? (newWithoutEnglish(r.plan).length ? `${newWithoutEnglish(r.plan).length} new movie${newWithoutEnglish(r.plan).length === 1 ? "" : "s"} without English` : "English is included") : hasEnglish(r.plan) ? "English is included" : "none in the download"}</span></label>
           </div>
         )}
         <span className="small muted">{r.result ?? (r.plan?.note && r.state === "ready" ? `${r.plan.note}${r.why.includes("already there") ? ` · ${r.why.split(" · ").slice(1).join(" · ")}` : ""}` : r.why)}</span>

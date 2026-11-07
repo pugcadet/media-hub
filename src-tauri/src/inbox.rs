@@ -1119,6 +1119,9 @@ struct Progress {
     /// The file being copied now: how far it is (bytes), and its size.
     file_done: u64,
     file_size: u64,
+    /// Which file this is ("3" of "12").
+    n: usize,
+    of: usize,
 }
 
 #[derive(Serialize)]
@@ -1131,7 +1134,8 @@ pub struct PlaceResult {
     trashed: bool,
 }
 
-fn copy_checked(app: &AppHandle, key: &str, from: &Path, to: &Path, done: &mut u64, total: u64, label: &str) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn copy_checked(app: &AppHandle, key: &str, from: &Path, to: &Path, done: &mut u64, total: u64, label: &str, n: usize, of: usize) -> Result<()> {
     let mut src = std::fs::File::open(from)?;
     let size = src.metadata()?.len();
     let tmp = to.with_extension(format!("{}.mediahub-part", to.extension().and_then(|e| e.to_str()).unwrap_or("")));
@@ -1154,7 +1158,7 @@ fn copy_checked(app: &AppHandle, key: &str, from: &Path, to: &Path, done: &mut u
         mine += n as u64;
         if last.elapsed().as_millis() > 300 {
             last = std::time::Instant::now();
-            let _ = app.emit("inbox-progress", Progress { key: key.into(), done: *done, total, file: label.into(), file_done: mine, file_size: size });
+            let _ = app.emit("inbox-progress", Progress { key: key.into(), done: *done, total, file: label.into(), file_done: mine, file_size: size, n, of });
         }
     }
     dst.flush()?;
@@ -1193,7 +1197,9 @@ pub async fn inbox_place(app: AppHandle, state: State<'_, AppState>, key: String
         let total: u64 = todo.iter().map(|m| std::fs::metadata(base.join(&m.from)).map(|x| x.len()).unwrap_or(0)).sum::<u64>().max(1);
         let mut done = 0u64;
         let mut res = PlaceResult { placed: Vec::new(), skipped: moves.len() - todo.len(), failed: Vec::new(), trashed: false };
-        for m in todo {
+        let of = todo.len();
+        for (i, m) in todo.into_iter().enumerate() {
+            let n = i + 1;
             if crate::cancel::stopped("inbox") {
                 res.failed.push("Stopped: the rest was left in the downloads folder".into());
                 break;
@@ -1221,13 +1227,13 @@ pub async fn inbox_place(app: AppHandle, state: State<'_, AppState>, key: String
                 continue;
             }
             let size = std::fs::metadata(&from).map(|x| x.len()).unwrap_or(0);
-            let _ = app2.emit("inbox-progress", Progress { key: key2.clone(), done, total, file: m.to.clone(), file_done: 0, file_size: 0 });
+            let _ = app2.emit("inbox-progress", Progress { key: key2.clone(), done, total, file: m.to.clone(), file_done: 0, file_size: size, n, of });
             // Same drive: a quick move. Another drive: a checked copy.
             let r = if std::fs::rename(&from, &to).is_ok() {
                 done += size;
                 Ok(())
             } else {
-                copy_checked(&app2, &key2, &from, &to, &mut done, total, &m.to)
+                copy_checked(&app2, &key2, &from, &to, &mut done, total, &m.to, n, of)
             };
             match r {
                 Ok(()) => res.placed.push(m.to.clone()),
@@ -1238,7 +1244,7 @@ pub async fn inbox_place(app: AppHandle, state: State<'_, AppState>, key: String
                 Err(e) => res.failed.push(format!("{}: {e}", m.to)),
             }
         }
-        let _ = app2.emit("inbox-progress", Progress { key: key2.clone(), done: total, total, file: String::new(), file_done: 0, file_size: 0 });
+        let _ = app2.emit("inbox-progress", Progress { key: key2.clone(), done: total, total, file: String::new(), file_done: 0, file_size: 0, n: 0, of: 0 });
         // Everything arrived (or was there already): the download goes to the Trash.
         if res.failed.is_empty() && item.exists() {
             res.trashed = trash::delete(&item).is_ok();
