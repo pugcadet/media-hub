@@ -1911,7 +1911,7 @@ dependencies = [
 
 [[package]]
 name = "media-hub"
-version = "0.26.5"
+version = "0.26.6"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.2.17",
