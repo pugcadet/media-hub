@@ -192,7 +192,12 @@ function logStart(id: number, label: string) {
 function logPatch(id: number, p: Partial<Job>) {
   jobLog = jobLog.map((r) => {
     if (r.id !== id) return r;
-    const steps = p.detail && p.detail !== r.detail ? [...r.steps, { at: Date.now(), text: p.detail }].slice(-60) : r.steps;
+    // The same step with only its numbers moving on ("S02E07.mkv · 43%" → "· 44%", "1 of 20" →
+    // "2 of 20") updates its line instead of adding a new one.
+    const last = r.steps[r.steps.length - 1];
+    const steps = !p.detail || p.detail === r.detail ? r.steps
+      : last && stepKey(last.text) === stepKey(p.detail) ? [...r.steps.slice(0, -1), { at: last.at, text: p.detail }]
+      : [...r.steps, { at: Date.now(), text: p.detail }].slice(-60);
     const state: JobRecord["state"] = p.error ? "failed" : p.done ? (/^Stopped/.test(p.detail ?? "") ? "stopped" : "done") : r.state;
     return { ...r, detail: p.detail ?? r.detail, progress: p.progress ?? r.progress, error: p.error ?? r.error, steps, state, ended: p.done ? Date.now() : r.ended };
   });
@@ -309,4 +314,9 @@ export function useRenameSteps(): Map<string, StepState> {
     },
     () => steps,
   );
+}
+
+/** A step's text without its moving numbers (percentages, "3 of 12", "3/12", time left). */
+function stepKey(t: string): string {
+  return t.replace(/\d+(\.\d+)?\s?%/g, "").replace(/\d+\s?(\/|of)\s?\d+/g, "").replace(/\d+\s?(s|sec|min|h)\b/g, "").replace(/[\s·:,()-]+/g, " ").trim().toLowerCase();
 }
