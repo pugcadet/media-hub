@@ -61,6 +61,29 @@ fn re_marker() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"(?i)(?:^|[ ._\-\[(])(?:s\d{1,3}[ ._-]?e\d{1,4}|\d{1,2}x\d{2,3}|season[ ._-]?\d+|s\d{1,3}(?:[ ._\-\])]|$)|complete)").expect("marker pattern"))
 }
 
+/// A download named for one season ("Reacher S01", "Reacher.Season.2.1080p"): its number.
+/// Not an episode ("S01E03") and not several seasons ("S01-S03").
+fn pack_season(name: &str) -> Option<u32> {
+    static R: OnceLock<Regex> = OnceLock::new();
+    let re = R.get_or_init(|| Regex::new(r"(?i)(?:^|[ ._(\[-])(?:season[ ._-]*(\d{1,2})|s(\d{1,2}))(?:$|[ ._)\]-])").expect("pack season"));
+    if parse_episode(name, None).is_some() {
+        return None;
+    }
+    static RANGE: OnceLock<Regex> = OnceLock::new();
+    if RANGE.get_or_init(|| Regex::new(r"(?i)s\d{1,2}[ ._]*-[ ._]*s?\d{1,2}(?:$|[^0-9])").expect("range")).is_match(name) {
+        return None;
+    }
+    let mut found = None;
+    for c in re.captures_iter(name) {
+        let n: u32 = c.get(1).or(c.get(2))?.as_str().parse().ok()?;
+        if found.is_some_and(|f| f != n) {
+            return None;
+        }
+        found = Some(n);
+    }
+    found
+}
+
 /// "Severance.S02E04.1080p" → "Severance"; "The.Bear.2022.S03E01" → ("The Bear", 2022).
 pub fn show_title_of(stem: &str) -> (String, Option<i32>) {
     let before = re_marker().find(stem).map(|m| &stem[..m.start()]).unwrap_or(stem);
@@ -183,7 +206,7 @@ fn read_item(path: &Path, key: &str, modified: u64) -> Option<InboxItem> {
             // the download's own name for files right inside it ("Reacher S01" → season 1).
             let hint = match rel.rsplit('/').nth(1) {
                 Some(dir) => season_from_dir(dir),
-                None if is_folder => season_from_dir(key),
+                None if is_folder => season_from_dir(key).or_else(|| pack_season(key)),
                 None => None,
             };
             let ep = if video { parse_episode(split_ext(&name).0, hint) } else { None };
@@ -1088,6 +1111,10 @@ mod tests {
         assert_eq!(show_title_of("Reacher.S01.1080p.AMZN.WEB-DL.DDP5.1.H.264").0, "Reacher");
         assert_eq!(show_title_of("Reacher S01").0, "Reacher");
         assert_eq!(show_title_of("Reacher (2022) S02 1080p").0, "Reacher");
+        assert_eq!(pack_season("Reacher S01"), Some(1));
+        assert_eq!(pack_season("Reacher.Season.2.1080p.WEB"), Some(2));
+        assert_eq!(pack_season("Reacher.S01E03.1080p"), None);
+        assert_eq!(pack_season("Reacher S01-S03"), None);
         let root = std::env::temp_dir().join(format!("mh-inbox6-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let d = root.join("Reacher S01");
