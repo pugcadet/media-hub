@@ -1646,6 +1646,7 @@ impl Writer {
 
 impl Client {
     /// All user views with their kind ("movies", "tvshows", "boxsets", "playlists", "music" …).
+    #[allow(dead_code)]
     pub async fn all_views(&self) -> Result<Vec<(String, String, String)>> {
         let v: serde_json::Value = self.get_json("/UserViews", &self.with_user(vec![])).await?;
         Ok(v.get("Items")
