@@ -542,7 +542,7 @@ pub fn find_title_folder(root: &Path, top: &str, title: &str, year: Option<i32>)
             .into_iter()
             .filter(|d| {
                 let (k, y) = folder_key(d);
-                k == want && (year.is_none() || y.is_none() || y == year)
+                k == want && (year.is_none() || y.is_none() || y == year) && !in_downloads(&root.join(&t).join(d))
             })
             .collect();
         if hits.len() == 1 {
@@ -907,10 +907,29 @@ pub fn movie_index(root: &Path) -> Vec<MovieEntry> {
             }
         }
     }
+    out.retain(|e| !in_downloads(&root.join(&e.rel)));
     if let Ok(mut g) = MOVIE_INDEX.lock() {
         *g = Some((root.to_path_buf(), std::time::Instant::now(), out.clone()));
     }
     out
+}
+
+/// Folders that are never "a movie you have": the downloads folder (it may sit inside the library).
+static NOT_LIBRARY: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// The downloads folder is left out of every "do you already have it" look.
+pub fn movie_index_skip(dir: &Path) {
+    if let Ok(mut g) = NOT_LIBRARY.lock() {
+        if !g.iter().any(|d| d == dir) {
+            g.push(dir.to_path_buf());
+            drop(g);
+            movie_index_forget();
+        }
+    }
+}
+
+fn in_downloads(p: &Path) -> bool {
+    NOT_LIBRARY.lock().map(|g| g.iter().any(|d| p.starts_with(d))).unwrap_or(false)
 }
 
 /// After placing: the quick list is read again next time.
@@ -976,6 +995,12 @@ fn pack_word(name: &str) -> bool {
 #[tauri::command]
 pub async fn inbox_resolve(state: State<'_, AppState>, key: String, target: Target) -> Result<InboxPlan> {
     let root = state.library_root()?;
+    if let Ok(dl) = inbox_dir(&state) {
+        movie_index_skip(&dl);
+        if let Ok(c) = dl.canonicalize() {
+            movie_index_skip(&c);
+        }
+    }
     let path = item_path(&state, &key)?;
     let modified = 0;
     let p2 = path.clone();
@@ -1091,6 +1116,9 @@ struct Progress {
     done: u64,
     total: u64,
     file: String,
+    /// The file being copied now: how far it is (bytes), and its size.
+    file_done: u64,
+    file_size: u64,
 }
 
 #[derive(Serialize)]
@@ -1110,6 +1138,7 @@ fn copy_checked(app: &AppHandle, key: &str, from: &Path, to: &Path, done: &mut u
     let mut dst = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     let mut buf = vec![0u8; 4 * 1024 * 1024];
     let mut last = std::time::Instant::now();
+    let mut mine = 0u64;
     loop {
         if crate::cancel::stopped("inbox") {
             drop(dst);
@@ -1122,9 +1151,10 @@ fn copy_checked(app: &AppHandle, key: &str, from: &Path, to: &Path, done: &mut u
         }
         dst.write_all(&buf[..n])?;
         *done += n as u64;
+        mine += n as u64;
         if last.elapsed().as_millis() > 300 {
             last = std::time::Instant::now();
-            let _ = app.emit("inbox-progress", Progress { key: key.into(), done: *done, total, file: label.into() });
+            let _ = app.emit("inbox-progress", Progress { key: key.into(), done: *done, total, file: label.into(), file_done: mine, file_size: size });
         }
     }
     dst.flush()?;
@@ -1191,7 +1221,7 @@ pub async fn inbox_place(app: AppHandle, state: State<'_, AppState>, key: String
                 continue;
             }
             let size = std::fs::metadata(&from).map(|x| x.len()).unwrap_or(0);
-            let _ = app2.emit("inbox-progress", Progress { key: key2.clone(), done, total, file: m.to.clone() });
+            let _ = app2.emit("inbox-progress", Progress { key: key2.clone(), done, total, file: m.to.clone(), file_done: 0, file_size: 0 });
             // Same drive: a quick move. Another drive: a checked copy.
             let r = if std::fs::rename(&from, &to).is_ok() {
                 done += size;
@@ -1208,7 +1238,7 @@ pub async fn inbox_place(app: AppHandle, state: State<'_, AppState>, key: String
                 Err(e) => res.failed.push(format!("{}: {e}", m.to)),
             }
         }
-        let _ = app2.emit("inbox-progress", Progress { key: key2.clone(), done: total, total, file: String::new() });
+        let _ = app2.emit("inbox-progress", Progress { key: key2.clone(), done: total, total, file: String::new(), file_done: 0, file_size: 0 });
         // Everything arrived (or was there already): the download goes to the Trash.
         if res.failed.is_empty() && item.exists() {
             res.trashed = trash::delete(&item).is_ok();
@@ -1480,6 +1510,7 @@ mod tests {
         for n in ["The.Hunger.Games.2012.1080p.mkv", "The.Hunger.Games.Catching.Fire.2013.1080p.mkv", "The.Hunger.Games.Mockingjay.Part.1.2014.1080p.mkv", "The.Hunger.Games.Mockingjay.Part.2.2015.1080p.mkv", "The.Hunger.Games.Mockingjay.Part.2.2015.1080p.en.srt", "RARBG.txt"] {
             std::fs::write(dl.join(n), b"x").unwrap();
         }
+        movie_index_skip(&root.join("dl"));
         let item = read_item(&dl, "The Hunger Games 4 Film Complete Collection 1080p BluRay x265", 0).unwrap();
         assert_eq!(item.kind, "pack");
         assert_eq!(item.title, "The Hunger Games Collection");
@@ -1526,6 +1557,7 @@ mod tests {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, b"x").unwrap();
         }
+        movie_index_skip(&root.join("dl"));
         let item = read_item(&dl, "Police Academy - The Complete Collection (1984-1994) 1080p", 0).unwrap();
         assert_eq!(item.kind, "pack");
         assert_eq!(item.title, "Police Academy Collection");

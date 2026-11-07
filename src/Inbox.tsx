@@ -139,6 +139,20 @@ async function detect(item: InboxItem, ctx: Ctx): Promise<Row> {
   return row;
 }
 
+/** What's being placed, for the activity list: "Twin Peaks S02", "Twin Peaks S01–S03", "3 movies". */
+function placeLabel(t: InboxTarget, p: InboxPlan | null): string {
+  if (t.kind === "pack") {
+    const n = p?.movies.filter(([, , isNew]) => isNew).length ?? 0;
+    return `${t.title}${n ? ` (${n} movie${n === 1 ? "" : "s"})` : ""}`;
+  }
+  if (t.kind !== "tv") return t.title;
+  const seasons = [...new Set((p?.moves ?? []).filter((m) => !m.have).map((m) => m.to.match(/S(\d{2,3})E\d/i)?.[1]).filter((x): x is string => !!x).map(Number))].sort((a, b) => a - b);
+  if (!seasons.length) return t.title;
+  const s2 = (n: number) => `S${String(n).padStart(2, "0")}`;
+  const run = seasons.length > 1 && seasons[seasons.length - 1] - seasons[0] === seasons.length - 1;
+  return `${t.title} ${seasons.length === 1 ? s2(seasons[0]) : run ? `${s2(seasons[0])}–${s2(seasons[seasons.length - 1])}` : seasons.map(s2).join(", ")}`;
+}
+
 /** The download brings an English subtitle along. */
 const hasEnglish = (p: InboxPlan | null) => !!p?.moves.some((m) => /\.eng(\.forced|\.sdh)*\.(srt|ass|ssa|vtt|sub|sup)$/i.test(m.to));
 /** Subtitle lookup after placing: on for a movie without English ones, off for shows (you tick it). */
@@ -233,9 +247,13 @@ export default function Inbox({ status }: { status: Status }) {
       if (!r.plan || !r.target) continue;
       update(r.item.key, { state: "placing" });
       try {
-        await track(`Putting ${r.target.title} in place`, async (job) => {
-          const un = await listen<{ key: string; done: number; total: number; file: string }>("inbox-progress", (e) => {
-            if (e.payload.key === r.item.key) job.update(e.payload.file ? e.payload.file.split("/").pop() ?? "" : "Checking", e.payload.total ? (e.payload.done / e.payload.total) * 0.8 : null);
+        await track(`Putting ${placeLabel(r.target, r.plan)} in place`, async (job) => {
+          const un = await listen<{ key: string; done: number; total: number; file: string; fileDone: number; fileSize: number }>("inbox-progress", (e) => {
+            const x = e.payload;
+            if (x.key !== r.item.key) return;
+            const name = x.file ? x.file.split("/").pop() ?? "" : "Checking";
+            const pct = x.fileSize > 0 ? ` · ${Math.min(100, Math.floor((x.fileDone / x.fileSize) * 100))}%` : "";
+            job.update(`${name}${pct}`, x.total ? (x.done / x.total) * 0.8 : null);
           });
           let res;
           try {
