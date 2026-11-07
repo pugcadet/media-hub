@@ -4,7 +4,7 @@ import { applyArt, askArt } from "./ArtPicker";
 import { api, titleYear, CheckRow, Details, errorText, HealthRow, imageUrl, Status } from "./api";
 import { followEvent, track, useEpoch } from "./activity";
 import { nav } from "./nav";
-import { artSkipped, fixTitles, FixKind, noSubsOf, targetOf } from "./fixers";
+import { artSkipped, fixTitles, FixKind, namingStatus, noSubsOf, targetOf } from "./fixers";
 import { askFixes } from "./FixDialog";
 import { Studio, StudioItem } from "./Studio";
 import ItemPage from "./ItemPage";
@@ -26,7 +26,7 @@ interface Row extends HealthRow {
 function status(r: Row, c: Check): boolean | null {
   if (KIND_OF[c] && artSkipped(r.id).includes(KIND_OF[c])) return true; // you said: can't be found, fine
   switch (c) {
-    case "name": return r.check ? !r.check.error && r.check.toRename + r.check.folders + r.check.problems === 0 : null;
+    case "name": return namingStatus(r.check).ok;
     case "identified": return r.identified;
     case "poster": return r.poster;
     case "backdrop": return r.backdrop;

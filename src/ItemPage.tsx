@@ -10,7 +10,7 @@ import { reloadItems, track, useEpoch, useItemEpoch } from "./activity";
 import { nav, type View } from "./nav";
 import { askChoice, CardTile, Icon, type IconName, itemMenu, openMenu, scanLibrary, showPicture, SettingsLink } from "./ui";
 import { subSkipped, usePrefs } from "./prefs";
-import { artSkipped, CORE_ART, fixTitles, FixTarget, namesToFix, noSubsOf, safeFixes } from "./fixers";
+import { artSkipped, CORE_ART, fixTitles, FixTarget, namingStatus, noSubsOf, safeFixes } from "./fixers";
 import { askFixes } from "./FixDialog";
 import { applyArt, askArt, fillOptional, rankImages } from "./ArtPicker";
 import { askIdentify } from "./IdentifyDialog";
@@ -448,7 +448,7 @@ function TitleHealth({ d, kind, canEdit, subLangs, onTab, onIdentify }: { d: Det
     kind === "movie"
       ? { ok: noSubs === 0, label: noSubs ? "No subtitles" : "Subtitles", go: () => onTab("subs") }
       : { ok: row ? noSubs === 0 : null, label: row ? (noSubs ? `${noSubs} episode${noSubs === 1 ? "" : "s"} without subtitles` : "Subtitles") : "Subtitles not checked", go: () => onTab("subs") },
-    { ok: check ? !namesToFix(check) : null, label: !check ? "Names not checked" : namesToFix(check) ? `${check.toRename + check.folders} name${check.toRename + check.folders === 1 ? "" : "s"} to fix` : "Names right", go: () => nav.route({ view: "renamer", item: item.Id }) },
+    (() => { const n = namingStatus(check); return { ok: n.ok, label: !check ? "Names not checked" : n.ok === false ? (n.count ? `${n.count} name${n.count === 1 ? "" : "s"} to look at` : "Names couldn't be checked") : n.ok ? "Names right" : "Names: look again", go: () => nav.route({ view: "renamer", item: item.Id }) }; })(),
   ];
   if (kind === "series" && seg && seg.episodes > 0) {
     chips.push({ ok: seg.intro >= seg.episodes * 0.8, label: seg.intro === 0 ? "No intro markers" : seg.intro >= seg.episodes ? "Intro markers" : `Intros in ${seg.intro} of ${seg.episodes}`, go: () => onTab("intros") });
@@ -508,7 +508,7 @@ function StatusCards({ d, kind, onTab, onIdentify }: { d: Details; kind: "series
   const artKinds: ImageKind[] = ["Primary", "Backdrop", "Logo", "Thumb"];
   const artNames: Record<string, string> = { Primary: "poster", Backdrop: "background", Logo: "logo", Thumb: "thumbnail" };
   const missingArt = artKinds.filter((k) => !has(k));
-  const names = check ? check.toRename + check.folders : null;
+  const naming = namingStatus(check);
   const step = (n: number, label: string, ok: boolean | null, line: React.ReactNode, button: string, run: () => void) => (
     <div key={n} className={`step-row ${ok === null ? "s-unknown" : ok ? "s-ok" : "s-warn"}`}>
       <span className="step-mark">{ok === null ? "?" : ok ? <Icon name="check" size={14} /> : "!"}</span>
@@ -521,7 +521,7 @@ function StatusCards({ d, kind, onTab, onIdentify }: { d: Details; kind: "series
     <div className="step-rows">
       {step(1, "Identify", identified, identified ? `Matched${ids.length ? `: ${ids.map(([k, v]) => `${k.toUpperCase()} ${v}`).join(" · ")}` : ""}` : "No match with TMDB or TVDB yet", identified ? "Change" : "Identify", onIdentify)}
       {step(2, "Artwork", missingArt.length === 0, missingArt.length ? `Missing: ${missingArt.map((k) => artNames[k]).join(", ")}` : "Poster, background, logo and thumbnail are there", missingArt.length ? "Add artwork" : "Change", () => onTab("art"))}
-      {step(3, "Naming", names === null ? null : names === 0, names === null ? "Not checked yet" : names ? `${names} file${names === 1 ? "" : "s"} or folder${names === 1 ? "" : "s"} to rename` : "Files and folders are named right", names ? `Fix names (${names})` : "Open", () => nav.route({ view: "renamer", item: item.Id }))}
+      {step(3, "Naming", naming.ok, <span title={naming.line}>{naming.line}</span>, naming.ok === false ? (check && check.toRename + check.folders > 0 ? `Fix names (${check.toRename + check.folders})` : "Look at names") : "Open", () => nav.route({ view: "renamer", item: item.Id }))}
       {step(4, "Subtitles", kind === "series" && !row ? null : noSubs === 0, kind === "movie" ? (noSubs ? "No subtitles in your language yet" : "Subtitles in your language are there") : row ? (noSubs ? `${noSubs} of ${row.videos} episodes without your language` : `All ${row.videos} episodes have them`) : "Not checked yet", noSubs ? "Find subtitles" : "Open", () => onTab("subs"))}
       {kind === "series" && step(5, "Intros", introOk, seg ? `${seg.intro} of ${seg.episodes} episodes have an intro · ${seg.credits} have credits` : "Not read yet", introOk ? "Open" : "Set intros", () => onTab("intros"))}
     </div>

@@ -9,6 +9,7 @@ import { runDaily } from "./scheduler";
 import { clearProblems, followEvent, track, useEpoch, useProblems } from "./activity";
 import { Icon, TriCheck, type IconName, type TriState } from "./ui";
 import { foldersOf, useFolderMap } from "./folders";
+import { namingStatus } from "./fixers";
 
 const TITLE_LANGS: [string, string][] = [["en-US", "English"], ["nl-NL", "Nederlands"], ["de-DE", "Deutsch"], ["fr-FR", "Français"], ["es-ES", "Español"], ["it-IT", "Italiano"]];
 const META_LANGS: [string, string, string][] = [["", "", "Server default"], ["en", "US", "English"], ["nl", "NL", "Nederlands"], ["de", "DE", "Deutsch"], ["fr", "FR", "Français"], ["es", "ES", "Español"], ["it", "IT", "Italiano"]];
@@ -645,7 +646,7 @@ function ProblemsLog() {
 function KeepInPlace({ t, canEdit, onChanged }: { t: { rows: TuneRow[]; lockEdits: boolean } | null; canEdit: boolean; onChanged: () => void }) {
   const [names, setNames] = useState<number | null>(null);
   useEffect(() => {
-    api.namingCheckLast().then((r) => setNames(r ? r.rows.filter((x) => x.toRename + x.folders > 0).length : null)).catch(() => setNames(null));
+    api.namingCheckLast().then((r) => setNames(r ? r.rows.filter((x) => namingStatus(x).ok === false).length : null)).catch(() => setNames(null));
   }, []);
   const files = t?.rows.filter((r) => r.scope === "library" && (r.key === "SaveLocalMetadata" || r.key === "MetadataSavers")) ?? [];
   const filesOk = !!t && files.every((r) => r.ok);

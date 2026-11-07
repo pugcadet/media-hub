@@ -2,8 +2,8 @@
 // Library's chips and rows, the menu badges and Home's blocks. Change a rule here and every
 // place follows.
 import type { CheckRow, HealthRow, SegSummary } from "./api";
-import { artSkipped, namesToFix, noSubsOf } from "./fixers";
-import { namingLeftAlone, prefs } from "./prefs";
+import { artSkipped, namingStatus, noSubsOf } from "./fixers";
+import { prefs } from "./prefs";
 
 export type Check = "naming" | "identified" | "artwork" | "subtitles" | "intros";
 
@@ -18,7 +18,7 @@ const clean = (id: string) => id.replace(/-/g, "").toLowerCase();
 export function titleState(r: HealthRow & { check?: CheckRow | null; seg?: SegSummary | null }, c: Check): boolean | null {
   if ((prefs().checksOff[clean(r.id)] ?? []).includes(c)) return null;
   switch (c) {
-    case "naming": return !r.check || r.check.stale || namingLeftAlone(r.check) ? null : !namesToFix(r.check) && !r.check.error;
+    case "naming": return namingStatus(r.check).ok;
     case "identified": return r.identified;
     case "artwork": return TITLE_ART.every((a) => r[a.key] || artSkipped(r.id).includes(a.kind));
     case "subtitles": return noSubsOf(r) === 0;

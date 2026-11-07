@@ -62,6 +62,21 @@ export function namesToFix(c: CheckRow | null): boolean {
   return !!c && !c.error && !c.stale && !namingLeftAlone(c) && c.toRename + c.folders + c.problems > 0;
 }
 
+/** The one rule for "are this title's names right", with the reason in words. Used by the
+ *  Library's Naming chip and rows, Library health and the title's own page, so they always agree.
+ *  ok: true = right, false = needs a look, null = not checked / you said leave it alone. */
+export function namingStatus(c: CheckRow | null | undefined): { ok: boolean | null; line: string; count: number } {
+  if (!c) return { ok: null, line: "Not checked yet", count: 0 };
+  if (namingLeftAlone(c)) return { ok: null, line: "You chose to leave these names as they are", count: 0 };
+  if (c.stale) return { ok: null, line: "Renamed since the last check: open it to look again", count: 0 };
+  if (c.error) return { ok: false, line: `Couldn't check: ${c.error}`, count: 0 };
+  const count = c.toRename + c.folders + c.problems;
+  if (count === 0) return { ok: true, line: "Files and folders are named right", count: 0 };
+  const why = c.reasons.filter((r) => !/^Not identified/.test(r));
+  const line = why.length ? why.join(" · ") : `${count} file${count === 1 ? "" : "s"} or folder${count === 1 ? "" : "s"} to look at`;
+  return { ok: false, line, count };
+}
+
 /** What `fixTitles` would do for this title, in words ("2 pictures", "subtitles", "names"). */
 export function safeFixes(t: FixTarget): FixKind[] {
   const out: FixKind[] = [];
