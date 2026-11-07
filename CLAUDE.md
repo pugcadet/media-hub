@@ -9,7 +9,8 @@ Windows: a local companion for a Jellyfin server (library on a Synology NAS) and
   working results; don't leave in-between bugs for them to find.
 - Test before showing: build, run the tests, and look at the real app before saying it's done.
 - Show a concept first for bigger UI changes, and ask questions when unsure. Offer options.
-- Don't push to `main` until they say so. Work-in-progress may go to a `check/...` branch.
+- Pushing (and releasing) is allowed without asking, once the build, tests and screenshots
+  check out. Work-in-progress may go to a `check/...` branch first.
 - Always fetch and rebase before pushing.
 
 ## Safety rules (never break these)
