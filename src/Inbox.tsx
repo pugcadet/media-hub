@@ -245,7 +245,9 @@ export default function Inbox({ status }: { status: Status }) {
       await Promise.all(Array.from({ length: 3 }, async () => {
         while (k < todo.length && alive) {
           const i = k++;
-          out[i] = await detect(todo[i], c).catch((e) => ({ item: todo[i], target: null, plan: null, state: "look" as State, why: errorText(e), ids: {} }));
+          // Never stuck on "Looking…": after 90 seconds it says so and you can try again.
+          const slow = new Promise<Row>((ok) => window.setTimeout(() => ok({ item: todo[i], target: null, plan: null, state: "look", why: "Took too long to check (the NAS or Jellyfin is slow right now): press Refresh, or Fix to choose yourself", ids: {} }), 90_000));
+          out[i] = await Promise.race([detect(todo[i], c), slow]).catch((e) => ({ item: todo[i], target: null, plan: null, state: "look" as State, why: errorText(e), ids: {} }));
           if (alive) setRows((rs) => rs?.map((r) => (r.item.key === todo[i].key ? out[i] : r)) ?? null);
         }
       }));

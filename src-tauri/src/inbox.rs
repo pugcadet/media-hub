@@ -859,7 +859,6 @@ async fn resolve_pack(state: &AppState, root: &Path, item: InboxItem, target: Ta
         }
     }
     note.push('.');
-    movie_index_forget();
     let _ = new_movies;
     Ok(InboxPlan { folder: base, existing: had > 0, moves, leftovers: left, note, collection, movies: all_movies })
 }
@@ -879,21 +878,35 @@ static MOVIE_INDEX: std::sync::Mutex<Option<(PathBuf, std::time::Instant, Vec<Mo
 /// A collection folder: called so, or holding two or more movie folders.
 fn is_collection_dir(dir: &Path, name: &str) -> bool {
     let l = name.to_lowercase();
-    ["collection", "saga", "trilogy", "box set"].iter().any(|w| l.contains(w)) || sub_dirs(dir).iter().filter(|m| parse_name(m).year.is_some()).count() >= 2
+    // A folder with a year in its name is a movie: no need to look inside (that's slow on the NAS).
+    ["collection", "saga", "trilogy", "box set"].iter().any(|w| l.contains(w))
+        || (parse_name(name).year.is_none() && sub_dirs(dir).iter().filter(|m| parse_name(m).year.is_some()).count() >= 2)
 }
 
 /// Every movie folder in the library (main folders, and one level into collection folders),
 /// kept for two minutes so comparing many downloads stays quick.
 pub fn movie_index(root: &Path) -> Vec<MovieEntry> {
-    if let Ok(g) = MOVIE_INDEX.lock() {
-        if let Some((r, at, list)) = g.as_ref() {
-            if r == root && at.elapsed() < std::time::Duration::from_secs(120) {
-                return list.clone();
-            }
-        }
+    let cached = || -> Option<Vec<MovieEntry>> {
+        let g = MOVIE_INDEX.lock().ok()?;
+        let (r, at, list) = g.as_ref()?;
+        (r == root && at.elapsed() < std::time::Duration::from_secs(15 * 60)).then(|| list.clone())
+    };
+    if let Some(l) = cached() {
+        return l;
+    }
+    // One reading of the library at a time: the others wait for it and use the result.
+    static BUILDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = BUILDING.lock();
+    if let Some(l) = cached() {
+        return l;
     }
     let mut out = Vec::new();
-    for top in sub_dirs(root).into_iter().filter(|d| !d.starts_with('.')) {
+    // Shows and music never hold movies: skipping them keeps this quick on the NAS.
+    let not_movies = |t: &str| {
+        let l = t.to_lowercase();
+        ["tv", "show", "series", "serie", "music", "muziek", "audio", "anime series", "podcast"].iter().any(|w| l == *w || l.starts_with(&format!("{w} ")) || l.ends_with(&format!(" {w}")) || l.contains("shows") || l.contains("series"))
+    };
+    for top in sub_dirs(root).into_iter().filter(|d| !d.starts_with('.') && !not_movies(d)) {
         let tp = root.join(&top);
         for d in sub_dirs(&tp).into_iter().filter(|d| !d.starts_with('.')) {
             if is_collection_dir(&tp.join(&d), &d) {
@@ -1101,9 +1114,6 @@ pub async fn inbox_resolve(state: State<'_, AppState>, key: String, target: Targ
             (None, None) => String::new(),
         });
     }
-    if target.kind == "movie" {
-        movie_index_forget();
-    }
     Ok(InboxPlan { folder, existing, moves, leftovers: left, note, collection, movies: Vec::new() })
 }
 
@@ -1258,6 +1268,8 @@ pub async fn inbox_place(app: AppHandle, state: State<'_, AppState>, key: String
                 }
             }
         }
+        // Something new is in the library: the quick list is read again next time.
+        movie_index_forget();
         Ok(res)
     })
     .await
