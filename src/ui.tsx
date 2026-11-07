@@ -598,8 +598,19 @@ function Processes({ onClose }: { onClose: () => void }) {
     return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", esc); };
   }, [onClose]);
   const r = log.find((x) => x.id === sel) ?? null;
-  const time = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  const took = (x: JobRecord) => { const s = Math.round(((x.ended ?? Date.now()) - x.started) / 1000); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`; };
+  const time = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  const dur = (s: number) => (s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`);
+  const took = (x: JobRecord) => dur(Math.round(((x.ended ?? Date.now()) - x.started) / 1000));
+  /** "about 2 min left", from how far it got so far (once there's enough to go on). */
+  const left = (x: JobRecord) => {
+    if (x.state !== "running" || x.progress == null || x.progress < 0.03 || x.progress >= 1) return "";
+    const spent = (Date.now() - x.started) / 1000;
+    if (spent < 5) return "";
+    const s = Math.round((spent / x.progress) * (1 - x.progress));
+    return ` · about ${s < 60 ? `${Math.max(5, Math.round(s / 5) * 5)} s` : dur(Math.round(s / 60) * 60).replace(/ 0 s$/, "")} left`;
+  };
+  const [, tick] = useState(0);
+  useEffect(() => { const t = window.setInterval(() => tick((n) => n + 1), 1000); return () => window.clearInterval(t); }, []);
   return (
     <div className="proc" ref={ref}>
       <div className="proc-list">
@@ -619,7 +630,7 @@ function Processes({ onClose }: { onClose: () => void }) {
             <div className="row between">
               <div>
                 <div className="strong">{r.label}</div>
-                <div className="muted small">{r.state === "running" ? "Running" : r.state === "failed" ? "Failed" : r.state === "stopped" ? "Stopped" : "Finished"} · started {time(r.started)} · {took(r)}</div>
+                <div className="muted small">{r.state === "running" ? "Running" : r.state === "failed" ? "Failed" : r.state === "stopped" ? "Stopped" : "Finished"} · started {time(r.started)} · {r.state === "running" ? `running for ${took(r)}` : `took ${took(r)}`}{left(r)}{r.state === "running" && r.progress != null ? ` · ${Math.round(r.progress * 100)}%` : ""}</div>
               </div>
               {r.state === "running" && <button onClick={() => stopJob(r.id)}><Icon name="stop" size={12} /> Stop</button>}
             </div>

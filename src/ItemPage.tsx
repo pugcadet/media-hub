@@ -512,7 +512,7 @@ function StatusCards({ d, kind, onTab, onIdentify }: { d: Details; kind: "series
   const step = (n: number, label: string, ok: boolean | null, line: React.ReactNode, button: string, run: () => void) => (
     <div key={n} className={`step-row ${ok === null ? "s-unknown" : ok ? "s-ok" : "s-warn"}`}>
       <span className="step-mark">{ok === null ? "?" : ok ? <Icon name="check" size={14} /> : "!"}</span>
-      <span className="grow stack-xs step-text"><b>{n} · {label}</b><span className="muted small ellipsis">{line}</span></span>
+      <span className="grow stack-xs step-text"><b>{label}</b><span className="muted small ellipsis">{line}</span></span>
       <button className={ok === false ? "primary" : ""} disabled={!d.canEdit && ok === false} onClick={run}>{button}</button>
     </div>
   );

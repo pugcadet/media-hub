@@ -742,6 +742,8 @@ export interface MusicItem {
   favorite: boolean;
   /** Picture for music from a folder. */
   artUrl?: string;
+  /** An artist: the other names it's also listed under ("Drake & Future"), as [id, name]. */
+  also?: [string, string][];
 }
 
 export interface LibraryLang {
@@ -1082,6 +1084,8 @@ export const api = {
   musicLocalReset: (id: string) => invoke<void>("music_local_reset", { id }),
   musicArtOptions: (kind: "album" | "artist", name: string, artist: string | null, id: string | null = null) => invoke<ArtOption[]>("music_art_options", { kind, name, artist, id }),
   musicTagsCheck: (id: string, release: string | null = null) => invoke<TagCheck>("music_tags_check", { id, release }),
+  musicMergeArtists: (main: string, ids: string[]) => invoke<number>("music_merge_artists", { main, ids }),
+  musicAlbumFiles: (id: string) => invoke<[string, string][]>("music_album_files", { id }),
   musicTagsApply: (id: string, changes: [string, string, string | null][]) => invoke<number>("music_tags_apply", { id, changes }),
   musicLocalSetArt: (id: string, url: string | null) => invoke<boolean>("music_local_set_art", { id, url }),
   musicList: (view: string, parent: string | null, query: string | null, start: number, limit: number) =>

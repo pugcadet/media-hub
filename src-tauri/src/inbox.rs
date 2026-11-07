@@ -76,6 +76,50 @@ pub fn main_artist(a: &str) -> String {
     if out.is_empty() { a.trim().to_string() } else { out }
 }
 
+/// The first artist of a credit: "Drake & 21 Savage" → "Drake", "Pete Rock & C.L. Smooth" →
+/// "Pete Rock", "Drake feat. Rihanna" → "Drake". (Whether to use it is decided by who else is in
+/// the library: see `artist_groups`.)
+pub fn first_artist(a: &str) -> String {
+    static R: OnceLock<Regex> = OnceLock::new();
+    let re = R.get_or_init(|| Regex::new(r"(?i)\s+(?:&|and|x|with|vs\.?|\+)\s+|\s*,\s+").expect("artist separators"));
+    let m = main_artist(a);
+    let first = re.split(&m).next().unwrap_or(&m).trim().to_string();
+    if first.is_empty() { m } else { first }
+}
+
+/// A name as artists compare: no case, accents, dots or spaces ("C.L. Smooth" = "CL Smooth").
+pub fn artist_key(a: &str) -> String {
+    crate::naming::fold_accents(&a.to_lowercase()).chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+/// Which artist each name belongs under: its first artist when that artist is in the library
+/// too, or when two or more names start with the same artist. "Mumford & Sons" on its own
+/// stays as it is.
+pub fn artist_groups(names: &[String]) -> HashMap<String, String> {
+    let keys: HashMap<String, &String> = names.iter().map(|n| (artist_key(n), n)).collect();
+    let mut firsts: HashMap<String, usize> = HashMap::new();
+    for n in names {
+        let f = first_artist(n);
+        if artist_key(&f) != artist_key(n) {
+            *firsts.entry(artist_key(&f)).or_default() += 1;
+        }
+    }
+    let mut out = HashMap::new();
+    for n in names {
+        let f = first_artist(n);
+        let fk = artist_key(&f);
+        if fk.is_empty() || fk == artist_key(n) {
+            continue;
+        }
+        if let Some(main) = keys.get(&fk) {
+            out.insert(n.clone(), (*main).clone());
+        } else if firsts.get(&fk).copied().unwrap_or(0) >= 2 || main_artist(n) != *n {
+            out.insert(n.clone(), f);
+        }
+    }
+    out
+}
+
 /// Album artist, album and year from the songs' tags (the most common answer wins).
 fn music_info(base: &Path, files: &[InboxFile]) -> Option<MusicInfo> {
     use lofty::prelude::*;
@@ -907,5 +951,21 @@ mod tests {
         assert_eq!(find_title_folder(&root, "Movies", "Amelie", Some(2001)).as_deref(), Some("Movies/Amélie (2001)"));
         assert_eq!(find_title_folder(&root, "Movies", "Heat", Some(1995)), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn artists_combine_under_their_first_name() {
+        let names: Vec<String> = ["Drake", "Drake & 21 Savage", "Drake & Future", "Pete Rock & C.L. Smooth", "Pete Rock & CL Smooth", "Pete Rock & Deda", "Mumford & Sons", "Earth, Wind & Fire", "Kanye West feat. Jay-Z"].iter().map(|s| s.to_string()).collect();
+        let g = artist_groups(&names);
+        assert_eq!(g.get("Drake & 21 Savage").map(String::as_str), Some("Drake"));
+        assert_eq!(g.get("Drake & Future").map(String::as_str), Some("Drake"));
+        assert_eq!(g.get("Pete Rock & C.L. Smooth").map(String::as_str), Some("Pete Rock"));
+        assert_eq!(g.get("Pete Rock & CL Smooth").map(String::as_str), Some("Pete Rock"));
+        assert_eq!(g.get("Pete Rock & Deda").map(String::as_str), Some("Pete Rock"));
+        assert_eq!(g.get("Kanye West feat. Jay-Z").map(String::as_str), Some("Kanye West"));
+        assert!(!g.contains_key("Mumford & Sons"));
+        assert!(!g.contains_key("Earth, Wind & Fire"));
+        assert!(!g.contains_key("Drake"));
+        assert_eq!(first_artist("Pete Rock & C.L. Smooth"), "Pete Rock");
     }
 }

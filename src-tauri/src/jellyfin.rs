@@ -1672,7 +1672,7 @@ impl Client {
         let mut q = vec![
             ("SortBy", "SortName".to_string()),
             ("StartIndex", start.to_string()),
-            ("Limit", limit.min(500).to_string()),
+            ("Limit", limit.min(5000).to_string()),
             ("Fields", "ChildCount".to_string()),
         ];
         if !query.is_empty() {

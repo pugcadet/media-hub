@@ -120,7 +120,7 @@ async function detect(item: InboxItem, ctx: Ctx): Promise<Row> {
   if (row.target) {
     try {
       row.plan = await api.inboxResolve(item.key, row.target);
-      row.look = (row.target.kind === "tv" || row.target.kind === "movie") && !hasEnglish(row.plan);
+      row.look = defaultLook(row.target.kind, row.plan);
       const vids = row.plan.moves.filter((m) => /\.(mkv|mp4|m4v|avi|mov|wmv|ts|m2ts|webm|mpg|mpeg|flac|mp3|m4a|ogg|opus|wav|aac|alac|aiff|aif)$/i.test(m.from));
       if (vids.length && vids.every((m) => m.have)) {
         row.state = "have";
@@ -138,6 +138,8 @@ async function detect(item: InboxItem, ctx: Ctx): Promise<Row> {
 
 /** The download brings an English subtitle along. */
 const hasEnglish = (p: InboxPlan | null) => !!p?.moves.some((m) => /\.eng(\.forced|\.sdh)*\.(srt|ass|ssa|vtt|sub|sup)$/i.test(m.to));
+/** Subtitle lookup after placing: on for a movie without English ones, off for shows (you tick it). */
+const defaultLook = (kind: string, p: InboxPlan | null) => kind === "movie" && !hasEnglish(p);
 const SUB_EXT = /\.(srt|ass|ssa|vtt|sub|idx|sup)$/i;
 const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|tbn)$/i;
 /** "Sample/sample.mkv, 6 other-language subtitles, RARBG.txt, poster.jpg, .nfo" */
@@ -290,7 +292,7 @@ export default function Inbox({ status }: { status: Status }) {
     update(r.item.key, { state: "checking" });
     try {
       const plan = await api.inboxResolve(r.item.key, target);
-      update(r.item.key, { target, plan, ids: c.ProviderIds ?? {}, art: c.ImageUrl ?? null, look: !hasEnglish(plan), state: "ready", why: `Your choice: ${c.Name}${c.ProductionYear ? ` (${c.ProductionYear})` : ""}` });
+      update(r.item.key, { target, plan, ids: c.ProviderIds ?? {}, art: c.ImageUrl ?? null, look: defaultLook(target.kind, plan), state: "ready", why: `Your choice: ${c.Name}${c.ProductionYear ? ` (${c.ProductionYear})` : ""}` });
       setPicked((s) => new Set(s).add(r.item.key));
     } catch (e) {
       update(r.item.key, { state: "look", why: errorText(e) });
@@ -451,7 +453,7 @@ function FixPanel({ row, ctx, onClose, onUse }: { row: Row; ctx: Ctx; onClose: (
     if (!plan) return;
     if (remember && t.kind === "tv" && !t.itemId) setPrefs((p) => ({ inboxShowTop: { ...p.inboxShowTop, [norm(t.title)]: t.top } }));
     if (!t.itemId) setPrefs((p) => ({ inboxTop: { ...p.inboxTop, [t.kind]: t.top } }));
-    onUse({ target: t, plan, ids, look: (t.kind === "tv" || t.kind === "movie") && !hasEnglish(plan), state: haveAll ? "have" : "ready", why: t.itemId ? "Adds to what you have" : `Your choice: ${t.kind === "tv" ? "show" : t.kind}` });
+    onUse({ target: t, plan, ids, look: defaultLook(t.kind, plan), state: haveAll ? "have" : "ready", why: t.itemId ? "Adds to what you have" : `Your choice: ${t.kind === "tv" ? "show" : t.kind}` });
   }
   return (
     <div className="overlay" onClick={onClose}>

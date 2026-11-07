@@ -139,6 +139,7 @@ function AlbumDetail({ album, changed }: { album: MusicItem; changed: () => void
     }).catch((e) => setError(errorText(e)));
   }, [album.id, n]);
   const num = (s: string) => (s.trim() === "" ? 0 : Number(s));
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const albumDirty = f.name !== album.name || f.artist !== album.artist || f.year !== (album.year ? String(album.year) : "");
   const changedTracks = (tracks ?? []).filter((t) => {
     const d = drafts[t.id];
@@ -184,6 +185,30 @@ function AlbumDetail({ album, changed }: { album: MusicItem; changed: () => void
       setBusy(false);
     }
   }
+  /** Removes the disc and/or song number from the selected songs' files (History can undo it). */
+  async function clearNums(fields: ("disc" | "track")[]) {
+    const what = fields.length === 2 ? "disc and song numbers" : fields[0] === "disc" ? "disc numbers" : "song numbers";
+    if (!(await askConfirm(`Clear the ${what} of ${picked.size} song${picked.size === 1 ? "" : "s"}?\n\nWritten into the files; History can put them back.`, { okLabel: "Clear them" }))) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const files = new Map(await api.musicAlbumFiles(album.id));
+      const changes: [string, string, string | null][] = [];
+      for (const id of picked) {
+        const f = files.get(id);
+        if (f) for (const k of fields) changes.push([f, k, null]);
+      }
+      if (!changes.length) throw new Error("These songs' files weren't found on this computer.");
+      await track(`Clearing ${what}`, () => api.musicTagsApply(album.id, changes), { reload: false });
+      setPicked(new Set());
+      setN((x) => x + 1);
+      changed();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   const set = (id: string, k: keyof Draft, v: string) => setDrafts((d) => ({ ...d, [id]: { ...d[id], [k]: v } }));
   const dirty = albumDirty || changedTracks.length > 0;
   return (
@@ -211,14 +236,24 @@ function AlbumDetail({ album, changed }: { album: MusicItem; changed: () => void
       {error && <p className="error small">{error}</p>}
       {!album.hasArt && <CoverChoices album={album} changed={changed} />}
       <SongInfo album={album} changed={() => { setN((x) => x + 1); changed(); }} />
-      <div className="m-edit-tracks">
-        <div className="m-et-head muted small"><span>Disc</span><span>#</span><span>Title</span><span>Artist</span><span /></div>
+      {tracks && tracks.length > 0 && (
+        <div className="m-et-tools">
+          <label className="check small"><input type="checkbox" checked={picked.size === tracks.length} ref={(el) => { if (el) el.indeterminate = picked.size > 0 && picked.size < tracks.length; }} onChange={(e) => setPicked(e.target.checked ? new Set(tracks.map((t) => t.id)) : new Set())} />{picked.size ? `${picked.size} selected` : "Select songs"}</label>
+          <span className="spacer" />
+          <button className="small-btn" disabled={busy || !picked.size} onClick={() => void clearNums(["disc"])}>Clear disc number</button>
+          <button className="small-btn" disabled={busy || !picked.size} onClick={() => void clearNums(["track"])}>Clear song number</button>
+          <button className="small-btn" disabled={busy || !picked.size} onClick={() => void clearNums(["disc", "track"])}>Clear both</button>
+        </div>
+      )}
+      <div className="m-edit-tracks picks">
+        <div className="m-et-head muted small"><span /><span>Disc</span><span>#</span><span>Title</span><span>Artist</span><span /></div>
         {!tracks && <div className="pg-loading"><span className="spinner" /> Loading songs…</div>}
         {tracks?.map((t) => {
           const d = drafts[t.id];
           if (!d) return null;
           return (
-            <div key={t.id} className={`m-et-row ${changedTracks.includes(t) ? "dirty" : ""}`}>
+            <div key={t.id} className={`m-et-row ${changedTracks.includes(t) ? "dirty" : ""} ${picked.has(t.id) ? "on" : ""}`}>
+              <input type="checkbox" checked={picked.has(t.id)} aria-label={`Select ${t.name}`} onChange={() => setPicked((s) => { const x = new Set(s); if (x.has(t.id)) x.delete(t.id); else x.add(t.id); return x; })} />
               <input className="m-et-num" value={d.disc} inputMode="numeric" onChange={(e) => set(t.id, "disc", e.target.value)} aria-label="Disc" />
               <input className="m-et-num" value={d.index} inputMode="numeric" onChange={(e) => set(t.id, "index", e.target.value)} aria-label="Track number" />
               <input value={d.name} onChange={(e) => set(t.id, "name", e.target.value)} aria-label="Title" />
@@ -367,7 +402,7 @@ function ArtistsPane({ artists, changed }: { artists: MusicItem[] | null; change
   const items: StudioItem[] = shown.map((a) => ({
     id: a.id,
     title: a.name,
-    sub: a.count ? `${a.count} album${a.count === 1 ? "" : "s"}` : "",
+    sub: [a.count ? `${a.count} album${a.count === 1 ? "" : "s"}` : "", a.also?.length ? `also as ${a.also.length} other name${a.also.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · "),
     pic: <span className="m-manage-thumb round"><Art item={a} size={120} round /></span>,
     status: <StatusIcons items={[{ icon: "image", label: "Picture", ok: a.hasArt, onClick: () => void chooseMusicArt(a).then((x) => x && changed()) }]} />,
     warn: !a.hasArt,
@@ -392,6 +427,20 @@ function ArtistDetail({ artist, changed }: { artist: MusicItem; changed: () => v
   const [name, setName] = useState(artist.name);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  async function combine() {
+    const also = artist.also ?? [];
+    if (!(await askConfirm(`Write “${artist.name}” as the album artist of every song now under ${also.map((a) => `“${a[1]}”`).join(", ")}?\n\nThe song artists (with the featured names) stay. History can put the old names back.`, { okLabel: "Put them together" }))) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await track(`Combining under ${artist.name}`, () => api.musicMergeArtists(artist.name, also.map((a) => a[0])), { reload: false });
+      changed();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function save() {
     if (!name.trim()) return setError("The name can't be empty.");
     setBusy(true);
@@ -419,6 +468,14 @@ function ArtistDetail({ artist, changed }: { artist: MusicItem; changed: () => v
             {isLocal(artist.id) && <button className="link small" disabled={busy} onClick={() => void api.musicLocalReset(artist.id).then(changed).catch((e) => setError(errorText(e)))}>Back to the files</button>}
           </div>
           <p className="muted small">A wrong picture? “Change picture” shows the artists with this name, best known first, or use a picture file.</p>
+          {!!artist.also?.length && (
+            <div className="m-also">
+              <b className="small">Also listed as</b>
+              <span className="muted small">{artist.also.map((a) => a[1]).join(" · ")}</span>
+              <span className="muted small">Shown together here. To make it stick in Jellyfin and Infuse too, the album artist in those songs' files becomes “{artist.name}”.</span>
+              <button disabled={busy} onClick={() => void combine()}>{busy ? <span className="spinner small-spin" /> : null} Put them under {artist.name} in the files</button>
+            </div>
+          )}
           {error && <p className="error small">{error}</p>}
         </div>
       </div>

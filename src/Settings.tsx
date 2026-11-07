@@ -137,7 +137,7 @@ export default function Settings({ status, onChanged, section }: { status: Statu
             <div className="kv"><span className="muted">Server</span><span>{status.serverName ?? "—"}</span></div>
             <div className="kv"><span className="muted">Address</span><span className="mono">{status.serverUrl ?? "—"}</span></div>
             <div className="kv"><span className="muted">Library</span><span>{status.movies} movies · {status.series} shows</span></div>
-            <label className="wide-label">Watch as this user (resume points, watched status, picks)
+            <label className="wide-label">Watch as this user (resume points, watched status)
               <select value={status.userId ?? ""} onChange={(e) => void run(() => api.setUser(e.target.value), "User changed. Scan the library to refresh watched status.")} disabled={!users.length || busy}>
                 {users.map((u) => <option key={u.id} value={u.id}>{u.name}{u.admin ? " (admin)" : ""}</option>)}
               </select>

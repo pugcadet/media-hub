@@ -2286,15 +2286,17 @@ button.inbox-choice:has(.inbox-choice-pic) { flex-direction: row; align-items: c
 .shell.top { flex-direction: column; }
 .shell.top > .main-col { min-height: 0; }
 .tb { --tb-bg: #181818; height: 60px; flex: 0 0 60px; display: flex; align-items: center; gap: 10px; padding: 0 20px 0 22px; background: var(--tb-bg); border-bottom: 1px solid #262626; position: relative; z-index: 30; }
-.tb button { height: 36px; }
+.tb > button { height: 36px; }
 .tb-brand { all: unset; display: flex; align-items: center; gap: 10px; cursor: pointer; margin-right: 18px; }
 .tb-name { font-weight: 700; font-size: 19px; letter-spacing: -.01em; }
 .tb-menu { display: flex; gap: 4px; height: 100%; align-self: stretch; }
 .tb-menu .tb-nav { height: 100%; border: 0; border-radius: 0; padding: 0 16px; background: none; color: #b8b8b8; font-weight: 500; border-bottom: 3px solid transparent; }
 .tb-menu .tb-nav:hover:not(:disabled) { background: none; color: #fff; }
 .tb-menu .tb-nav.on { color: #fff; font-weight: 600; border-bottom-color: var(--accent); }
-.tb-activity { flex: 1; min-width: 0; display: flex; justify-content: flex-end; }
-.tb-activity .topbar { border: 0; padding: 0; background: none; min-height: 0; backdrop-filter: none; gap: 8px; max-width: 520px; width: 100%; justify-content: flex-end; }
+.tb-activity { flex: 1; min-width: 0; display: flex; justify-content: center; padding: 0 12px; }
+.tb-activity .topbar { border: 0; padding: 0; background: none; min-height: 0; backdrop-filter: none; gap: 8px; max-width: 860px; width: 100%; justify-content: center; position: static; }
+.tb-activity .job { flex: 1 1 260px; width: auto; max-width: 400px; min-width: 0; }
+.tb-activity .jobs-btn { justify-content: center; }
 .tb-activity .jobs-btn { height: 36px; border: 0; }
 .tb-btn { height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #333; background: transparent; color: #ddd; font-weight: 500; font-size: 13px; }
 .tb-btn.icon { width: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
@@ -2477,3 +2479,17 @@ label.m-tagdiff-row { display: grid; grid-template-columns: 18px minmax(0, 110px
 .m-tagdiff-row.off { opacity: .45; }
 .m-tag-from { color: #9a9a9a; text-decoration: line-through; }
 .crumb-bar { display: flex; align-items: center; gap: 10px; padding: 10px 24px; border-bottom: 1px solid #222; font-size: 13px; flex: 0 0 auto; }
+
+/* What Media Hub is doing: a wide panel centred under the top bar. */
+.tb .proc { position: fixed; top: 66px; left: 50%; right: auto; transform: translateX(-50%); width: min(1180px, calc(100vw - 40px)); max-width: none; height: min(680px, calc(100vh - 90px)); grid-template-columns: 380px minmax(0, 1fr); }
+.tb .proc-row { height: auto; min-height: 40px; }
+.tb .proc-detail { padding: 18px 22px; }
+.tb .proc-step { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 14px; line-height: 1.45; }
+.tb .proc-step .small { font-size: 13.5px; }
+.tb .alert-menu { width: 440px; max-height: calc(100vh - 90px); overflow: auto; }
+.tb .alert-row { height: auto; align-items: flex-start; white-space: normal; text-align: left; }
+.m-edit-tracks.picks .m-et-head, .m-edit-tracks.picks .m-et-row { grid-template-columns: 22px 52px 52px minmax(0, 2fr) minmax(0, 1.2fr) 52px; }
+.m-et-row.on { background: rgba(0,164,220,.08); border-radius: 6px; }
+.m-et-tools { display: flex; align-items: center; gap: 8px; }
+.m-also { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 10px; background: #1a1a1a; border: 1px solid #2b2b2b; align-items: flex-start; }
+.lib-checks .link { white-space: nowrap; }

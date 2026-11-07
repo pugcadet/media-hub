@@ -105,25 +105,37 @@ export function groupAdded(cards: Card[], max = 7): Added[] {
   });
 }
 
+/** What Home showed last, kept while the app runs. */
+const HOME: { epoch: number; at: number; data: Record<string, unknown> } = { epoch: -1, at: 0, data: {} };
+function useCached<T>(key: string, first: T): [T, (v: T) => void] {
+  const [v, setV] = useState<T>(key in HOME.data ? (HOME.data[key] as T) : first);
+  return [v, (x: T) => { HOME.data[key] = x; setV(x); }];
+}
+
 export default function Dashboard({ status }: { status: Status }) {
   const epoch = useEpoch();
   const sum = useScanSummary();
   const p = usePrefs();
-  const [inbox, setInbox] = useState<{ dir: string | null; items: InboxItem[] } | undefined>(undefined);
-  const [recent, setRecent] = useState<Card[]>([]);
-  const [names, setNames] = useState<number | null>(null);
-  const [server, setServer] = useState<ServerOverview | null | undefined>(undefined);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  // Home keeps what it showed last time: switching away and back shows it at once, and it only
+  // asks again (quietly, in the background) after a minute or when data changed.
+  const [inbox, setInbox] = useCached<{ dir: string | null; items: InboxItem[] } | undefined>("inbox", undefined);
+  const [recent, setRecent] = useCached<Card[]>("recent", []);
+  const [names, setNames] = useCached<number | null>("names", null);
+  const [server, setServer] = useCached<ServerOverview | null | undefined>("server", undefined);
+  const [alerts, setAlerts] = useCached<Alert[]>("alerts", []);
   const [scanning, setScanning] = useState(false);
 
   useEffect(() => {
+    if (HOME.epoch === epoch && Date.now() - HOME.at < 60_000) return;
+    HOME.epoch = epoch;
+    HOME.at = Date.now();
     api.inboxScan().then(([dir, items]) => setInbox({ dir, items })).catch(() => setInbox({ dir: null, items: [] }));
-    api.homeFeed().then((f) => setRecent(f.recent)).catch(() => setRecent([]));
+    api.homeFeed().then((f) => setRecent(f.recent)).catch(() => undefined);
     api.serverOverview().then(setServer).catch(() => setServer(null));
-    api.healthAlerts().then(setAlerts).catch(() => setAlerts([]));
+    api.healthAlerts().then(setAlerts).catch(() => undefined);
   }, [epoch]);
   useEffect(() => {
-    api.namingCheckLast().then((r) => setNames(r ? r.rows.filter((x) => namesToFix(x)).length : null)).catch(() => setNames(null));
+    api.namingCheckLast().then((r) => setNames(r ? r.rows.filter((x) => namesToFix(x)).length : null)).catch(() => undefined);
   }, [epoch, p.renameSkip.length, p.renameOff.join("|")]);
 
   async function scan() {
@@ -151,7 +163,8 @@ export default function Dashboard({ status }: { status: Status }) {
   const waiting = inbox?.items.length ?? 0;
   const dupKey = sum.duplicates ? `${sum.duplicates.groups}:${sum.duplicates.files}` : "";
   const showDup = !!sum.duplicates?.groups && p.dupDismissed !== dupKey;
-  const more = cleanupBlocks(sum, status.series).filter((b) => b.key !== "duplicates" && (b.count ?? 0) > 0);
+  const folderFixes = sum.folders?.fixes ?? 0;
+  const folderKey = sum.folders ? `${sum.folders.shows}:${sum.folders.movies}` : "";
   const added = groupAdded(recent);
   const serious = alerts.filter((a) => a.level !== "info");
   const plugUpdates = server?.plugins.filter((x) => x.update).length ?? 0;
@@ -193,6 +206,14 @@ export default function Dashboard({ status }: { status: Status }) {
           <button className="link muted-link" onClick={() => setPrefs({ dupDismissed: dupKey })}>Dismiss</button>
         </div>
       )}
+      {folderFixes > 0 && p.foldersDismissed !== folderKey && (
+        <div className="home-notice" role="status">
+          <b>Clean up folders:</b>
+          <span className="grow">{[sum.folders!.shows ? `${sum.folders!.shows} show${sum.folders!.shows === 1 ? "" : "s"} without season folders` : "", sum.folders!.movies ? `${sum.folders!.movies} movie${sum.folders!.movies === 1 ? "" : "s"} not in a folder of their own` : ""].filter(Boolean).join(", ")}.</span>
+          <button className="link" onClick={() => nav.route({ view: "renamer", section: "folders" })}>Show</button>
+          <button className="link muted-link" onClick={() => setPrefs({ foldersDismissed: folderKey })}>Dismiss</button>
+        </div>
+      )}
       {serious.map((a) => (
         <button key={a.title} className="home-notice bad" onClick={() => nav.route(a.fix.startsWith("settings:plugins") ? { view: "jellyfin" } : a.fix.startsWith("settings:") ? { view: "settings", section: a.fix.slice(9) } : { view: a.fix as Route["view"] })}>
           <b>{a.title}</b><span className="grow muted">{a.detail}</span><span className="home-link">Fix</span>
@@ -204,20 +225,12 @@ export default function Dashboard({ status }: { status: Status }) {
         <div className="home-step-grid">
           {steps.map((x) => (
             <button key={x.n} className="home-step" onClick={() => nav.route({ ...x.go, n: Date.now() })}>
-              <span className="muted">{x.n} · {x.label}</span>
+              <span className="muted">{x.label}</span>
               <b className={x.count === null ? "muted" : x.count ? "warn" : "good"}>{x.count === null ? "–" : x.count ? x.count.toLocaleString() : "✓"}</b>
               <span className="muted small">{x.count === null ? "not checked yet" : x.count ? x.what : x.okWhat}</span>
             </button>
           ))}
         </div>
-        {more.length > 0 && (
-          <div className="home-more muted small">
-            Also:{" "}
-            {more.map((b, i) => (
-              <span key={b.key}>{i > 0 && " · "}<button className="link" onClick={() => nav.route(b.go)}>{b.count!.toLocaleString()} {b.title.toLowerCase()}</button></span>
-            ))}
-          </div>
-        )}
       </section>
 
       <div className="home-split">

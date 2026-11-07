@@ -573,16 +573,13 @@ pub async fn undo_change(state: State<'_, AppState>, change_id: i64) -> Result<(
         return Ok(());
     }
     if ch.action == "music_tags" {
-        let item = crate::localmusic::undo_music_tags(&ch.old_value)?;
+        let items = crate::localmusic::undo_music_tags(&ch.old_value)?;
         state.store()?.journal_mark_undone(change_id)?;
-        match item {
-            Some(id) => {
-                if let Ok(w) = state.writer().await {
-                    let _ = w.refresh(&id, false).await;
-                }
-            }
-            None => {
-                let _ = crate::localmusic::music_rescan_quiet(&state);
+        if items.is_empty() {
+            let _ = crate::localmusic::music_rescan_quiet(&state);
+        } else if let Ok(w) = state.writer().await {
+            for id in &items {
+                let _ = w.refresh(id, false).await;
             }
         }
         return Ok(());

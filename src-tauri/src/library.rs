@@ -770,8 +770,8 @@ pub async fn health_alerts(state: State<'_, AppState>) -> Result<Vec<Alert>> {
                 let n = n.to_lowercase().replace(' ', "");
                 words.iter().any(|w| n.contains(w)) && status != "Disabled"
             });
-            if !has(&["mediasegment"]) {
-                out.push(alert_fix("warn", "Skip markers can't be saved", "Install the “MediaSegments API” plugin in Jellyfin (Dashboard → Plugins → Catalog) and restart Jellyfin.", "settings:plugins"));
+            if !has(&["introskipper", "mediasegment"]) {
+                out.push(alert_fix("warn", "Skip markers can't be saved", "Install the “Intro Skipper” plugin in Jellyfin (Dashboard → Plugins → Catalog) and restart Jellyfin.", "settings:plugins"));
             }
             if !has(&["opensubtitles"]) {
                 out.push(alert_fix("warn", "Subtitle downloads are off", "Install the “Open Subtitles” plugin in Jellyfin and sign in to it.", "settings:plugins"));
@@ -781,16 +781,6 @@ pub async fn health_alerts(state: State<'_, AppState>) -> Result<Vec<Alert>> {
             }
             if !has(&["tvdb"]) {
                 out.push(alert_fix("info", "No TheTVDB plugin", "TheTVDB adds banners and better episode data for shows.", "settings:plugins"));
-            }
-        }
-        if let Ok(views) = c.all_views().await {
-            if !views.iter().any(|(_, _, t)| t == "playlists") {
-                out.push(alert_fix(
-                    "info",
-                    "Picks of the day aren't in Infuse yet",
-                    "Media Hub keeps them as a Jellyfin playlist. Sync picks once, then in Infuse pin the Playlists folder: Settings → Shares → your Jellyfin server → Add Favorite.",
-                    "settings:picks",
-                ));
             }
         }
         if let Ok(info) = c.system_info().await {

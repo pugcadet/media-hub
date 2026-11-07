@@ -528,6 +528,7 @@ pub fn list(app: &AppHandle, state: &AppState, view: &str, parent: Option<&str>,
             "search" => ix.tracks.iter().filter(|t| hit(t)).take(300).map(|t| track_item(t, ix.covers.contains_key(&t.album_key))).collect(),
             _ => Vec::new(),
         };
+        let out = if view == "artists" { crate::music::combine_artists(out) } else { out };
         out.into_iter().skip(start as usize).take(limit.clamp(1, 5000) as usize).collect()
     })
 }
@@ -1557,7 +1558,12 @@ pub async fn music_tags_check(state: State<'_, AppState>, id: String, release: O
         let want = SongTags {
             title: Some(t.2.clone()),
             artist: Some(t.3.clone()),
-            album_artist: Some(rel.artist.clone()).filter(|a| !a.is_empty()),
+            // "Drake & 21 Savage" stays "Drake" when that's what your files say (one artist per line).
+            album_artist: Some(match current[i].album_artist.clone().or(current[i].artist.clone()) {
+                Some(cur) if crate::inbox::artist_key(&crate::inbox::first_artist(&rel.artist)) == crate::inbox::artist_key(&cur) => cur,
+                _ => rel.artist.clone(),
+            })
+            .filter(|a| !a.is_empty()),
             album: Some(rel.title.clone()),
             track: Some(t.1),
             disc: if discs > 1 || current[i].disc.is_some() { Some(t.0) } else { None },
@@ -1585,6 +1591,9 @@ struct TagUndo {
     /// Jellyfin album to refresh after undo (empty for the music folder).
     #[serde(default)]
     item: String,
+    /// More Jellyfin albums to refresh (combining artists).
+    #[serde(default)]
+    items: Vec<String>,
     songs: Vec<(String, Vec<(String, Option<String>)>)>,
 }
 
@@ -1614,7 +1623,7 @@ pub async fn music_tags_apply(app: AppHandle, state: State<'_, AppState>, id: St
     }
     let item = if jf { id.clone() } else { String::new() };
     let (undo, n) = tauri::async_runtime::spawn_blocking(move || -> Result<(TagUndo, usize)> {
-        let mut undo = TagUndo { item, songs: Vec::new() };
+        let mut undo = TagUndo { item, items: Vec::new(), songs: Vec::new() };
         let mut n = 0;
         for (rel, path, fields) in &per {
             let before = read_song_tags(path).unwrap_or_default();
@@ -1640,6 +1649,98 @@ pub async fn music_tags_apply(app: AppHandle, state: State<'_, AppState>, id: St
     Ok(n)
 }
 
+/// Each song of an album: (its id in the song list, its file), so changes picked per song can
+/// be written to the right file.
+#[tauri::command]
+pub async fn music_album_files(state: State<'_, AppState>, id: String) -> Result<Vec<(String, String)>> {
+    let songs = album_songs(&state, &id).await?;
+    if id.starts_with('A') {
+        let root = root_of(&state)?;
+        return Ok(songs.into_iter().map(|(p, path)| (format!("L{}", key_of(&rel_of(&root, &path))), p)).collect());
+    }
+    let c = state.reader().await?;
+    let items = c
+        .items_query(vec![("ParentId", id.clone()), ("IncludeItemTypes", "Audio".into()), ("Recursive", "true".into()), ("Fields", "Path".into()), ("EnableImages", "false".into())], 500)
+        .await?;
+    let mut out = Vec::new();
+    for v in &items {
+        let tid = v.get("Id").and_then(|x| x.as_str()).unwrap_or("").replace('-', "");
+        if let Ok(p) = crate::local::to_local(&state, v.get("Path").and_then(|x| x.as_str()).unwrap_or("")) {
+            let ps = p.to_string_lossy().into_owned();
+            if songs.iter().any(|s| s.0 == ps) {
+                out.push((tid, ps));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Puts albums listed under "Drake & Future" (and the like) under "Drake" for good: writes the
+/// album artist into their song files. History can put the old names back.
+#[tauri::command]
+pub async fn music_merge_artists(app: AppHandle, state: State<'_, AppState>, main: String, ids: Vec<String>) -> Result<usize> {
+    let main: String = main.trim().chars().take(200).collect();
+    if main.is_empty() || ids.is_empty() {
+        return Ok(0);
+    }
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut albums: Vec<String> = Vec::new();
+    for id in ids.iter().take(50) {
+        if let Some(key) = id.strip_prefix('R').filter(|k| k.len() == 16 && k.chars().all(|c| c.is_ascii_hexdigit())) {
+            let root = root_of(&state)?;
+            let g = index().lock().map_err(|_| Error::msg("internal error"))?;
+            let ix = g.as_ref().filter(|i| i.root == root).ok_or_else(|| Error::msg("Open Music first so the folder is read."))?;
+            files.extend(ix.tracks.iter().filter(|t| key_of(&t.artist) == key).map(|t| t.path.clone()));
+        } else if crate::jellyfin::valid_item_id(id) {
+            let _ = state.writer().await?;
+            let c = state.reader().await?;
+            let items = c
+                .items_query(vec![("AlbumArtistIds", id.clone()), ("IncludeItemTypes", "Audio".into()), ("Recursive", "true".into()), ("Fields", "Path".into()), ("EnableImages", "false".into())], 3000)
+                .await?;
+            for v in &items {
+                files.push(crate::local::to_local(&state, v.get("Path").and_then(|x| x.as_str()).unwrap_or(""))?);
+                if let Some(a) = v.get("AlbumId").and_then(|x| x.as_str()).map(|a| a.replace('-', "")) {
+                    if !albums.contains(&a) {
+                        albums.push(a);
+                    }
+                }
+            }
+        }
+    }
+    files.sort();
+    files.dedup();
+    if files.is_empty() {
+        return Err(Error::msg("No song files found for these names on this computer."));
+    }
+    let m2 = main.clone();
+    let al = albums.clone();
+    let (undo, n) = tauri::async_runtime::spawn_blocking(move || -> Result<(TagUndo, usize)> {
+        let mut undo = TagUndo { item: String::new(), items: al, songs: Vec::new() };
+        for p in &files {
+            let before = read_song_tags(p).unwrap_or_default();
+            write_song_tags(p, &[("albumArtist".to_string(), Some(m2.clone()))])?;
+            undo.songs.push((p.to_string_lossy().into_owned(), vec![("albumArtist".to_string(), before.album_artist)]));
+        }
+        let n = undo.songs.len();
+        Ok((undo, n))
+    })
+    .await
+    .map_err(|e| Error::msg(e.to_string()))??;
+    let record = serde_json::to_string(&undo).map_err(|e| Error::msg(e.to_string()))?;
+    state.store()?.journal_add("music_tags", &main, &record, &format!("{n} songs now under {main}"))?;
+    if albums.is_empty() {
+        if let Ok(root) = root_of(&state) {
+            refresh_in_background(root, Some(app.clone()));
+        }
+    } else if let Ok(w) = state.writer().await {
+        for a in &albums {
+            let _ = w.refresh(a, false).await;
+        }
+    }
+    let _ = app.emit("music-updated", ());
+    Ok(n)
+}
+
 /// Reads the music folder again in the background (after an undo).
 pub fn music_rescan_quiet(state: &AppState) -> Result<()> {
     refresh_in_background(root_of(state)?, None);
@@ -1647,7 +1748,7 @@ pub fn music_rescan_quiet(state: &AppState) -> Result<()> {
 }
 
 /// Undo: writes the old values back.
-pub fn undo_music_tags(record: &str) -> Result<Option<String>> {
+pub fn undo_music_tags(record: &str) -> Result<Vec<String>> {
     let u: TagUndo = serde_json::from_str(record).map_err(|_| Error::msg("bad journal entry"))?;
     for (file, fields) in &u.songs {
         let p = Path::new(file);
@@ -1656,7 +1757,11 @@ pub fn undo_music_tags(record: &str) -> Result<Option<String>> {
         }
         write_song_tags(p, fields)?;
     }
-    Ok(Some(u.item).filter(|i| !i.is_empty()))
+    let mut items = u.items;
+    if !u.item.is_empty() {
+        items.push(u.item);
+    }
+    Ok(items)
 }
 
 #[cfg(test)]

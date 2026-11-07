@@ -32,6 +32,44 @@ pub struct MusicItem {
     /// Picture address for songs from a music folder (Jellyfin items use `art_id`).
     #[serde(skip_serializing_if = "Option::is_none")]
     art_url: Option<String>,
+    /// An artist: the other names it's also listed under ("Drake & Future"), as (id, name).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    also: Vec<(String, String)>,
+}
+
+/// One line per artist: "Drake & 21 Savage" and "Drake & Future" go under "Drake", the three
+/// "Pete Rock & …" under "Pete Rock" (see `inbox::artist_groups`).
+pub fn combine_artists(list: Vec<MusicItem>) -> Vec<MusicItem> {
+    let names: Vec<String> = list.iter().map(|a| a.name.clone()).collect();
+    let groups = crate::inbox::artist_groups(&names);
+    let mut out: Vec<MusicItem> = Vec::new();
+    for a in list.iter().filter(|a| !groups.contains_key(&a.name)) {
+        out.push(a.clone());
+    }
+    for a in list.iter().filter(|a| groups.contains_key(&a.name)) {
+        let main = &groups[&a.name];
+        let key = crate::inbox::artist_key(main);
+        match out.iter_mut().find(|o| crate::inbox::artist_key(&o.name) == key) {
+            Some(o) => {
+                o.count = Some(o.count.unwrap_or(0) + a.count.unwrap_or(0));
+                if !o.has_art && a.has_art {
+                    o.has_art = true;
+                    o.art_id = a.art_id.clone();
+                    o.art_url = a.art_url.clone();
+                }
+                o.also.push((a.id.clone(), a.name.clone()));
+            }
+            None => {
+                let mut m = a.clone();
+                m.also.push((a.id.clone(), a.name.clone()));
+                m.name = main.clone();
+                m.artist = main.clone();
+                out.push(m);
+            }
+        }
+    }
+    out.sort_by_key(|a| a.name.to_lowercase());
+    out
 }
 
 impl MusicItem {
@@ -41,7 +79,7 @@ impl MusicItem {
     }
 
     pub fn local(id: String, kind: &'static str, name: String, artist: String, album: String, album_id: Option<String>, year: Option<i64>, index: Option<i64>, disc: Option<i64>, art_url: Option<String>, count: Option<i64>) -> Self {
-        MusicItem { id, kind, name, artist, album, album_id, year, index, disc, duration: 0.0, art_id: String::new(), has_art: art_url.is_some(), count, favorite: false, art_url }
+        MusicItem { id, kind, name, artist, album, album_id, year, index, disc, duration: 0.0, art_id: String::new(), has_art: art_url.is_some(), count, favorite: false, art_url, also: Vec::new() }
     }
 }
 
@@ -91,6 +129,7 @@ pub fn to_item(v: &Value) -> Option<MusicItem> {
         count: v.get("ChildCount").and_then(Value::as_i64).or_else(|| v.get("SongCount").and_then(Value::as_i64)),
         favorite: v.pointer("/UserData/IsFavorite").and_then(Value::as_bool).unwrap_or(false),
         art_url: None,
+        also: Vec::new(),
         id,
     })
 }
@@ -111,8 +150,9 @@ pub async fn music_list(app: tauri::AppHandle, state: State<'_, AppState>, view:
     }
     let c = state.reader().await?;
     if view == "artists" {
-        let v = c.album_artists(&query, start, limit).await?;
-        return Ok(v.get("Items").and_then(Value::as_array).into_iter().flatten().filter_map(to_item).collect());
+        let v = c.album_artists(&query, 0, 5000).await?;
+        let all = combine_artists(v.get("Items").and_then(Value::as_array).into_iter().flatten().filter_map(to_item).collect());
+        return Ok(all.into_iter().skip(start as usize).take(limit.clamp(1, 5000) as usize).collect());
     }
     let fields = "ProductionYear,RunTimeTicks,ChildCount,AlbumArtist,Artists,Album,AlbumId,AlbumPrimaryImageTag,ParentIndexNumber,IndexNumber".to_string();
     let mut q: Vec<(&'static str, String)> = vec![("Recursive", "true".into()), ("Fields", fields), ("StartIndex", start.to_string())];

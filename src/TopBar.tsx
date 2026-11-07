@@ -12,18 +12,18 @@ export function section(v: View): "home" | "library" | "jellyfin" | "add" | "his
   return "library";
 }
 
-/** Jellyfin's triangle in its purple-to-blue colours. */
-export function Logo({ size = 26 }: { size?: number }) {
+/** Media Hub's own mark (the app icon): a play shape in Jellyfin's purple-to-blue. */
+export function Logo({ size = 28 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 26 26" aria-hidden="true">
+    <svg width={size} height={size} viewBox="100 100 824 824" aria-hidden="true">
       <defs>
         <linearGradient id="mh-logo" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stopColor="#AA5CC3" />
           <stop offset="1" stopColor="#00A4DC" />
         </linearGradient>
       </defs>
-      <path d="M13 2 L24 22 H2 Z" fill="url(#mh-logo)" />
-      <path d="M13 10 L18 19 H8 Z" fill="var(--tb-bg, #181818)" />
+      <rect x="100" y="100" width="824" height="824" rx="185" fill="#222" />
+      <path d="M402 318 C402 286 436 266 464 282 L716 470 C742 488 742 536 716 554 L464 742 C436 758 402 738 402 706 Z" fill="url(#mh-logo)" />
     </svg>
   );
 }

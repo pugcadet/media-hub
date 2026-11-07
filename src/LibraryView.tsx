@@ -133,13 +133,11 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
     return s.length ? s.filter(Boolean).length / s.length : 1;
   };
   const gaps = (c: Check) => inFolder.filter((r) => state(r, c) === false).length;
-  // The title you are working on stays in the list until you pick another one, even when it
-  // no longer matches the filter (because you just fixed it).
-  const stick = (r: Row) => r.id === sel;
   const shown = inFolder
     .filter((r) => !query || r.name.toLowerCase().includes(query.toLowerCase()))
-    .filter((r) => !only || state(r, only) === false || stick(r))
-    .filter((r) => (filter === "all" ? true : filter === "ok" ? score(r) === 1 || stick(r) : score(r) < 1 || stick(r)))
+    // A title leaves the list as soon as it no longer matches (you just fixed it).
+    .filter((r) => !only || state(r, only) === false)
+    .filter((r) => (filter === "all" ? true : filter === "ok" ? score(r) === 1 : score(r) < 1))
     .sort((a, b) =>
       (sort === "todo" ? score(a) - score(b) : sort === "year" ? (b.year ?? 0) - (a.year ?? 0) : sort === "added" ? (b.added ?? "").localeCompare(a.added ?? "") : 0)
       || sortName(a.name).localeCompare(sortName(b.name)));
@@ -220,26 +218,6 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
       ]}
     />
   );
-  /** The whole-library tools, by step, so nothing needs its own page in the menu. */
-  const toolsMenu = (): MenuItem[] => [
-    { label: "Naming", disabled: true },
-    { label: "Rename a whole folder…", run: () => nav.route({ view: "renamer" }) },
-    { label: "Tidy folders (seasons, loose movies)…", run: () => nav.route({ view: "renamer", section: "folders" }) },
-    { label: "Names and years…", run: () => nav.route({ view: "cleanup", section: "names" }) },
-    { sep: true },
-    { label: "Subtitles", disabled: true },
-    { label: "Subtitles for many titles…", run: () => nav.route({ view: "subtitles" }) },
-    { sep: true },
-    { label: "Intros", disabled: true },
-    { label: "Intros and credits for many shows…", run: () => nav.route({ view: "intros" }) },
-    { sep: true },
-    { label: "Clean-up", disabled: true },
-    { label: "Duplicates…", run: () => nav.route({ view: "cleanup", section: "duplicates" }) },
-    { label: "Missing episodes…", run: () => nav.route({ view: "cleanup", section: "missing" }) },
-    { label: "Big files and storage…", run: () => nav.route({ view: "cleanup", section: "storage" }) },
-    { label: "Episodes without a picture…", run: () => nav.route({ view: "cleanup", section: "pictures" }) },
-    { label: "Genres and tags…", run: () => nav.route({ view: "tags" }) },
-  ];
   const viewToggle = <Seg icons value={libraryView} onChange={(v) => setPrefs({ libraryView: v })} options={[{ id: "list", label: "List", title: "List", icon: "list" }, { id: "tiles", label: "Grid", title: "Grid", icon: "grid" }]} />;
   const todoCount = shown.filter((r) => score(r) < 1).length;
   const barTop = (
@@ -249,7 +227,6 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
       {folder !== "@music" && folder !== "@collections" && (
         <>
           <span className="muted small lib-summary">{checking ? "Checking…" : rows ? `${perfect} of ${inFolder.length} complete` : ""}</span>
-          <button onClick={(e) => openMenu(e, toolsMenu())} title="Whole-library tools">More tools <Icon name="chevron" size={12} /></button>
           <button disabled={checking} onClick={() => void reloadData().then(() => load(true)).catch(() => undefined)} title="Reads the library again from Jellyfin and your folders">{checking ? <span className="spinner small-spin" /> : <Icon name="reload" />} Refresh</button>
           <button className="primary" disabled={!canEdit || !rows || !todoCount} onClick={() => void fixAll()} title="Identifies exact matches, adds missing artwork and subtitles, and renames what's certain. Everything can be undone in History."><Icon name="wand" /> Fix what's safe ({todoCount})</button>
         </>
@@ -279,14 +256,14 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
   const filters = (
     <div className="lib-bar-row">
       <div className="lib-checks">
-        {CHECKS.map((c, i) => {
+        {CHECKS.map((c) => {
           const n = gaps(c.id);
           const unread = c.id === "intros" && unknownSeg > 0;
           return (
             <button key={c.id} className={`lib-check ${only === c.id ? "on" : ""} ${n ? "warn" : "ok"}`} aria-pressed={only === c.id}
               title={unread ? "Skip markers not read yet: click to read them, then filter" : `${c.hint}. Click to show only the titles that still need this.`}
               onClick={() => { if (unread) void readIntros().then(() => setOnly(c.id)); else setOnly(only === c.id ? "" : c.id); }}>
-              <span className="lib-check-n">{i + 1}</span>{c.label} <span className="count">{unread ? "?" : n ? n : <Icon name="check" size={12} />}</span>
+              {c.label} <span className="count">{unread ? "?" : n ? n : <Icon name="check" size={12} />}</span>
             </button>
           );
         })}
@@ -351,7 +328,7 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
           onMenu={(id, e) => { const r = shown.find((x) => x.id === id); if (r) openMenu(e, rowMenu(r)); }}
           empty={!rows ? <span><span className="spinner" /> Reading the library…</span> : only ? "Nothing left to do here." : "Nothing here."}
         >
-          {sel && (
+          {sel && shown.some((r) => r.id === sel) && (
             <ItemPage key={sel} id={sel} embedded onBack={() => undefined} onOpen={(i) => nav.open(i)} onNav={(v) => nav.route({ view: v })}
               subLangs={st.subLangs} titleLang={st.titleLang} status={st} onLoaded={patchFrom} />
           )}

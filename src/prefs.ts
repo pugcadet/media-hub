@@ -137,6 +137,8 @@ export interface Prefs {
   introsFolders: string[] | null;
   /** The duplicates notice on Home was dismissed for this result ("groups:files"). */
   dupDismissed: string;
+  /** The folders notice on Home was dismissed for this result ("shows:movies"). */
+  foldersDismissed: string;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -192,6 +194,7 @@ export const DEFAULT_PREFS: Prefs = {
   keepCollections: false,
   introsFolders: null,
   dupDismissed: "",
+  foldersDismissed: "",
 };
 
 /** Ready-made highlight colours for Settings → Look. */
