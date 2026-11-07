@@ -119,7 +119,7 @@ async function detect(item: InboxItem, ctx: Ctx): Promise<Row> {
   }
   if (row.target) {
     try {
-      row.plan = await api.inboxResolve(item.key, row.target);
+      row.plan = await api.inboxResolve(item.key, { ...row.target, tmdb: row.ids?.Tmdb ?? null });
       row.look = defaultLook(row.target.kind, row.plan);
       const vids = row.plan.moves.filter((m) => /\.(mkv|mp4|m4v|avi|mov|wmv|ts|m2ts|webm|mpg|mpeg|flac|mp3|m4a|ogg|opus|wav|aac|alac|aiff|aif)$/i.test(m.from));
       if (vids.length && vids.every((m) => m.have)) {
@@ -253,23 +253,32 @@ export default function Inbox({ status }: { status: Status }) {
           }
           job.update("Asking Jellyfin to look", 0.9);
           await scanAround([...new Set(res.placed.map((p) => p.split("/").slice(0, -1).join("/")))]);
-          // English subtitles, when you ticked it: once Jellyfin has the title.
+          // Once Jellyfin has the title: English subtitles (when ticked) and its collection.
           let subMsg = "";
           const cur = rowsRef.current?.find((x) => x.item.key === r.item.key) ?? r;
-          if (cur.look && res.placed.length && (r.target!.kind === "tv" || r.target!.kind === "movie")) {
+          const wantSubs = !!cur.look && res.placed.length > 0 && (r.target!.kind === "tv" || r.target!.kind === "movie");
+          const coll = r.plan?.collection?.id ? r.plan.collection : null;
+          if ((wantSubs || coll) && res.placed.length) {
             const kind = r.target!.kind === "tv" ? "series" : "movie";
             let id = r.target!.itemId ?? null;
             for (let i = 0; !id && i < 20 && !job.cancelled; i++) {
-              job.update("Waiting for Jellyfin to add it, then looking up English subtitles", 0.92);
+              job.update("Waiting for Jellyfin to add it", 0.92);
               await new Promise((ok) => setTimeout(ok, 6000));
               id = await api.inboxFindItem(r.plan!.folder, r.target!.kind, r.target!.title).catch(() => null);
             }
-            if (r.target!.itemId) await new Promise((ok) => setTimeout(ok, 15000));
-            if (id) {
-              job.update("Looking up English subtitles", 0.95);
-              const got = await getSubtitles({ id, kind }, ["eng"], job).catch(() => 0);
-              subMsg = got ? ` · ${got} English subtitle${got === 1 ? "" : "s"} found` : " · no English subtitles found yet";
-            } else subMsg = " · Jellyfin hasn't added it yet: look up subtitles from the Library later";
+            if (id && coll) {
+              job.update(`Adding it to “${coll.name}”`, 0.93);
+              const ok = await api.collectionAdd(coll.id!, [id]).then(() => true).catch(() => false);
+              subMsg += ok ? ` · added to “${coll.name}”` : ` · couldn't add it to “${coll.name}”`;
+            } else if (coll) subMsg += ` · Jellyfin hasn't added it yet: add it to “${coll.name}” later`;
+            if (wantSubs) {
+              if (r.target!.itemId) await new Promise((ok) => setTimeout(ok, 15000));
+              if (id) {
+                job.update("Looking up English subtitles", 0.95);
+                const got = await getSubtitles({ id, kind }, ["eng"], job).catch(() => 0);
+                subMsg += got ? ` · ${got} English subtitle${got === 1 ? "" : "s"} found` : " · no English subtitles found yet";
+              } else subMsg += " · Jellyfin hasn't added it yet: look up subtitles from the Library later";
+            }
           }
           const msg = `${res.placed.length} placed${res.skipped ? ` · ${res.skipped} already there` : ""}${res.trashed ? " · download in the Trash" : ""}${subMsg}`;
           if (res.failed.length) throw `${msg} · ${res.failed.length} didn't work: ${res.failed[0]}`;
@@ -291,7 +300,7 @@ export default function Inbox({ status }: { status: Status }) {
     const target = { ...r.target, itemId: null, title: c.Name ?? r.target.title, year: c.ProductionYear ?? r.target.year };
     update(r.item.key, { state: "checking" });
     try {
-      const plan = await api.inboxResolve(r.item.key, target);
+      const plan = await api.inboxResolve(r.item.key, { ...target, tmdb: c.ProviderIds?.Tmdb ?? null });
       update(r.item.key, { target, plan, ids: c.ProviderIds ?? {}, art: c.ImageUrl ?? null, look: defaultLook(target.kind, plan), state: "ready", why: `Your choice: ${c.Name}${c.ProductionYear ? ` (${c.ProductionYear})` : ""}` });
       setPicked((s) => new Set(s).add(r.item.key));
     } catch (e) {
@@ -442,9 +451,9 @@ function FixPanel({ row, ctx, onClose, onUse }: { row: Row; ctx: Ctx; onClose: (
   }, [q, t.kind]);
   useEffect(() => {
     setError(null);
-    const h = setTimeout(() => void api.inboxResolve(it.key, t).then(setPlan).catch((e) => { setPlan(null); setError(errorText(e)); }), 250);
+    const h = setTimeout(() => void api.inboxResolve(it.key, { ...t, tmdb: ids?.Tmdb ?? null }).then(setPlan).catch((e) => { setPlan(null); setError(errorText(e)); }), 250);
     return () => clearTimeout(h);
-  }, [t, it.key]);
+  }, [t, it.key, ids]);
 
   const set = (p: Partial<InboxTarget>) => setT((x) => ({ ...x, ...p }));
   const moving = plan?.moves.filter((m) => !m.have) ?? [];

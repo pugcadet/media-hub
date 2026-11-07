@@ -363,6 +363,15 @@ impl Tmdb {
         Ok(out)
     }
 
+    /// The TMDB collection a movie belongs to ("Dune Collection"), if any.
+    pub async fn movie_collection(&self, id: &str) -> Result<Option<String>> {
+        if !id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(Error::msg("bad id"));
+        }
+        let v = self.get(&format!("/movie/{id}"), &[]).await?;
+        Ok(v.pointer("/belongs_to_collection/name").and_then(Value::as_str).map(str::to_string).filter(|n| !n.is_empty()))
+    }
+
     /// TMDB id of a show from its TVDB or IMDb id.
     pub async fn find_tv(&self, tvdb: Option<&str>, imdb: Option<&str>) -> Result<Option<String>> {
         let (source, id) = match (tvdb, imdb) {

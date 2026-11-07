@@ -450,6 +450,8 @@ export interface InboxTarget {
   season: number | null;
   artist: string | null;
   album: string | null;
+  /** A movie's TMDB id (to find the collection it belongs to). */
+  tmdb?: string | null;
 }
 export interface InboxMove {
   from: string;
@@ -464,6 +466,8 @@ export interface InboxPlan {
   leftovers: string[];
   /** Why it goes where it goes. */
   note: string;
+  /** A movie that's part of a collection you already have. */
+  collection: { name: string; id: string | null; folder: string | null } | null;
 }
 
 export interface MovieFolder {
