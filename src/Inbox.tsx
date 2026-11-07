@@ -14,7 +14,7 @@ import { nav } from "./nav";
 import { queueSubtitles } from "./subwait";
 import { prefs, setPrefs, usePrefs } from "./prefs";
 
-type State = "checking" | "ready" | "look" | "have" | "placing" | "done" | "failed";
+type State = "checking" | "ready" | "look" | "offline" | "have" | "placing" | "done" | "failed";
 
 interface Row {
   item: InboxItem;
@@ -132,12 +132,16 @@ async function detect(item: InboxItem, ctx: Ctx): Promise<Row> {
         row.why += ` · ${vids.filter((m) => m.have).length} already there (skipped)`;
       }
     } catch (e) {
-      row.state = "look";
       row.why = errorText(e);
+      // The NAS isn't there: not something to fix here; it's looked at again once it's back.
+      row.state = /isn't reachable|NAS/i.test(row.why) ? "offline" : "look";
     }
   }
   return row;
 }
+
+/** The Inbox as you left it, so opening it again shows it at once instead of checking it all again. */
+let KEPT: { dir: string | null; rows: Row[]; ctx: Ctx | null; picked: string[]; done: Row[] } | null = null;
 
 /** What's being placed, for the activity list: "Twin Peaks S02", "Twin Peaks S01–S03", "3 movies". */
 function placeLabel(t: InboxTarget, p: InboxPlan | null): string {
@@ -181,54 +185,86 @@ function trashText(left: string[]): string {
 
 /* ------------------------------------------------------------------ the page */
 
-const STATE_LABEL: Record<State, string> = { checking: "Looking…", ready: "Ready", look: "Needs a look", have: "Already have it", placing: "Uploading…", done: "Done", failed: "Didn't work" };
+const STATE_LABEL: Record<State, string> = { checking: "Looking…", ready: "Ready", look: "Needs a look", offline: "NAS not connected", have: "Duplicate", placing: "Uploading…", done: "Done", failed: "Didn't work" };
 const gb = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
 
 export default function Inbox({ status }: { status: Status }) {
   const epoch = useEpoch();
   usePrefs();
-  const [dir, setDir] = useState<string | null>(null);
-  const [rows, setRows] = useState<Row[] | null>(null);
+  const [dir, setDir] = useState<string | null>(KEPT?.dir ?? null);
+  const [rows, setRows] = useState<Row[] | null>(KEPT?.rows ?? null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | State>("all");
   const [query, setQuery] = useState("");
-  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [picked, setPicked] = useState<Set<string>>(new Set(KEPT?.picked ?? []));
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [ctx, setCtx] = useState<Ctx | null>(null);
+  const [ctx, setCtx] = useState<Ctx | null>(KEPT?.ctx ?? null);
   const [n, setN] = useState(0);
-  const doneRows = useRef<Row[]>([]);
+  const [again, setAgain] = useState(0);
+  const doneRows = useRef<Row[]>(KEPT?.done ?? []);
   const rowsRef = useRef<Row[] | null>(null);
   rowsRef.current = rows;
+  const firstRun = useRef(true);
 
+  // Keep what's on screen for the next time the Inbox is opened.
+  useEffect(() => {
+    if (rows) KEPT = { dir, rows, ctx, picked: [...picked], done: doneRows.current };
+  }, [dir, rows, ctx, picked]);
+
+  // Opening the Inbox: what was already checked stays; only new downloads are checked (and
+  // the ones that waited for the NAS). Refresh checks everything again.
   useEffect(() => {
     let alive = true;
+    const full = n > 0 || !KEPT;
+    const quiet = firstRun.current && !!KEPT;
+    firstRun.current = false;
     setError(null);
     (async () => {
       const [[d, items], h, tops] = await Promise.all([
         api.inboxScan(),
-        api.libraryHealth(false).catch(() => ({ at: 0, rows: [] as HealthRow[] })),
-        api.folders("").then((f) => f.map((x) => x.name)).catch(() => [] as string[]),
+        full || !ctx ? api.libraryHealth(false).catch(() => ({ at: 0, rows: [] as HealthRow[] })) : Promise.resolve(null),
+        full || !ctx ? api.folders("").then((f) => f.map((x) => x.name)).catch(() => [] as string[]) : Promise.resolve(null),
       ]);
       if (!alive) return;
       setDir(d);
-      const c: Ctx = { shows: h.rows.filter((r) => r.kind === "series"), movies: h.rows.filter((r) => r.kind === "movie"), tops };
+      const c: Ctx = h && tops ? { shows: h.rows.filter((r) => r.kind === "series"), movies: h.rows.filter((r) => r.kind === "movie"), tops } : ctx!;
       setCtx(c);
-      setRows(items.map((item) => ({ item, target: null, plan: null, state: "checking", why: "", ids: {} })));
+      const before = new Map((rowsRef.current ?? []).map((r) => [r.item.key, r]));
+      const same = (a: InboxItem, b: InboxItem) => a.size === b.size && a.modified === b.modified;
+      const keep = (it: InboxItem) => {
+        const old = before.get(it.key);
+        return !full && old && same(old.item, it) && old.state !== "offline" && old.state !== "checking" ? old : null;
+      };
+      const todo = items.filter((it) => !keep(it));
+      if (quiet && !todo.length && items.length === before.size) return;
+      setRows(items.map((item) => keep(item) ?? { item, target: null, plan: null, state: "checking", why: "", ids: {} }));
       // Three at a time, each row filling in as it's done.
       let k = 0;
       const out: Row[] = [];
       await Promise.all(Array.from({ length: 3 }, async () => {
-        while (k < items.length && alive) {
+        while (k < todo.length && alive) {
           const i = k++;
-          out[i] = await detect(items[i], c).catch((e) => ({ item: items[i], target: null, plan: null, state: "look" as State, why: errorText(e), ids: {} }));
-          if (alive) setRows((rs) => rs?.map((r) => (r.item.key === items[i].key ? out[i] : r)) ?? null);
+          out[i] = await detect(todo[i], c).catch((e) => ({ item: todo[i], target: null, plan: null, state: "look" as State, why: errorText(e), ids: {} }));
+          if (alive) setRows((rs) => rs?.map((r) => (r.item.key === todo[i].key ? out[i] : r)) ?? null);
         }
       }));
-      if (alive) setPicked(new Set(out.filter((r) => r?.state === "ready").map((r) => r.item.key)));
+      if (alive) setPicked((p) => {
+        const next = full ? new Set<string>() : new Set([...p].filter((key) => items.some((it) => it.key === key)));
+        out.filter((r) => r?.state === "ready").forEach((r) => next.add(r.item.key));
+        return next;
+      });
     })().catch((e) => alive && setError(errorText(e)));
     return () => { alive = false; };
-  }, [n, epoch]);
+  }, [n, epoch, again]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Downloads waiting for the NAS: looked at again every 20 seconds until it's back.
+  const waiting = (rows ?? []).some((r) => r.state === "offline");
+  useEffect(() => {
+    if (!waiting) return;
+    const t = window.setInterval(() => void api.libraryReachable().then((ok) => ok && setAgain((x) => x + 1)).catch(() => undefined), 20_000);
+    return () => window.clearInterval(t);
+  }, [waiting]);
 
   const all = [...(rows ?? []), ...doneRows.current.filter((d) => !(rows ?? []).some((r) => r.item.key === d.item.key))];
   const count = (s: State) => all.filter((r) => r.state === s).length;
@@ -373,7 +409,8 @@ export default function Inbox({ status }: { status: Status }) {
     { id: "all", label: "All", n: all.length, tone: "" },
     { id: "ready", label: "Ready", n: count("ready"), tone: "ok" },
     { id: "look", label: "Needs a look", n: count("look"), tone: "warn" },
-    { id: "have", label: "Already have", n: count("have"), tone: "" },
+    { id: "offline", label: "NAS not connected", n: count("offline"), tone: "warn" },
+    { id: "have", label: "Duplicates", n: count("have"), tone: "" },
     { id: "done", label: "Done", n: count("done"), tone: "" },
   ];
 
@@ -433,7 +470,7 @@ function InboxRowView({ r, picked, onPick, onEdit, onRemove, onPlaceOne, busy, o
   const what = r.target ? `${r.target.title}${r.target.year ? ` (${r.target.year})` : ""}` : r.item.title || r.item.key;
   const packCount = r.target?.kind === "pack" ? r.plan?.movies.length ?? 0 : 0;
   const label = r.state === "ready" ? (packCount ? `${packCount} movies` : r.plan?.existing ? "Into your existing folder" : "New folder") : STATE_LABEL[r.state];
-  const tone = r.state === "ready" ? (r.plan?.existing ? "ok" : "new") : r.state === "look" || r.state === "failed" ? "warn" : r.state === "done" ? "ok" : "";
+  const tone = r.state === "ready" ? (r.plan?.existing ? "ok" : "new") : r.state === "look" || r.state === "offline" || r.state === "failed" ? "warn" : r.state === "done" ? "ok" : "";
   const poster = r.target?.itemId ? imageUrl(r.target.itemId, "Primary", 160) : r.art ? remoteImageUrl(r.art) : null;
   const keeps = moving.map((m) => m.to.split("/").pop() ?? m.to);
   const media = r.target?.kind === "tv" || r.target?.kind === "movie" || r.target?.kind === "pack";

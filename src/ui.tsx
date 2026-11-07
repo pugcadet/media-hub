@@ -524,10 +524,27 @@ function Alerts() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const load = () => api.healthAlerts().then(setList).catch(() => setList([]));
+    // While something is down (Jellyfin, the NAS), look again every 20 seconds so the alert goes
+    // away by itself once it's back; otherwise every 10 minutes, and when the app comes back to front.
+    let t = 0;
+    let gone = false;
+    const load = async () => {
+      const l = await api.healthAlerts().catch(() => [] as Alert[]);
+      if (gone) return;
+      setList(l);
+      window.clearTimeout(t);
+      t = window.setTimeout(load, l.some((a) => a.level === "error") ? 20_000 : 10 * 60_000);
+    };
     void load();
-    const t = window.setInterval(load, 10 * 60_000);
-    return () => window.clearInterval(t);
+    const again = () => void load();
+    window.addEventListener("focus", again);
+    window.addEventListener("online", again);
+    return () => {
+      gone = true;
+      window.clearTimeout(t);
+      window.removeEventListener("focus", again);
+      window.removeEventListener("online", again);
+    };
   }, [epoch]);
   useEffect(() => {
     if (!open) return;

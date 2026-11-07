@@ -742,6 +742,12 @@ fn alert_fix(level: &'static str, title: &str, detail: &str, fix: &str) -> Alert
 }
 
 /// Problems worth knowing about, instead of things failing quietly.
+/// Is the library folder (the NAS share) there right now? A quick look, for waiting screens.
+#[tauri::command]
+pub fn library_reachable(state: State<'_, AppState>) -> Result<bool> {
+    Ok(state.settings()?.library_root.as_deref().map(|r| Path::new(r).is_dir()).unwrap_or(false))
+}
+
 #[tauri::command]
 pub async fn health_alerts(state: State<'_, AppState>) -> Result<Vec<Alert>> {
     let mut out = Vec::new();

@@ -126,6 +126,7 @@ pub fn run() {
             library::tags_merge,
             library::make_episode_stills,
             library::health_alerts,
+            library::library_reachable,
             library::sync_picks_playlist,
             library::journal_all,
             library::segment_summary,

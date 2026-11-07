@@ -17,7 +17,7 @@ import { usePageState } from "./saved";
 
 export type CleanupTab = "names" | "duplicates" | "missing" | "folders" | "storage" | "pictures";
 // Folder tidying lives in the Renamer (Renamer → Folders).
-const TABS: CleanupTab[] = ["names", "duplicates", "missing", "storage", "pictures"];
+const TABS: CleanupTab[] = ["names", "duplicates", "storage", "pictures"];
 const asTab = (t?: string): CleanupTab | "" => (TABS.includes(t as CleanupTab) ? (t as CleanupTab) : "");
 
 export default function Cleanup({ status, tab, onNav }: { status: Status; tab?: string; onNav: (v: View) => void }) {

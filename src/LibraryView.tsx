@@ -49,10 +49,14 @@ const ART = TITLE_ART;
 
 const clean = (id: string) => id.replace(/-/g, "").toLowerCase();
 
+/** The list as last shown: opening the Library again shows it at once while it updates quietly. */
+let LIB_ROWS: Row[] | null = null;
+
 export default function LibraryView({ status: st, route }: { status: Status; route: Route }) {
   const epoch = useEpoch();
   const { libraryView, tileSize } = usePrefs();
-  const [rows, setRows] = useState<Row[] | null>(null);
+  const [rows, setRows] = useState<Row[] | null>(LIB_ROWS);
+  useEffect(() => { if (rows) LIB_ROWS = rows; }, [rows]);
   const [error, setError] = useState<string | null>(null);
   const [folder, setFolder] = usePageState<string>("library.folder", route.view === "collections" ? "@collections" : "@all");
   const [filter, setFilter] = usePageState<"todo" | "all" | "ok">("library.filter", "all");

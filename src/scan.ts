@@ -5,7 +5,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { api, DupGroup, HealthRow, MissingReport, OverviewRow, Status, errorText } from "./api";
 import { track, useEpoch, type JobHandle } from "./activity";
-import { folderOff, prefs, usePrefs } from "./prefs";
+import { prefs, usePrefs } from "./prefs";
 import { readSaved, writeSaved } from "./saved";
 import type { TopFolder } from "./FolderTidy";
 import { namesToFix } from "./fixers";
@@ -172,7 +172,7 @@ export interface ScanResult {
 export async function scanEverything(status: Status, opts: { force?: boolean } = {}): Promise<ScanResult> {
   return track("Scanning everything", async (job: JobHandle) => {
     const out: ScanResult = { changed: 0, ran: [], skipped: [], problems: [] };
-    const steps = 8;
+    const steps = 7;
     let step = 0;
     const next = (label: string) => job.update(label, step++ / steps);
     const attempt = async (name: string, f: () => Promise<void>) => {
@@ -238,28 +238,6 @@ export async function scanEverything(status: Status, opts: { force?: boolean } =
     };
 
     const online = (async () => {
-      // 3. Missing episodes: changed shows, shows never checked, everything once a week.
-      await attempt("missing", async () => {
-        const saved = readSaved<Record<string, MissingReport | string>>("missing");
-        const cache = { ...(saved?.data ?? {}) };
-        const ignored = new Set(prefs().missingIgnored);
-        const shows = h.rows.filter((r) => r.kind === "series" && !ignored.has(r.id) && !folderOff(r.libraryFolder));
-        const weekly = stale(saved?.at);
-        const todo = shows.filter((r) => weekly || opts.force || changed.includes(r.id) || !(r.id in cache));
-        let n = 0;
-        await pool(todo, 4, async (sh) => {
-          try {
-            cache[sh.id] = await api.missingEpisodes(sh.id);
-          } catch (e) {
-            cache[sh.id] = errorText(e);
-          }
-          n++;
-          job.update(`Missing episodes · ${n} of ${todo.length}`, (2 + parts_done + n / Math.max(1, todo.length)) / steps);
-        });
-        const at = writeSaved("missing", cache).at;
-        savePart("missing", missingSummary(cache, at));
-      });
-      lanePart("Missing episodes checked");
       await whole("duplicates", async () => {
         const g = await api.findDuplicates();
         const sv = writeSaved("duplicates", g);

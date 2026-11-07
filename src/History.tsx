@@ -22,9 +22,13 @@ interface Entry {
 }
 
 /** Everything Media Hub changed, newest first, from every screen. Undo any of it. */
+/** The list as last shown, so opening History again shows it at once. */
+let HIST: Entry[] | null = null;
+
 export default function History({ status }: { status: Status }) {
   const epoch = useEpoch();
-  const [entries, setEntries] = useState<Entry[] | null>(null);
+  const [entries, setEntriesRaw] = useState<Entry[] | null>(HIST);
+  const setEntries = (e: Entry[] | null) => { HIST = e; setEntriesRaw(e); };
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("");
   const [query, setQuery] = useState("");

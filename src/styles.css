@@ -2496,3 +2496,6 @@ label.m-tagdiff-row { display: grid; grid-template-columns: 18px minmax(0, 110px
 /* The running jobs fill the whole bar in the top bar (shared equally when there are several). */
 .tb-activity .jobs-btn { width: 100%; box-sizing: border-box; }
 .tb-activity .jobs-btn .job { flex: 1 1 0 !important; width: auto !important; max-width: none !important; min-width: 0; }
+
+/* Time left and % never wrap or get squeezed. */
+.job .job-pct { width: auto; flex: 0 0 auto; min-width: max-content; white-space: nowrap; }

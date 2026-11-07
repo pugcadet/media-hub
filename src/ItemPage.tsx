@@ -16,7 +16,6 @@ import { applyArt, askArt, fillOptional, rankImages } from "./ArtPicker";
 import { askIdentify } from "./IdentifyDialog";
 import { askCrop, readPaste, showPreview, type CropSource } from "./ArtTools";
 import { numberYouTube } from "./youtube";
-import { readSaved } from "./saved";
 import { SearchBox } from "./kit";
 import { askRenumber } from "./Renumber";
 
@@ -1064,16 +1063,9 @@ function SeasonPanel({ season, canEdit, subLangs }: { season: JfItem; canEdit: b
     cultures().then(setLangs).catch(() => setLangs([]));
   }, [season.Id, epoch, itemEpoch]);
   const want = useMemo(() => subLangs.map((l) => codesFor(l, langs)), [subLangs, langs]);
-  // Episodes the missing-episodes check found missing in this season (shown in their place).
-  const missing = useMemo(() => {
-    const sid = (season.SeriesId ?? "").replace(/-/g, "");
-    const r = readSaved<Record<string, MissingReport | string>>("missing")?.data?.[sid];
-    return typeof r === "object" && r ? r.missing.filter((m) => m.season === (season.IndexNumber ?? -1)) : [];
-  }, [season.SeriesId, season.IndexNumber, epoch]); // eslint-disable-line react-hooks/exhaustive-deps
   type Row = { kind: "ep"; e: JfChild; n: number } | { kind: "missing"; m: MissingReport["missing"][number]; n: number };
   const rows: Row[] = [
     ...(eps ?? []).map((e) => ({ kind: "ep" as const, e, n: e.IndexNumber ?? 9999 })),
-    ...missing.filter((m) => !(eps ?? []).some((e) => e.IndexNumber === m.episode)).map((m) => ({ kind: "missing" as const, m, n: m.episode })),
   ].sort((a, b) => a.n - b.n);
 
   const subsCell = (e: JfChild) => {

@@ -23,9 +23,13 @@ const when = (iso: string | null) => (iso ? agoText(new Date(iso).getTime()) : "
 /** The jobs most people care about, first; the rest fold away. */
 const MAIN_TASKS = ["RefreshLibrary", "PluginUpdates", "RefreshChapterImages", "RefreshTrickplayImages", "DeleteCacheFiles", "CleanActivityLog"];
 
+/** The overview as last shown, so opening Jellyfin again shows it at once. */
+let SERVER: ServerOverview | null = null;
+
 export default function Server({ status }: { status: Status }) {
   const epoch = useEpoch();
-  const [data, setData] = useState<ServerOverview | null>(null);
+  const [data, setDataRaw] = useState<ServerOverview | null>(SERVER);
+  const setData = (d: ServerOverview) => { SERVER = d; setDataRaw(d); };
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [tick, setTick] = useState(0);

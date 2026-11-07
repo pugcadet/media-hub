@@ -1112,6 +1112,7 @@ export const api = {
   /** Episodes (with a file) without a picture of their own. */
   episodesWithoutPicture: () => invoke<{ id: string; name: string; seriesId: string; series: string }[]>("episodes_without_picture"),
   healthAlerts: () => invoke<Alert[]>("health_alerts"),
+  libraryReachable: () => invoke<boolean>("library_reachable"),
   syncPicksPlaylist: (ids: string[]) => invoke<number>("sync_picks_playlist", { ids }),
   journalAll: (limit: number) => invoke<JournalRow[]>("journal_all", { limit }),
   segmentSummary: (seriesId: string, fresh = false) => invoke<SegSummary>("segment_summary", { seriesId, fresh }),
