@@ -1,12 +1,12 @@
 [1m[92m    Updating[0m crates.io index
-[1m[92m   Compiling[0m media-hub v0.26.0 (/home/runner/work/media-hub/media-hub/src-tauri)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 30.47s
-[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-c918ee07541d2984)
+[1m[92m   Compiling[0m media-hub v0.26.1 (/home/runner/work/media-hub/media-hub/src-tauri)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 36.09s
+[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-947111fde9049d45)
 
-running 197 tests
-test backend::tests::versions ... ok
-test backend::tests::schedules_read_nicely ... ok
+running 199 tests
 test backend::tests::library_rows_compare_with_recommended ... ok
+test backend::tests::schedules_read_nicely ... ok
+test backend::tests::versions ... ok
 test cancel::tests::stop_and_restart ... ok
 test cleanup::tests::languages_group_by_family ... ok
 test collections::tests::episode_cards_point_at_the_show ... ok
@@ -28,15 +28,15 @@ test downloads::tests::search_targets_and_results ... ok
 test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
 test downloads::tests::summarizes_playlists ... ok
 test bulk::tests::drops_release_tags ... ok
-test bulk::tests::plans_files_sidecars_and_folder ... ok
 test fake_jellyfin::tests::a_missing_picture_is_none_not_an_error ... ok
-test fake_jellyfin::tests::clearing_removes_only_that_kind ... ok
+test bulk::tests::plans_files_sidecars_and_folder ... ok
 test fake_jellyfin::tests::a_conflict_reads_again_and_still_saves ... ok
+test fake_jellyfin::tests::clearing_removes_only_that_kind ... ok
 test fake_jellyfin::tests::missing_markers_plugin_is_not_called_a_missing_title ... ok
 test fake_jellyfin::tests::markers_are_saved_like_the_segment_editor_and_confirmed ... ok
 test fake_jellyfin::tests::older_intro_skipper_gets_delete_then_add ... ok
-test fake_jellyfin::tests::position_is_saved_and_read_back ... ok
 test fake_jellyfin::tests::position_falls_back_to_the_older_route_when_the_new_one_keeps_nothing ... ok
+test fake_jellyfin::tests::position_is_saved_and_read_back ... ok
 test fingerprint::tests::fft_matches_a_plain_dft ... ok
 test fake_jellyfin::tests::subtitle_download_limit_is_reported_not_hidden ... ok
 test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
@@ -60,8 +60,10 @@ test inbox::tests::a_title_you_have_is_never_given_a_second_folder ... ok
 test inbox::tests::artists_combine_under_their_first_name ... ok
 test inbox::tests::episodes_get_their_title_and_junk_stays_behind ... ok
 test inbox::tests::episodes_without_a_season_go_in_the_show_folder ... ok
+test inbox::tests::movies_find_the_collection_you_already_have ... ok
 test inbox::tests::plans_episodes_into_the_show_and_skips_what_is_there ... ok
 test inbox::tests::season_folders_follow_the_show ... ok
+test inbox::tests::season_packs_are_seen_as_seasons_of_the_show ... FAILED
 test inbox::tests::show_titles_and_artists ... ok
 test jellyfin::date_tests::dates_look_right ... ok
 test jellyfin::tests::bad_edits_are_refused ... ok
@@ -199,20 +201,23 @@ test updater::tests::checksums_and_assets ... ok
 test updater::tests::swap_keeps_old_when_new_is_missing ... ok
 test updater::tests::versions_compare ... ok
 test fingerprint::tests::survives_noise_like_a_different_encode ... ok
-test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 test fingerprint::tests::unrelated_audio_has_no_match ... ok
+test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 197 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.80s
+failures:
 
-[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-17dd258e41bdbba7)
+---- inbox::tests::season_packs_are_seen_as_seasons_of_the_show stdout ----
 
-running 0 tests
+thread 'inbox::tests::season_packs_are_seen_as_seasons_of_the_show' (5023) panicked at src/inbox.rs:1099:9:
+assertion `left == right` failed
+  left: "movie"
+ right: "tv"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-[1m[92m   Doc-tests[0m media_hub_lib
+failures:
+    inbox::tests::season_packs_are_seen_as_seasons_of_the_show
 
-running 0 tests
+test result: FAILED. 198 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.70s
 
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
+[1m[91merror[0m: test failed, to rerun pass `--lib`
