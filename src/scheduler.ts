@@ -4,6 +4,7 @@ import { api, localDate, Status } from "./api";
 import { track } from "./activity";
 import { scanLibrary } from "./ui";
 import { prefs, setPrefs, subPlan, subSkipped } from "./prefs";
+import { startSubWait } from "./subwait";
 
 let running = false;
 
@@ -87,7 +88,9 @@ export function startScheduler(status: Status): () => void {
   };
   const first = window.setTimeout(tick, 60_000); // give the app a minute to settle
   const t = window.setInterval(tick, 10 * 60_000);
+  const stopSubs = status.readOnly ? () => undefined : startSubWait();
   return () => {
+    stopSubs();
     window.clearTimeout(picksTimer);
     window.clearTimeout(first);
     window.clearInterval(t);

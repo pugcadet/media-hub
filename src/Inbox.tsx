@@ -11,7 +11,7 @@ import { askConfirm } from "./confirm";
 import { IconBtn, PageHead, SearchBox, Seg } from "./kit";
 import { Icon } from "./ui";
 import { nav } from "./nav";
-import { getSubtitles } from "./fixers";
+import { queueSubtitles } from "./subwait";
 import { prefs, setPrefs, usePrefs } from "./prefs";
 
 type State = "checking" | "ready" | "look" | "have" | "placing" | "done" | "failed";
@@ -142,7 +142,10 @@ async function detect(item: InboxItem, ctx: Ctx): Promise<Row> {
 /** The download brings an English subtitle along. */
 const hasEnglish = (p: InboxPlan | null) => !!p?.moves.some((m) => /\.eng(\.forced|\.sdh)*\.(srt|ass|ssa|vtt|sub|sup)$/i.test(m.to));
 /** Subtitle lookup after placing: on for a movie without English ones, off for shows (you tick it). */
-const defaultLook = (kind: string, p: InboxPlan | null) => kind === "movie" && !hasEnglish(p);
+const defaultLook = (kind: string, p: InboxPlan | null) => (kind === "movie" && !hasEnglish(p)) || (kind === "pack" && newWithoutEnglish(p).length > 0);
+/** The new movies of a pack that bring no English subtitle along. */
+const newWithoutEnglish = (p: InboxPlan | null) =>
+  (p?.movies ?? []).filter(([dir, , isNew]) => isNew && !p!.moves.some((m) => m.to.startsWith(`${dir}/`) && /\.eng(\.forced|\.sdh)*\.(srt|ass|ssa|vtt|sub|sup)$/i.test(m.to)));
 const SUB_EXT = /\.(srt|ass|ssa|vtt|sub|idx|sup)$/i;
 const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|tbn)$/i;
 /** "Sample/sample.mkv, 6 other-language subtitles, RARBG.txt, poster.jpg, .nfo" */
@@ -259,8 +262,21 @@ export default function Inbox({ status }: { status: Status }) {
           // Once Jellyfin has the title: English subtitles (when ticked) and its collection.
           let subMsg = "";
           const cur = rowsRef.current?.find((x) => x.item.key === r.item.key) ?? r;
-          const wantSubs = !!cur.look && res.placed.length > 0 && (r.target!.kind === "tv" || r.target!.kind === "movie");
+          const wantSubs = !!cur.look && res.placed.length > 0;
           const coll = r.plan?.collection?.id ? r.plan.collection : null;
+          // English subtitles: kept on a list and looked up the moment Jellyfin shows the title,
+          // so nothing here waits for Jellyfin.
+          if (wantSubs) {
+            const k = r.target!.kind;
+            if (k === "pack") {
+              const list = newWithoutEnglish(r.plan).map(([folder, title]) => ({ folder, kind: "movie" as const, title, at: Date.now() }));
+              queueSubtitles(list);
+              if (list.length) subMsg += ` · English subtitles for ${list.length} movie${list.length === 1 ? "" : "s"} come as soon as Jellyfin shows ${list.length === 1 ? "it" : "them"}`;
+            } else if (k === "tv" || k === "movie") {
+              queueSubtitles([{ folder: r.plan!.folder, kind: k, title: r.target!.title, at: Date.now(), id: r.target!.itemId ?? null }]);
+              subMsg += " · English subtitles come as soon as Jellyfin shows it";
+            }
+          }
           if (r.target!.kind === "pack" && r.plan?.collection && res.placed.length) {
             // Every movie of the pack into the collection (made when it doesn't exist yet).
             const ids: string[] = [];
@@ -280,27 +296,18 @@ export default function Inbox({ status }: { status: Status }) {
                 : await api.collectionCreate(c.name, ids).then(() => true).catch(() => false);
               subMsg += ok ? ` · ${c.id ? "added to" : "made the collection"} “${c.name}”` : ` · couldn't update “${c.name}” in Jellyfin`;
             } else subMsg += ` · Jellyfin hasn't added them yet: make “${c.name}” later`;
-          } else if ((wantSubs || coll) && res.placed.length) {
-            const kind = r.target!.kind === "tv" ? "series" : "movie";
+          } else if (coll && res.placed.length) {
             let id = r.target!.itemId ?? null;
             for (let i = 0; !id && i < 20 && !job.cancelled; i++) {
               job.update("Waiting for Jellyfin to add it", 0.92);
               await new Promise((ok) => setTimeout(ok, 6000));
               id = await api.inboxFindItem(r.plan!.folder, r.target!.kind, r.target!.title).catch(() => null);
             }
-            if (id && coll) {
+            if (id) {
               job.update(`Adding it to “${coll.name}”`, 0.93);
               const ok = await api.collectionAdd(coll.id!, [id]).then(() => true).catch(() => false);
               subMsg += ok ? ` · added to “${coll.name}”` : ` · couldn't add it to “${coll.name}”`;
-            } else if (coll) subMsg += ` · Jellyfin hasn't added it yet: add it to “${coll.name}” later`;
-            if (wantSubs) {
-              if (r.target!.itemId) await new Promise((ok) => setTimeout(ok, 15000));
-              if (id) {
-                job.update("Looking up English subtitles", 0.95);
-                const got = await getSubtitles({ id, kind }, ["eng"], job).catch(() => 0);
-                subMsg += got ? ` · ${got} English subtitle${got === 1 ? "" : "s"} found` : " · no English subtitles found yet";
-              } else subMsg += " · Jellyfin hasn't added it yet: look up subtitles from the Library later";
-            }
+            } else subMsg += ` · Jellyfin hasn't added it yet: add it to “${coll.name}” later`;
           }
           const msg = `${res.placed.length} placed${res.skipped ? ` · ${res.skipped} already there` : ""}${res.trashed ? " · download in the Trash" : ""}${subMsg}`;
           if (res.failed.length) throw `${msg} · ${res.failed.length} didn't work: ${res.failed[0]}`;
@@ -432,8 +439,8 @@ function InboxRowView({ r, picked, onPick, onEdit, onRemove, onPlaceOne, busy, o
           <div className="ibx-grid">
             <span className="ibx-k good">Keeps</span><span className="ibx-v">{keeps.length ? keeps.slice(0, 3).join(", ") + (keeps.length > 3 ? ` and ${keeps.length - 3} more` : "") : "nothing new"}</span>
             <span className="ibx-k warn">Trash</span><span className="ibx-v muted">{trashText(r.plan.leftovers)}{r.plan.leftovers.length ? " (with the download)" : ""}</span>
-            {r.target?.kind !== "pack" && <span className="ibx-k muted">Subtitles</span>}
-            {r.target?.kind !== "pack" && <label className="check small ibx-look"><input type="checkbox" checked={!!r.look} disabled={busy || r.state === "placing"} onChange={(e) => onLook(e.target.checked)} />Look up English subtitles after placing<span className="muted"> · {hasEnglish(r.plan) ? "English is included" : "none in the download"}</span></label>}
+            <span className="ibx-k muted">Subtitles</span>
+            <label className="check small ibx-look"><input type="checkbox" checked={!!r.look} disabled={busy || r.state === "placing"} onChange={(e) => onLook(e.target.checked)} />Look up English subtitles after placing<span className="muted"> · {r.target?.kind === "pack" ? (newWithoutEnglish(r.plan).length ? `${newWithoutEnglish(r.plan).length} new movie${newWithoutEnglish(r.plan).length === 1 ? "" : "s"} without English` : "English is included") : hasEnglish(r.plan) ? "English is included" : "none in the download"}</span></label>
           </div>
         )}
         <span className="small muted">{r.result ?? (r.plan?.note && r.state === "ready" ? `${r.plan.note}${r.why.includes("already there") ? ` · ${r.why.split(" · ").slice(1).join(" · ")}` : ""}` : r.why)}</span>

@@ -227,14 +227,16 @@ fn read_item(path: &Path, key: &str, modified: u64) -> Option<InboxItem> {
     // Several different movies in one download (a collection pack).
     if kind == "movie" && is_folder {
         let mut seen: Vec<(String, Option<i32>)> = Vec::new();
-        for f in files.iter().filter(|f| f.video && !is_sample(&f.rel)) {
-            let p = parse_name(split_ext(f.rel.rsplit('/').next().unwrap_or(&f.rel)).0);
-            let k = (folder_key(&p.title).0, p.year);
+        let mains: Vec<&InboxFile> = files.iter().filter(|f| f.video && !is_sample(&f.rel) && !is_part(&f.rel)).collect();
+        for f in &mains {
+            let (title, year) = movie_of(&f.rel);
+            let k = (folder_key(&title).0, year);
             if !k.0.is_empty() && !seen.contains(&k) {
                 seen.push(k);
             }
         }
-        if seen.len() >= 2 {
+        // Different movies inside, or a download called a collection with several movies in it.
+        if seen.len() >= 2 || (mains.len() >= 2 && pack_word(&stem)) {
             let name = collection_name(&stem);
             return Some(InboxItem { key: key.into(), is_folder, size, modified, kind: "pack", title: if name.is_empty() { stem.clone() } else { name }, year: None, files, music: None });
         }
@@ -490,7 +492,7 @@ pub fn sub_language(rel: &str, langs: &[String]) -> Option<(Option<String>, Stri
 
 fn is_sample(rel: &str) -> bool {
     let l = rel.to_lowercase();
-    l.split(|c: char| !c.is_alphanumeric()).any(|t| t == "sample" || t == "trailer" || t == "featurette")
+    l.split(|c: char| !c.is_alphanumeric()).any(|t| matches!(t, "sample" | "trailer" | "trailers" | "featurette" | "featurettes" | "extras" | "bonus" | "deleted" | "interview" | "interviews"))
 }
 
 /// "Episode 5", "Aflevering 3", "TBA": not a real episode title.
@@ -555,6 +557,20 @@ pub fn plan_moves(root: &Path, item: &InboxItem, t: &Target, folder: &str, exist
         let parent = f.rel.rsplit('/').nth(1).unwrap_or("");
         if let Some(v) = videos.iter().copied().find(|v| !parent.is_empty() && split_ext(&name_of(&v.rel)).0 == parent) {
             return Some(v);
+        }
+        // Deeper in the download ("Police Academy 2 (1985)/Subs/English.srt"): the one video in
+        // the nearest folder above it.
+        let dir_of = |rel: &str| rel.rsplit_once('/').map(|x| x.0.to_string()).unwrap_or_default();
+        let mut dir = dir_of(&f.rel);
+        loop {
+            let here: Vec<&InboxFile> = videos.iter().copied().filter(|v| { let d = dir_of(&v.rel); d == dir || (!dir.is_empty() && d.starts_with(&format!("{dir}/"))) }).collect();
+            if here.len() == 1 {
+                return Some(here[0]);
+            }
+            if !here.is_empty() || dir.is_empty() {
+                break;
+            }
+            dir = dir_of(&dir);
         }
         if let Some(m) = parse_episode(split_ext(&n).0, None) {
             if let Some(v) = videos.iter().copied().find(|v| v.season == Some(m.season) && v.episodes == m.episodes) {
@@ -901,13 +917,43 @@ pub fn find_movie(root: &Path, title: &str, year: Option<i32>) -> Option<String>
 fn pack_movies(item: &InboxItem) -> Vec<(String, String, Option<i32>)> {
     item.files
         .iter()
-        .filter(|f| f.video && !is_sample(&f.rel))
+        .filter(|f| f.video && !is_sample(&f.rel) && !is_part(&f.rel))
         .map(|f| {
-            let p = parse_name(split_ext(f.rel.rsplit('/').next().unwrap_or(&f.rel)).0);
-            let p = if p.title.is_empty() { parse_name(f.rel.rsplit('/').nth(1).unwrap_or("")) } else { p };
-            (f.rel.clone(), p.title, p.year)
+            let (title, year) = movie_of(&f.rel);
+            (f.rel.clone(), title, year)
         })
         .collect()
+}
+
+/// Which movie a video in a pack is: from its file name, or from the folder it sits in when
+/// that says more ("Police Academy 2 (1985)/movie.mkv", "Part 3/Police.Academy.mkv").
+fn movie_of(rel: &str) -> (String, Option<i32>) {
+    let parts: Vec<&str> = rel.split('/').collect();
+    let file = parse_name(split_ext(parts[parts.len() - 1]).0);
+    // The nearest folder that names a movie (skips "Subs", "Video", "CD1" and the like).
+    let dir = parts[..parts.len() - 1].iter().rev().map(|d| parse_name(d)).find(|p| !p.title.is_empty() && !matches!(p.title.to_lowercase().as_str(), "video" | "videos" | "movie" | "movies" | "subs" | "cd1" | "cd2" | "disc 1" | "disc 2"));
+    match dir {
+        Some(d) if file.title.is_empty() => (d.title, d.year),
+        Some(d) if file.year.is_none() && d.year.is_some() => (d.title, d.year),
+        // "movie.mkv", "1.mkv": a name that says nothing.
+        Some(d) if file.title.chars().filter(|c| c.is_alphabetic()).count() < 3 || matches!(file.title.to_lowercase().as_str(), "movie" | "film" | "video" | "main") => (d.title, d.year.or(file.year)),
+        _ => (file.title, file.year),
+    }
+}
+
+/// "CD2", "Part 2 of 2", "disc2": one half of a movie split in pieces, not a movie of its own.
+fn is_part(rel: &str) -> bool {
+    let n = rel.rsplit('/').next().unwrap_or(rel).to_lowercase();
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"(?:^|[ ._\-\[(])(?:cd|disc|disk|dvd)[ ._\-]?[2-9](?:[ ._\-\])]|$)").unwrap());
+    re.is_match(&split_ext(&n).0.to_string())
+}
+
+/// The download's name says it holds several movies ("Complete Collection", "Trilogy", "1-7").
+fn pack_word(name: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"(?i)\b(?:collection|complete|trilogy|quadrilogy|pentalogy|hexalogy|anthology|saga|box ?set|boxset|\d+ ?(?:film|movie)s?|\d{1,2} ?- ?\d{1,2}|(?:19|20)\d\d ?- ?(?:19|20)\d\d)\b").unwrap());
+    re.is_match(&name.replace(['.', '_'], " "))
 }
 
 #[tauri::command]
@@ -1439,6 +1485,54 @@ mod tests {
             "Movies/The Hunger Games Collection/The Hunger Games - Mockingjay - Part 2 (2015)/The Hunger Games - Mockingjay - Part 2 (2015).mkv",
         ], "{moves:?}");
         assert_eq!(moves.iter().filter(|m| m.have).count(), 3);
+        let _ = std::fs::remove_dir_all(&root);
+        movie_index_forget();
+    }
+
+    #[test]
+    fn a_pack_with_a_folder_per_movie_and_subtitles_deeper_inside() {
+        let root = std::env::temp_dir().join(format!("mh-inbox9-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Movies/Police Academy Collection/Police Academy (1984)")).unwrap();
+        let dl = root.join("dl/Police Academy - The Complete Collection (1984-1994) 1080p");
+        for n in [
+            "Police Academy (1984)/Police.Academy.1984.1080p.mkv",
+            "Police Academy (1984)/Subs/English.srt",
+            "Police Academy (1984)/Subs/French.srt",
+            "Police Academy 2 - Their First Assignment (1985)/movie.mkv",
+            "Police Academy 2 - Their First Assignment (1985)/Subs/2_English.srt",
+            "Police Academy 3 - Back in Training (1986)/Police Academy 3.mkv",
+            "Police Academy 3 - Back in Training (1986)/Sample/sample.mkv",
+            "Police Academy 3 - Back in Training (1986)/Extras/Deleted Scenes.mkv",
+        ] {
+            let p = dl.join(n);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+        let item = read_item(&dl, "Police Academy - The Complete Collection (1984-1994) 1080p", 0).unwrap();
+        assert_eq!(item.kind, "pack");
+        assert_eq!(item.title, "Police Academy Collection");
+        let movies = pack_movies(&item);
+        let names: Vec<(String, Option<i32>)> = movies.iter().map(|m| (folder_key(&m.1).0, m.2)).collect();
+        assert_eq!(names, vec![("policeacademy".to_string(), Some(1984)), ("policeacademy2theirfirstassignment".to_string(), Some(1985)), ("policeacademy3backintraining".to_string(), Some(1986))], "{names:?}");
+        movie_index_forget();
+        let base = "Movies/Police Academy Collection";
+        let mut t = Target { kind: "pack".into(), item_id: None, top: "Movies".into(), title: item.title.clone(), year: None, season: None, artist: None, album: None, tmdb: None, pack: HashMap::new() };
+        for (rel, title, year) in &movies {
+            match find_movie(&root, title, *year) {
+                Some(d) => { t.pack.insert(rel.clone(), (d, true)); }
+                None => { t.pack.insert(rel.clone(), (format!("{base}/{} ({})", title, year.unwrap()), false)); }
+            }
+        }
+        let moves = plan_moves(&root, &item, &t, base, false, &["eng".to_string()], &HashMap::new());
+        let mut new: Vec<String> = moves.iter().filter(|m| !m.have).map(|m| m.to.rsplit('/').next().unwrap().to_string()).collect();
+        new.sort();
+        assert_eq!(new.len(), 3, "{moves:?}");
+        assert!(new[0].ends_with("(1985).eng.srt") && new[1].ends_with("(1985).mkv") && new[2].ends_with("(1986).mkv"), "{new:?}");
+        // The one you have: its video and English subtitle are doubles.
+        assert_eq!(moves.iter().filter(|m| m.have).count(), 2, "{moves:?}");
+        assert!(pack_word("The Matrix Trilogy") && pack_word("Alien.Quadrilogy.1080p") && pack_word("Rocky 1-6") && !pack_word("Heat.1995.1080p.x265-RARBG"));
+        assert!(is_part("Movie.CD2.avi") && !is_part("Movie.2.avi"));
         let _ = std::fs::remove_dir_all(&root);
         movie_index_forget();
     }

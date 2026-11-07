@@ -68,6 +68,7 @@
     picks_leftovers: 1,
     inbox_scan: ["/Users/me/Downloads", [
       { key: "Severance.S02E05.1080p.WEB.h264-ETHEL.mkv", isFolder: false, size: 2.1e9, modified: Math.floor(Date.now() / 1000) - 600, kind: "tv", title: "Severance", year: null, files: [{ rel: "Severance.S02E05.1080p.WEB.h264-ETHEL.mkv", size: 2.1e9, video: true, season: 2, episodes: [5] }], music: null },
+      { key: "Police Academy - The Complete Collection (1984-1994) 1080p", isFolder: true, size: 30e9, modified: Math.floor(Date.now() / 1000) - 1800, kind: "pack", title: "Police Academy Collection", year: null, files: [1, 2, 3].map((n) => ({ rel: `Police Academy ${n} (${1983 + n})/Police.Academy.${n}.mkv`, size: 10e9, video: true, season: null, episodes: [] })), music: null },
       { key: "Dune.Part.Two.2024.2160p", isFolder: true, size: 18e9, modified: Math.floor(Date.now() / 1000) - 3600, kind: "movie", title: "Dune Part Two", year: 2024, files: [{ rel: "Dune.Part.Two.2024.2160p/Dune.Part.Two.2024.2160p.mkv", size: 18e9, video: true, season: null, episodes: [] }], music: null },
       { key: "Drake feat. Rihanna - Take Care", isFolder: true, size: 9e7, modified: Math.floor(Date.now() / 1000) - 7200, kind: "music", title: "Take Care", year: 2011, files: [], music: { artist: "Drake", album: "Take Care", year: 2011 } },
     ]],
@@ -76,7 +77,14 @@
       { folder: "TV", kind: "tv", shows: [{ folder: "TV/Bluey", name: "Bluey", loose: 12, seasons: 0 }], looseMovies: [], folderedMovies: [] },
       { folder: "YouTube", kind: "tv", shows: [], looseMovies: [], folderedMovies: [] },
     ],
-    inbox_resolve: { movies: [], folder: "TV/Severance (2022)", existing: true, moves: [{ from: "Severance.S02E05.1080p.WEB.h264-ETHEL.mkv", to: "TV/Severance (2022)/Season 02/Severance - S02E05 - Trojan's Horse.mkv", have: false }, { from: "Subs/2_English.srt", to: "TV/Severance (2022)/Season 02/Severance - S02E05 - Trojan's Horse.eng.srt", have: false }], leftovers: ["Sample/sample.mkv", "Subs/3_French.srt", "Subs/4_Dutch.srt", "RARBG.txt", "poster.jpg", "Severance.S02E05.nfo"], note: "Into your folder “Severance (2022)”.", collection: null },
+    inbox_resolve: (a) => a?.target?.kind === "pack" ? { folder: "Movies/Police Academy Collection", existing: true, moves: [
+      { from: "Police Academy 1 (1984)/Police.Academy.1.mkv", to: "Movies/Police Academy Collection/Police Academy (1984)/Police Academy (1984).mkv", have: true },
+      { from: "Police Academy 2 (1985)/Police.Academy.2.mkv", to: "Movies/Police Academy Collection/Police Academy 2: Their First Assignment (1985)/Police Academy 2: Their First Assignment (1985).mkv", have: false },
+      { from: "Police Academy 2 (1985)/Subs/English.srt", to: "Movies/Police Academy Collection/Police Academy 2: Their First Assignment (1985)/Police Academy 2: Their First Assignment (1985).eng.srt", have: false },
+      { from: "Police Academy 3 (1986)/Police.Academy.3.mkv", to: "Movies/Police Academy Collection/Police Academy 3: Back in Training (1986)/Police Academy 3: Back in Training (1986).mkv", have: false }],
+      leftovers: ["Police Academy 2 (1985)/Subs/French.srt", "RARBG.txt"], note: "3 movies in this download: 1 you already have (those copies go to the Trash with the download); the 2 new go into your folder “Police Academy Collection”, each in its own folder and join “Police Academy Collection” in Jellyfin.",
+      collection: { name: "Police Academy Collection", id: "c1", folder: "Movies/Police Academy Collection" },
+      movies: [["Movies/Police Academy Collection/Police Academy (1984)", "Police Academy", false], ["Movies/Police Academy Collection/Police Academy 2: Their First Assignment (1985)", "Police Academy 2: Their First Assignment", true], ["Movies/Police Academy Collection/Police Academy 3: Back in Training (1986)", "Police Academy 3: Back in Training", true]] } : { movies: [], folder: "TV/Severance (2022)", existing: true, moves: [{ from: "Severance.S02E05.1080p.WEB.h264-ETHEL.mkv", to: "TV/Severance (2022)/Season 02/Severance - S02E05 - Trojan's Horse.mkv", have: false }, { from: "Subs/2_English.srt", to: "TV/Severance (2022)/Season 02/Severance - S02E05 - Trojan's Horse.eng.srt", have: false }], leftovers: ["Sample/sample.mkv", "Subs/3_French.srt", "Subs/4_Dutch.srt", "RARBG.txt", "poster.jpg", "Severance.S02E05.nfo"], note: "Into your folder “Severance (2022)”.", collection: null },
     inbox_list: ["/Users/me/Downloads", [{}, {}, {}]],
     subtitle_options: { file: "Severance (2022) - S02E04.mkv", current: [{ index: 3, language: "eng", title: "", external: true, forced: false, path: "/data/TV/Severance (2022)/Season 02/Severance (2022) - S02E04.eng.srt" }],
       results: [{ sub: { Id: "s1", Name: "Severance.S02E04.1080p.WEB.h264-ETHEL", ProviderName: "Open Subtitles", DownloadCount: 18402, Format: "srt" }, score: 100, reasons: ["matches your file"] }, { sub: { Id: "s2", Name: "Severance.2x04.WEBRip", ProviderName: "subbuzz", DownloadCount: 9113, Format: "srt" }, score: 82, reasons: [] }] },
@@ -106,7 +114,7 @@
     invoke: async (cmd, args) => {
       window.__CALLS__ = (window.__CALLS__ || []).concat(cmd);
       if (cmd.startsWith("plugin:")) return cmd.includes("listen") ? cb++ : null;
-      if (cmd in fixtures) return JSON.parse(JSON.stringify(fixtures[cmd]));
+      if (cmd in fixtures) return JSON.parse(JSON.stringify(typeof fixtures[cmd] === "function" ? fixtures[cmd](args) : fixtures[cmd]));
       return fallback(cmd);
     },
   };

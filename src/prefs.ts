@@ -139,6 +139,19 @@ export interface Prefs {
   dupDismissed: string;
   /** The folders notice on Home was dismissed for this result ("shows:movies"). */
   foldersDismissed: string;
+  /** Inbox: placed titles waiting for Jellyfin before their subtitles are looked up. */
+  subWait: SubWait[];
+}
+
+/** A title placed from the Inbox that gets English subtitles once Jellyfin shows it. */
+export interface SubWait {
+  folder: string;
+  kind: "tv" | "movie";
+  title: string;
+  /** When it was placed (ms). */
+  at: number;
+  /** Jellyfin's id when it already had the title (a show you add episodes to). */
+  id?: string | null;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -195,6 +208,7 @@ export const DEFAULT_PREFS: Prefs = {
   introsFolders: null,
   dupDismissed: "",
   foldersDismissed: "",
+  subWait: [],
 };
 
 /** Ready-made highlight colours for Settings → Look. */
