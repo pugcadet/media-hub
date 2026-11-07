@@ -573,7 +573,7 @@ export function ActivityBar({ left }: { left?: ReactNode } = {}) {
             {j.done && !j.error && <span className="ok"><Icon name="check" size={14} /></span>}
             <span className="strong small">{j.label}</span>
             <span className={`small ellipsis ${j.error ? "bad" : "muted"}`}>{j.error ?? j.detail}</span>
-            {!j.done && j.progress != null && <span className="job-pct mono small">{Math.round(j.progress * 100)}%</span>}
+            {!j.done && j.progress != null && <span className="job-pct mono small">{(() => { const e = etaSeconds(j.id, j.progress); return e != null ? `${etaText(e)} · ` : ""; })()}{Math.round(j.progress * 100)}%</span>}
             {!j.done && <span className={`job-bar ${j.progress == null ? "busy" : ""}`}><span style={{ width: j.progress == null ? undefined : `${Math.round(j.progress * 100)}%` }} /></span>}
           </span>
         ))}
@@ -583,6 +583,42 @@ export function ActivityBar({ left }: { left?: ReactNode } = {}) {
       {open && <Processes onClose={() => setOpen(false)} />}
     </div>
   );
+}
+
+/* Time left: from how fast the job moved over the last minute, not since it started, so a slow
+   start (waiting for Jellyfin, reading the NAS) doesn't skew it. Smoothed so it doesn't jump. */
+const etaSamples = new Map<number, { t: number; p: number }[]>();
+const etaLast = new Map<number, { at: number; s: number }>();
+export function etaSeconds(id: number, progress: number | null | undefined): number | null {
+  if (progress == null || progress <= 0 || progress >= 1) return null;
+  const now = Date.now();
+  const list = etaSamples.get(id) ?? [];
+  if (!list.length || list[list.length - 1].p !== progress) list.push({ t: now, p: progress });
+  while (list.length > 2 && now - list[0].t > 60_000) list.shift();
+  etaSamples.set(id, list);
+  const first = list[0], last = list[list.length - 1];
+  const span = (last.t - first.t) / 1000;
+  const prev = etaLast.get(id);
+  if (span < 4 || last.p <= first.p) {
+    // Not enough movement yet: keep counting down the last guess.
+    return prev ? Math.max(1, prev.s - (now - prev.at) / 1000) : null;
+  }
+  const rate = (last.p - first.p) / span; // progress per second
+  let est = (1 - progress) / rate;
+  // Time since the last step counts too (it's still working on the next one).
+  est = Math.max(1, est - (now - last.t) / 1000);
+  if (prev) {
+    const counted = Math.max(1, prev.s - (now - prev.at) / 1000);
+    est = counted * 0.7 + est * 0.3;
+  }
+  etaLast.set(id, { at: now, s: est });
+  return est;
+}
+export function etaText(s: number): string {
+  if (s < 50) return `${Math.max(5, Math.round(s / 5) * 5)} s`;
+  if (s < 600) { const m = Math.floor(s / 60), r = Math.round((s % 60) / 10) * 10; return r === 60 ? `${m + 1} min` : r ? `${m} min ${r} s` : `${m} min`; }
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  return `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`;
 }
 
 /** Every job of this session: what it's doing now, each step it took, and why it failed. */
@@ -601,13 +637,10 @@ function Processes({ onClose }: { onClose: () => void }) {
   const time = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
   const dur = (s: number) => (s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`);
   const took = (x: JobRecord) => dur(Math.round(((x.ended ?? Date.now()) - x.started) / 1000));
-  /** "about 2 min left", from how far it got so far (once there's enough to go on). */
   const left = (x: JobRecord) => {
-    if (x.state !== "running" || x.progress == null || x.progress < 0.03 || x.progress >= 1) return "";
-    const spent = (Date.now() - x.started) / 1000;
-    if (spent < 5) return "";
-    const s = Math.round((spent / x.progress) * (1 - x.progress));
-    return ` · about ${s < 60 ? `${Math.max(5, Math.round(s / 5) * 5)} s` : dur(Math.round(s / 60) * 60).replace(/ 0 s$/, "")} left`;
+    if (x.state !== "running") return "";
+    const s = etaSeconds(x.id, x.progress);
+    return s == null ? "" : ` · about ${etaText(s)} left`;
   };
   const [, tick] = useState(0);
   useEffect(() => { const t = window.setInterval(() => tick((n) => n + 1), 1000); return () => window.clearInterval(t); }, []);

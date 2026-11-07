@@ -435,14 +435,15 @@ export interface InboxItem {
   isFolder: boolean;
   size: number;
   modified: number;
-  kind: "tv" | "movie" | "music" | "other";
+  /** "pack": several movies in one download (a collection). */
+  kind: "tv" | "movie" | "music" | "other" | "pack";
   title: string;
   year: number | null;
   files: InboxFile[];
   music: { artist: string; album: string; year: number | null } | null;
 }
 export interface InboxTarget {
-  kind: "tv" | "movie" | "music" | "other";
+  kind: "tv" | "movie" | "music" | "other" | "pack";
   itemId: string | null;
   top: string;
   title: string;
@@ -468,6 +469,8 @@ export interface InboxPlan {
   note: string;
   /** A movie that's part of a collection you already have. */
   collection: { name: string; id: string | null; folder: string | null } | null;
+  /** A collection pack: every movie as [folder, title, new]. */
+  movies: [string, string, boolean][];
 }
 
 export interface MovieFolder {

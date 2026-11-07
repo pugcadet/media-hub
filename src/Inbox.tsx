@@ -57,6 +57,7 @@ interface Ctx {
 
 /** The main folder new things of a kind go to: your choice, else where most of them are. */
 function defaultTop(kind: InboxTarget["kind"], ctx: Ctx): string {
+  if (kind === "pack") kind = "movie";
   const chosen = prefs().inboxTop[kind];
   if (chosen && ctx.tops.includes(chosen)) return chosen;
   const most = (rows: HealthRow[]) => {
@@ -89,6 +90,8 @@ async function detect(item: InboxItem, ctx: Ctx): Promise<Row> {
     row = m
       ? { ...base, state: "ready", target: t({ kind: "music", artist: m.artist, album: m.album, year: m.year, title: m.album }), why: `Album by ${m.artist}` }
       : { ...base, target: t({ kind: "music" }), why: "No artist and album in the songs' tags: fill them in" };
+  } else if (item.kind === "pack") {
+    row = { ...base, state: "ready", target: t({ kind: "pack", year: null }), why: "Several movies in one download" };
   } else if (item.kind === "tv") {
     const noSeason = item.files.some((f) => f.video && f.season == null);
     const hit = libraryMatches(ctx.shows, item.title, item.year)[0];
@@ -258,7 +261,26 @@ export default function Inbox({ status }: { status: Status }) {
           const cur = rowsRef.current?.find((x) => x.item.key === r.item.key) ?? r;
           const wantSubs = !!cur.look && res.placed.length > 0 && (r.target!.kind === "tv" || r.target!.kind === "movie");
           const coll = r.plan?.collection?.id ? r.plan.collection : null;
-          if ((wantSubs || coll) && res.placed.length) {
+          if (r.target!.kind === "pack" && r.plan?.collection && res.placed.length) {
+            // Every movie of the pack into the collection (made when it doesn't exist yet).
+            const ids: string[] = [];
+            for (const [i, [folder, title]] of r.plan.movies.entries()) {
+              let id: string | null = null;
+              for (let n = 0; !id && n < 10 && !job.cancelled; n++) {
+                job.update(`Waiting for Jellyfin to add ${title}`, 0.9 + (0.08 * i) / Math.max(1, r.plan.movies.length));
+                id = await api.inboxFindItem(folder, "movie", title).catch(() => null);
+                if (!id) await new Promise((ok) => setTimeout(ok, 6000));
+              }
+              if (id) ids.push(id);
+            }
+            const c = r.plan.collection;
+            if (ids.length) {
+              const ok = c.id
+                ? await api.collectionAdd(c.id, ids).then(() => true).catch(() => false)
+                : await api.collectionCreate(c.name, ids).then(() => true).catch(() => false);
+              subMsg += ok ? ` · ${c.id ? "added to" : "made the collection"} “${c.name}”` : ` · couldn't update “${c.name}” in Jellyfin`;
+            } else subMsg += ` · Jellyfin hasn't added them yet: make “${c.name}” later`;
+          } else if ((wantSubs || coll) && res.placed.length) {
             const kind = r.target!.kind === "tv" ? "series" : "movie";
             let id = r.target!.itemId ?? null;
             for (let i = 0; !id && i < 20 && !job.cancelled; i++) {
@@ -383,11 +405,12 @@ function InboxRowView({ r, picked, onPick, onEdit, onRemove, onPlaceOne, busy, o
   const firstVideo = moving.find((m) => !SUB_EXT.test(m.to))?.to ?? moving[0]?.to;
   const dest = r.state === "have" ? r.plan?.folder ?? "" : moving.length > 2 ? `${r.plan?.folder}/ (${moving.length} files)` : firstVideo ?? r.plan?.folder ?? "";
   const what = r.target ? `${r.target.title}${r.target.year ? ` (${r.target.year})` : ""}` : r.item.title || r.item.key;
-  const label = r.state === "ready" ? (r.plan?.existing ? "Into your existing folder" : "New folder") : STATE_LABEL[r.state];
+  const packCount = r.target?.kind === "pack" ? r.plan?.movies.length ?? 0 : 0;
+  const label = r.state === "ready" ? (packCount ? `${packCount} movies` : r.plan?.existing ? "Into your existing folder" : "New folder") : STATE_LABEL[r.state];
   const tone = r.state === "ready" ? (r.plan?.existing ? "ok" : "new") : r.state === "look" || r.state === "failed" ? "warn" : r.state === "done" ? "ok" : "";
   const poster = r.target?.itemId ? imageUrl(r.target.itemId, "Primary", 160) : r.art ? remoteImageUrl(r.art) : null;
   const keeps = moving.map((m) => m.to.split("/").pop() ?? m.to);
-  const media = r.target?.kind === "tv" || r.target?.kind === "movie";
+  const media = r.target?.kind === "tv" || r.target?.kind === "movie" || r.target?.kind === "pack";
   return (
     <div className={`ibx-card s-${r.state} t-${tone}`}>
       <input type="checkbox" aria-label={`Select ${r.item.key}`} disabled={r.state !== "ready" || busy} checked={picked && r.state === "ready"} onChange={(e) => onPick(e.target.checked)} />
@@ -409,8 +432,8 @@ function InboxRowView({ r, picked, onPick, onEdit, onRemove, onPlaceOne, busy, o
           <div className="ibx-grid">
             <span className="ibx-k good">Keeps</span><span className="ibx-v">{keeps.length ? keeps.slice(0, 3).join(", ") + (keeps.length > 3 ? ` and ${keeps.length - 3} more` : "") : "nothing new"}</span>
             <span className="ibx-k warn">Trash</span><span className="ibx-v muted">{trashText(r.plan.leftovers)}{r.plan.leftovers.length ? " (with the download)" : ""}</span>
-            <span className="ibx-k muted">Subtitles</span>
-            <label className="check small ibx-look"><input type="checkbox" checked={!!r.look} disabled={busy || r.state === "placing"} onChange={(e) => onLook(e.target.checked)} />Look up English subtitles after placing<span className="muted"> · {hasEnglish(r.plan) ? "English is included" : "none in the download"}</span></label>
+            {r.target?.kind !== "pack" && <span className="ibx-k muted">Subtitles</span>}
+            {r.target?.kind !== "pack" && <label className="check small ibx-look"><input type="checkbox" checked={!!r.look} disabled={busy || r.state === "placing"} onChange={(e) => onLook(e.target.checked)} />Look up English subtitles after placing<span className="muted"> · {hasEnglish(r.plan) ? "English is included" : "none in the download"}</span></label>}
           </div>
         )}
         <span className="small muted">{r.result ?? (r.plan?.note && r.state === "ready" ? `${r.plan.note}${r.why.includes("already there") ? ` · ${r.why.split(" · ").slice(1).join(" · ")}` : ""}` : r.why)}</span>

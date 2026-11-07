@@ -2493,3 +2493,6 @@ label.m-tagdiff-row { display: grid; grid-template-columns: 18px minmax(0, 110px
 .m-et-tools { display: flex; align-items: center; gap: 8px; }
 .m-also { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 10px; background: #1a1a1a; border: 1px solid #2b2b2b; align-items: flex-start; }
 .lib-checks .link { white-space: nowrap; }
+/* The running jobs fill the whole bar in the top bar (shared equally when there are several). */
+.tb-activity .jobs-btn { width: 100%; box-sizing: border-box; }
+.tb-activity .jobs-btn .job { flex: 1 1 0 !important; width: auto !important; max-width: none !important; min-width: 0; }

@@ -29,8 +29,8 @@ export async function saveMany(items: SaveItem[], opts: { job?: JobHandle; onLin
   const total = items.length;
   for (const [i, it] of items.entries()) {
     if (opts.job?.cancelled) { res.stopped = true; break; }
-    const left = i > 0 ? Math.round(((Date.now() - started) / i) * (total - i) / 1000) : null;
-    opts.job?.update(`Saving to Jellyfin: ${i} of ${total} episodes done${left ? `, about ${left < 60 ? `${left} s` : `${Math.round(left / 60)} min`} left` : ""}`, total ? i / total : null);
+    void started;
+    opts.job?.update(`Saving to Jellyfin: ${i} of ${total} episodes done`, total ? i / total : null);
     opts.onLine?.({ ep: it.label, mark: "busy", text: "Saving now…" }, i, total);
     let line: SaveLine;
     for (let attempt = 0; ; attempt++) {

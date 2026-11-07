@@ -224,6 +224,21 @@ fn read_item(path: &Path, key: &str, modified: u64) -> Option<InboxItem> {
     }
     let has_eps = files.iter().any(|f| f.video && f.season.is_some());
     let kind: &'static str = if has_eps || kind_guess == "tv" { "tv" } else { "movie" };
+    // Several different movies in one download (a collection pack).
+    if kind == "movie" && is_folder {
+        let mut seen: Vec<(String, Option<i32>)> = Vec::new();
+        for f in files.iter().filter(|f| f.video && !is_sample(&f.rel)) {
+            let p = parse_name(split_ext(f.rel.rsplit('/').next().unwrap_or(&f.rel)).0);
+            let k = (folder_key(&p.title).0, p.year);
+            if !k.0.is_empty() && !seen.contains(&k) {
+                seen.push(k);
+            }
+        }
+        if seen.len() >= 2 {
+            let name = collection_name(&stem);
+            return Some(InboxItem { key: key.into(), is_folder, size, modified, kind: "pack", title: if name.is_empty() { stem.clone() } else { name }, year: None, files, music: None });
+        }
+    }
     let (title, year) = if kind == "tv" {
         // The show's name: before the episode marker of the folder or the first episode.
         let (t, y) = show_title_of(&stem);
@@ -286,6 +301,9 @@ pub struct Target {
     /// A movie's TMDB id (to find the collection it belongs to).
     #[serde(default)]
     pub tmdb: Option<String>,
+    /// A collection pack: each movie file → (its folder, already in your library).
+    #[serde(skip)]
+    pub pack: HashMap<String, (String, bool)>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -314,6 +332,9 @@ pub struct InboxPlan {
     pub note: String,
     /// A movie that's part of a collection you already have.
     pub collection: Option<CollectionHit>,
+    /// A collection pack: every movie's folder, title and whether it's new (to find them in
+    /// Jellyfin after placing and put them in the collection).
+    pub movies: Vec<(String, String, bool)>,
 }
 
 /// The collection a new movie belongs with.
@@ -327,15 +348,29 @@ pub struct CollectionHit {
     pub folder: Option<String>,
 }
 
-/// What a collection is called without the extra words: "The Alien Collection" → "alien".
+/// A collection's name without the extra words: "Indiana Jones Collection 1-5 (1981) 1080p" →
+/// "Indiana Jones", "The Hunger Games 4 Film Complete Collection" → "The Hunger Games".
+pub fn collection_base(name: &str) -> String {
+    static R: OnceLock<Regex> = OnceLock::new();
+    let re = R.get_or_init(|| {
+        Regex::new(r"(?i)\b(?:complete|full|ultimate|definitive|\d+\s*(?:film|movie)s?|\d+\s*-\s*\d+|collection|saga|trilogy|quadrilogy|pentalogy|anthology|box\s*set|boxset|pack|series)\b").expect("collection words")
+    });
+    let p = parse_name(name);
+    let base = if p.title.is_empty() { name.to_string() } else { p.title };
+    let cut = re.replace_all(&base, " ");
+    let t = cut.split_whitespace().collect::<Vec<_>>().join(" ");
+    t.trim_matches(|c: char| c == '-' || c == ' ' || c == '&' || c == ',').to_string()
+}
+
+/// The clean name for a collection folder: "Indiana Jones Collection".
+pub fn collection_name(name: &str) -> String {
+    let b = collection_base(name);
+    if b.is_empty() { String::new() } else { format!("{b} Collection") }
+}
+
+/// What a collection is called without the extra words, for comparing: "The Alien Collection" → "alien".
 pub fn collection_key(name: &str) -> String {
-    let mut k = artist_key(name);
-    for w in ["collection", "saga", "trilogy", "series", "films", "movies", "box set", "boxset"] {
-        let w: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
-        if let Some(x) = k.strip_suffix(&w) {
-            k = x.to_string();
-        }
-    }
+    let k = artist_key(&collection_base(name));
     k.strip_prefix("the").filter(|x| x.len() >= 3).map(str::to_string).unwrap_or(k)
 }
 
@@ -618,6 +653,31 @@ pub fn plan_moves(root: &Path, item: &InboxItem, t: &Target, folder: &str, exist
                 }
             }
         }
+        "pack" => {
+            // Each movie into its own folder (worked out in `inbox_resolve`), named after it.
+            for f in &item.files {
+                let base = if f.video { videos.iter().copied().find(|v| v.rel == f.rel) } else { video_of(f) };
+                let Some(v) = base else { continue };
+                let Some((dir, have)) = t.pack.get(&v.rel) else { continue };
+                let leaf = dir.rsplit('/').next().unwrap_or(dir);
+                let n = name_of(&f.rel);
+                let ext = split_ext(&n).1.to_lowercase();
+                let name = if f.video {
+                    format!("{leaf}.{ext}")
+                } else {
+                    if !matches!(ext.as_str(), "srt" | "ass" | "ssa" | "vtt" | "sub" | "idx" | "sup") {
+                        continue;
+                    }
+                    let Some((lang, flags)) = sub_language(&f.rel, langs) else { continue };
+                    match lang { Some(l) => format!("{leaf}.{l}{flags}.{ext}"), None => format!("{leaf}{flags}.{ext}") }
+                };
+                let to = join(dir, &name);
+                if !used.insert(to.to_lowercase()) {
+                    continue;
+                }
+                moves.push(Placement { have: *have || root.join(&to).exists(), from: f.rel.clone(), to });
+            }
+        }
         "music" => {
             for f in &item.files {
                 // Keep "CD1/…" inside an album; the album folder itself is the target.
@@ -653,6 +713,203 @@ pub fn plan_moves(root: &Path, item: &InboxItem, t: &Target, folder: &str, exist
     moves
 }
 
+/// The collection a movie belongs with: your folder for it on disk and/or the Jellyfin collection.
+/// TMDB's collection name when a TMDB key is set up, otherwise the series name.
+async fn collection_for(state: &AppState, root: &Path, top: &str, title: &str, tmdb: Option<&str>) -> Option<CollectionHit> {
+    let tmdb_name = match (tmdb.filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit())), crate::rename_cmds::tmdb_client(state)) {
+        (Some(id), Some(t)) => t.movie_collection(id).await.ok().flatten(),
+        _ => None,
+    };
+    let want = tmdb_name.as_deref().map(collection_key).unwrap_or_else(|| series_key(title));
+    let (r, top2, title2, tn) = (root.to_path_buf(), top.to_string(), title.to_string(), tmdb_name.clone());
+    let disk = tauri::async_runtime::spawn_blocking(move || find_collection_folder(&r, &top2, tn.as_deref(), &title2)).await.ok().flatten();
+    let jf: Option<(String, String)> = match state.reader().await {
+        Ok(c) if want.len() >= 3 => {
+            let hits: Vec<(String, String)> = c
+                .items_query(vec![("IncludeItemTypes", "BoxSet".into()), ("Recursive", "true".into())], 2000)
+                .await
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|v| Some((v.get("Id")?.as_str()?.replace('-', ""), v.get("Name")?.as_str()?.to_string())))
+                .filter(|(_, n)| collection_key(n) == want)
+                .collect();
+            if hits.len() == 1 { hits.into_iter().next() } else { None }
+        }
+        _ => None,
+    };
+    if disk.is_none() && jf.is_none() {
+        return None;
+    }
+    let name = jf.as_ref().map(|x| x.1.clone()).or(tmdb_name).or_else(|| disk.as_ref().map(|d| d.rsplit('/').next().unwrap_or(d).to_string())).unwrap_or_default();
+    Some(CollectionHit { name, id: jf.map(|x| x.0), folder: disk })
+}
+
+/// A collection pack ("The Hunger Games 4 Film Complete Collection"): every movie on its own.
+/// The ones you have stay out (their copies go to the Trash with the download); the new ones go
+/// into your collection folder (or the main folder), each in its own "Title (Year)" folder.
+async fn resolve_pack(state: &AppState, root: &Path, item: InboxItem, target: Target) -> Result<InboxPlan> {
+    safe_rel(&target.top)?;
+    let movies = pack_movies(&item);
+    let r = root.to_path_buf();
+    let index = tauri::async_runtime::spawn_blocking(move || movie_index(&r)).await.map_err(|e| Error::msg(e.to_string()))?;
+    let first = movies.iter().map(|m| m.1.clone()).filter(|t| !t.is_empty()).min_by_key(|t| t.len()).unwrap_or_else(|| target.title.clone());
+    // The collection you have (on disk or in Jellyfin); otherwise a new, cleanly named folder for it
+    // ("Indiana Jones Collection"), and a new collection in Jellyfin after placing.
+    let found = collection_for(state, root, &target.top, &first, None).await;
+    let fresh_name = {
+        let n = collection_name(&target.title);
+        if n.is_empty() { collection_name(&first) } else { n }
+    };
+    let base = match found.as_ref().and_then(|c| c.folder.clone()) {
+        Some(f) => f,
+        None if !fresh_name.is_empty() => join(&target.top, &sanitize(&fresh_name)),
+        None => target.top.clone(),
+    };
+    let collection = Some(match found {
+        Some(c) => CollectionHit { folder: Some(base.clone()), ..c },
+        None => CollectionHit { name: fresh_name.clone(), id: None, folder: Some(base.clone()) },
+    });
+    let reader = state.reader().await.ok();
+    let mut t2 = target.clone();
+    t2.kind = "pack".into();
+    let mut new_movies: Vec<(String, String)> = Vec::new();
+    let mut all_movies: Vec<(String, String, bool)> = Vec::new();
+    let mut had = 0;
+    for (rel, title, year) in &movies {
+        let (key, _) = folder_key(title);
+        let hit: Vec<&MovieEntry> = index.iter().filter(|e| !key.is_empty() && e.key == key && (year.is_none() || e.year.is_none() || e.year == *year)).collect();
+        if hit.len() == 1 {
+            had += 1;
+            t2.pack.insert(rel.clone(), (hit[0].rel.clone(), true));
+            all_movies.push((hit[0].rel.clone(), title.clone(), false));
+            continue;
+        }
+        // The proper title ("The Hunger Games: Catching Fire") from Jellyfin's online search.
+        let mut name = title.clone();
+        if let Some(c) = &reader {
+            if let Ok(found) = c.remote_search("movie", title, *year, &HashMap::new()).await {
+                let pick = found.iter().find(|v| year.is_some() && v.get("ProductionYear").and_then(Value::as_i64) == year.map(i64::from)).or(found.first());
+                if let Some(n) = pick.and_then(|v| v.get("Name")).and_then(Value::as_str).filter(|n| folder_key(n).0 == key || year.is_some()) {
+                    name = n.to_string();
+                }
+            }
+        }
+        let leaf = sanitize(&match year { Some(y) => format!("{name} ({y})"), None => name.clone() });
+        let dir = join(&base, &leaf);
+        new_movies.push((dir.clone(), name.clone()));
+        all_movies.push((dir.clone(), name, true));
+        t2.pack.insert(rel.clone(), (dir, false));
+    }
+    let (r2, b2) = (root.to_path_buf(), base.clone());
+    let langs = vec!["eng".to_string()];
+    let (moves, left) = tauri::async_runtime::spawn_blocking(move || {
+        let m = plan_moves(&r2, &item, &t2, &b2, false, &langs, &HashMap::new());
+        let l = leftovers(&item, &m);
+        (m, l)
+    })
+    .await
+    .map_err(|e| Error::msg(e.to_string()))?;
+    let total = movies.len();
+    let new = total - had;
+    let mut note = format!("{total} movies in this download");
+    if had > 0 {
+        note.push_str(&format!(": {had} you already have (those copies go to the Trash with the download)"));
+    }
+    if new > 0 {
+        let leaf = base.rsplit('/').next().unwrap_or(&base);
+        let place = if root.join(&base).is_dir() { format!("your folder “{leaf}”") } else { format!("a new folder “{leaf}”") };
+        note.push_str(&format!("{} {new} new go{} into {place}, each in its own folder", if had > 0 { "; the" } else { ": the" }, if new == 1 { "es" } else { "" }));
+        match collection.as_ref() {
+            Some(c) if c.id.is_some() => note.push_str(&format!(" and join “{}” in Jellyfin", c.name)),
+            Some(c) => note.push_str(&format!("; “{}” is made in Jellyfin with all of them", c.name)),
+            None => {}
+        }
+    }
+    note.push('.');
+    movie_index_forget();
+    let _ = new_movies;
+    Ok(InboxPlan { folder: base, existing: had > 0, moves, leftovers: left, note, collection, movies: all_movies })
+}
+
+/* --------------------------------------------- a quick list of every movie folder on disk */
+
+/// One movie folder: where it is and the name it's compared by.
+#[derive(Clone, Debug)]
+pub struct MovieEntry {
+    pub rel: String,
+    pub key: String,
+    pub year: Option<i32>,
+}
+
+static MOVIE_INDEX: std::sync::Mutex<Option<(PathBuf, std::time::Instant, Vec<MovieEntry>)>> = std::sync::Mutex::new(None);
+
+/// A collection folder: called so, or holding two or more movie folders.
+fn is_collection_dir(dir: &Path, name: &str) -> bool {
+    let l = name.to_lowercase();
+    ["collection", "saga", "trilogy", "box set"].iter().any(|w| l.contains(w)) || sub_dirs(dir).iter().filter(|m| parse_name(m).year.is_some()).count() >= 2
+}
+
+/// Every movie folder in the library (main folders, and one level into collection folders),
+/// kept for two minutes so comparing many downloads stays quick.
+pub fn movie_index(root: &Path) -> Vec<MovieEntry> {
+    if let Ok(g) = MOVIE_INDEX.lock() {
+        if let Some((r, at, list)) = g.as_ref() {
+            if r == root && at.elapsed() < std::time::Duration::from_secs(120) {
+                return list.clone();
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for top in sub_dirs(root).into_iter().filter(|d| !d.starts_with('.')) {
+        let tp = root.join(&top);
+        for d in sub_dirs(&tp).into_iter().filter(|d| !d.starts_with('.')) {
+            if is_collection_dir(&tp.join(&d), &d) {
+                for m in sub_dirs(&tp.join(&d)).into_iter().filter(|m| !m.starts_with('.')) {
+                    let (key, year) = folder_key(&m);
+                    out.push(MovieEntry { rel: format!("{top}/{d}/{m}"), key, year });
+                }
+            } else {
+                let (key, year) = folder_key(&d);
+                out.push(MovieEntry { rel: format!("{top}/{d}"), key, year });
+            }
+        }
+    }
+    if let Ok(mut g) = MOVIE_INDEX.lock() {
+        *g = Some((root.to_path_buf(), std::time::Instant::now(), out.clone()));
+    }
+    out
+}
+
+/// After placing: the quick list is read again next time.
+pub fn movie_index_forget() {
+    if let Ok(mut g) = MOVIE_INDEX.lock() {
+        *g = None;
+    }
+}
+
+/// A movie you already have on disk (same title, and the same year when both have one).
+pub fn find_movie(root: &Path, title: &str, year: Option<i32>) -> Option<String> {
+    let (key, _) = folder_key(title);
+    if key.is_empty() {
+        return None;
+    }
+    let hits: Vec<MovieEntry> = movie_index(root).into_iter().filter(|e| e.key == key && (year.is_none() || e.year.is_none() || e.year == year)).collect();
+    if hits.len() == 1 { Some(hits[0].rel.clone()) } else { None }
+}
+
+/// A download with several movies (a collection pack): what each movie file is.
+fn pack_movies(item: &InboxItem) -> Vec<(String, String, Option<i32>)> {
+    item.files
+        .iter()
+        .filter(|f| f.video && !is_sample(&f.rel))
+        .map(|f| {
+            let p = parse_name(split_ext(f.rel.rsplit('/').next().unwrap_or(&f.rel)).0);
+            let p = if p.title.is_empty() { parse_name(f.rel.rsplit('/').nth(1).unwrap_or("")) } else { p };
+            (f.rel.clone(), p.title, p.year)
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub async fn inbox_resolve(state: State<'_, AppState>, key: String, target: Target) -> Result<InboxPlan> {
     let root = state.library_root()?;
@@ -664,6 +921,9 @@ pub async fn inbox_resolve(state: State<'_, AppState>, key: String, target: Targ
         .await
         .map_err(|e| Error::msg(e.to_string()))?
         .ok_or_else(|| Error::msg("No videos or music found in that download."))?;
+    if target.kind == "pack" {
+        return resolve_pack(&state, &root, item, target).await;
+    }
     // Where: a show or movie you have, or a new folder in the main folder you chose.
     let (folder, existing) = match target.item_id.as_deref().filter(|i| valid_item_id(i)) {
         Some(id) => {
@@ -704,38 +964,23 @@ pub async fn inbox_resolve(state: State<'_, AppState>, key: String, target: Targ
             }
         }
     };
-    // A new movie: is it part of a collection you already have (on disk or in Jellyfin)?
+    // A new movie: already on disk somewhere (also inside a collection folder)? Otherwise, is it
+    // part of a collection you already have (on disk or in Jellyfin)?
     let mut collection: Option<CollectionHit> = None;
     let mut folder = folder;
+    let mut existing = existing;
     if target.kind == "movie" && !existing {
-        let tmdb_name = match (target.tmdb.as_deref().filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit())), crate::rename_cmds::tmdb_client(&state)) {
-            (Some(id), Some(t)) => t.movie_collection(id).await.ok().flatten(),
-            _ => None,
-        };
-        let want = tmdb_name.as_deref().map(collection_key).unwrap_or_else(|| series_key(&target.title));
-        let (r, top, title, tn) = (root.clone(), target.top.clone(), target.title.clone(), tmdb_name.clone());
-        let disk = tauri::async_runtime::spawn_blocking(move || find_collection_folder(&r, &top, tn.as_deref(), &title)).await.ok().flatten();
-        let jf: Option<(String, String)> = match state.reader().await {
-            Ok(c) if want.len() >= 3 => {
-                let hits: Vec<(String, String)> = c
-                    .items_query(vec![("IncludeItemTypes", "BoxSet".into()), ("Recursive", "true".into())], 2000)
-                    .await
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|v| Some((v.get("Id")?.as_str()?.replace('-', ""), v.get("Name")?.as_str()?.to_string())))
-                    .filter(|(_, n)| collection_key(n) == want)
-                    .collect();
-                if hits.len() == 1 { hits.into_iter().next() } else { None }
-            }
-            _ => None,
-        };
-        if disk.is_some() || jf.is_some() {
-            let name = jf.as_ref().map(|x| x.1.clone()).or(tmdb_name.clone()).or_else(|| disk.as_ref().map(|d| d.rsplit('/').next().unwrap_or(d).to_string())).unwrap_or_default();
-            if let Some(d) = &disk {
+        let (r, title, year) = (root.clone(), target.title.clone(), target.year);
+        let on_disk = tauri::async_runtime::spawn_blocking(move || find_movie(&r, &title, year)).await.ok().flatten();
+        if let Some(d) = on_disk {
+            folder = d;
+            existing = true;
+        } else {
+            collection = collection_for(&state, &root, &target.top, &target.title, target.tmdb.as_deref()).await;
+            if let Some(d) = collection.as_ref().and_then(|c| c.folder.clone()) {
                 let leaf = folder.rsplit('/').next().unwrap_or(&folder).to_string();
-                folder = join(d, &leaf);
+                folder = join(&d, &leaf);
             }
-            collection = Some(CollectionHit { name, id: jf.map(|x| x.0), folder: disk });
         }
     }
     // Episode titles for a show you have ("Show - S02E05 - Trojan's Horse").
@@ -768,7 +1013,10 @@ pub async fn inbox_resolve(state: State<'_, AppState>, key: String, target: Targ
             (None, None) => String::new(),
         });
     }
-    Ok(InboxPlan { folder, existing, moves, leftovers: left, note, collection })
+    if target.kind == "movie" {
+        movie_index_forget();
+    }
+    Ok(InboxPlan { folder, existing, moves, leftovers: left, note, collection, movies: Vec::new() })
 }
 
 /* ------------------------------------------------------------------ putting it in place */
@@ -992,7 +1240,7 @@ mod tests {
             key: "Bluey.S03".into(), is_folder: true, size: 3, modified: 0, kind: "tv", title: "Bluey".into(), year: None, music: None,
             files: vec![f("Bluey.S03E47.mkv", Some(3), &[47]), f("Bluey.S03E48.mkv", Some(3), &[48]), f("Bluey.S03E48.en.srt", None, &[]), f("Bluey.S03E47.en.srt", None, &[])],
         };
-        let t = Target { kind: "tv".into(), item_id: None, top: "Kids".into(), title: "Bluey".into(), year: Some(2018), season: None, artist: None, album: None, tmdb: None };
+        let t = Target { kind: "tv".into(), item_id: None, top: "Kids".into(), title: "Bluey".into(), year: Some(2018), season: None, artist: None, album: None, tmdb: None, pack: HashMap::new() };
         let moves = plan_moves(&root, &item, &t, "Kids/Bluey (2018)", true, &["eng".to_string()], &HashMap::new());
         let get = |from: &str| moves.iter().find(|m| m.from == from).unwrap();
         assert!(get("Bluey.S03E47.mkv").have, "episode 47 is already there");
@@ -1012,7 +1260,7 @@ mod tests {
             key: "video.mp4".into(), is_folder: false, size: 1, modified: 0, kind: "tv", title: "Kurzgesagt".into(), year: None, music: None,
             files: vec![InboxFile { rel: "Why Bees Dance.mp4".into(), size: 1, video: true, season: None, episodes: vec![] }],
         };
-        let t = Target { kind: "tv".into(), item_id: None, top: "YouTube".into(), title: "Kurzgesagt".into(), year: None, season: None, artist: None, album: None, tmdb: None };
+        let t = Target { kind: "tv".into(), item_id: None, top: "YouTube".into(), title: "Kurzgesagt".into(), year: None, season: None, artist: None, album: None, tmdb: None, pack: HashMap::new() };
         let moves = plan_moves(&root, &item, &t, "YouTube/Kurzgesagt", true, &[], &HashMap::new());
         assert_eq!(moves[0].to, "YouTube/Kurzgesagt/Why Bees Dance.mp4");
         let _ = std::fs::remove_dir_all(&root);
@@ -1028,7 +1276,7 @@ mod tests {
             key: "Heat.1995.1080p.BluRay.x264-GRP".into(), is_folder: true, size: 9, modified: 0, kind: "movie", title: "Heat".into(), year: Some(1995), music: None,
             files: vec![f("Heat.1995.1080p.BluRay.x264-GRP.mkv"), f("Sample/heat-sample.mkv"), f("Heat.1995.nfo"), f("Subs/2_English.srt"), f("Subs/3_French.srt"), f("Subs/4_English.SDH.srt"), f("RARBG.txt")],
         };
-        let t = Target { kind: "movie".into(), item_id: None, top: "Movies".into(), title: "Heat".into(), year: Some(1995), season: None, artist: None, album: None, tmdb: None };
+        let t = Target { kind: "movie".into(), item_id: None, top: "Movies".into(), title: "Heat".into(), year: Some(1995), season: None, artist: None, album: None, tmdb: None, pack: HashMap::new() };
         let moves = plan_moves(&root, &item, &t, "Movies/Heat (1995)", false, &["eng".to_string()], &HashMap::new());
         let to: Vec<&str> = moves.iter().map(|m| m.to.as_str()).collect();
         assert_eq!(to, vec!["Movies/Heat (1995)/Heat (1995).mkv", "Movies/Heat (1995)/Heat (1995).eng.srt", "Movies/Heat (1995)/Heat (1995).eng.sdh.srt"], "{moves:?}");
@@ -1054,7 +1302,7 @@ mod tests {
                 f("Severance.S02E05.nfo", None, &[]),
             ],
         };
-        let t = Target { kind: "tv".into(), item_id: Some("x".into()), top: "TV".into(), title: "Severance".into(), year: Some(2022), season: None, artist: None, album: None, tmdb: None };
+        let t = Target { kind: "tv".into(), item_id: Some("x".into()), top: "TV".into(), title: "Severance".into(), year: Some(2022), season: None, artist: None, album: None, tmdb: None, pack: HashMap::new() };
         let mut titles = HashMap::new();
         titles.insert((2, 5), "Trojan's Horse".to_string());
         let moves = plan_moves(&root, &item, &t, "TV/Severance (2022)", true, &["eng".to_string()], &titles);
@@ -1136,6 +1384,9 @@ mod tests {
         assert_eq!(series_key("Alien: Romulus"), "alien");
         assert_eq!(collection_key("The Alien Collection"), "alien");
         assert_eq!(collection_key("Dune Collection"), "dune");
+        assert_eq!(collection_name("Indiana Jones Collection 1-5 (1981) 1080p BluRay"), "Indiana Jones Collection");
+        assert_eq!(collection_name("The Hunger Games 4 Film Complete Collection 1080p BluRay 5.1Ch x265 HEVC"), "The Hunger Games Collection");
+        assert_eq!(collection_key("Indiana Jones Collection 1-5 (1981)"), "indianajones");
         let root = std::env::temp_dir().join(format!("mh-inbox7-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         for d in ["Movies/Alien Collection/Alien (1979)", "Movies/Alien Collection/Aliens (1986)", "Movies/Heat (1995)", "Kids/Toy Story/Toy Story (1995)", "Kids/Toy Story/Toy Story 2 (1999)"] {
@@ -1147,5 +1398,48 @@ mod tests {
         assert_eq!(find_collection_folder(&root, "Movies", None, "Heat 2"), None, "a single movie folder isn't a collection");
         assert_eq!(find_collection_folder(&root, "Movies", None, "Dune: Part Two"), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_collection_pack_adds_only_the_movies_you_miss() {
+        let root = std::env::temp_dir().join(format!("mh-inbox8-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in ["Movies/The Hunger Games Collection/The Hunger Games (2012)", "Movies/The Hunger Games Collection/The Hunger Games - Catching Fire (2013)", "Movies/The Hunger Games Collection/The Hunger Games - Mockingjay - Part 1 (2014)", "Movies/Heat (1995)"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        movie_index_forget();
+        assert_eq!(find_movie(&root, "The Hunger Games Catching Fire", Some(2013)).as_deref(), Some("Movies/The Hunger Games Collection/The Hunger Games - Catching Fire (2013)"));
+        assert_eq!(find_movie(&root, "Heat", Some(1995)).as_deref(), Some("Movies/Heat (1995)"));
+        assert_eq!(find_movie(&root, "The Hunger Games Mockingjay Part 2", Some(2015)), None);
+        // The download is seen as a pack of four movies.
+        let dl = root.join("dl/The Hunger Games 4 Film Complete Collection 1080p BluRay x265");
+        std::fs::create_dir_all(&dl).unwrap();
+        for n in ["The.Hunger.Games.2012.1080p.mkv", "The.Hunger.Games.Catching.Fire.2013.1080p.mkv", "The.Hunger.Games.Mockingjay.Part.1.2014.1080p.mkv", "The.Hunger.Games.Mockingjay.Part.2.2015.1080p.mkv", "The.Hunger.Games.Mockingjay.Part.2.2015.1080p.en.srt", "RARBG.txt"] {
+            std::fs::write(dl.join(n), b"x").unwrap();
+        }
+        let item = read_item(&dl, "The Hunger Games 4 Film Complete Collection 1080p BluRay x265", 0).unwrap();
+        assert_eq!(item.kind, "pack");
+        assert_eq!(item.title, "The Hunger Games Collection");
+        let movies = pack_movies(&item);
+        assert_eq!(movies.len(), 4);
+        // Placing: three are there already, the fourth goes into the collection folder with its subtitle.
+        let mut t = Target { kind: "pack".into(), item_id: None, top: "Movies".into(), title: item.title.clone(), year: None, season: None, artist: None, album: None, tmdb: None, pack: HashMap::new() };
+        let base = "Movies/The Hunger Games Collection";
+        for (rel, title, year) in &movies {
+            match find_movie(&root, title, *year) {
+                Some(d) => { t.pack.insert(rel.clone(), (d, true)); }
+                None => { t.pack.insert(rel.clone(), (format!("{base}/The Hunger Games - Mockingjay - Part 2 (2015)"), false)); }
+            }
+        }
+        let moves = plan_moves(&root, &item, &t, base, false, &["eng".to_string()], &HashMap::new());
+        let mut new: Vec<&str> = moves.iter().filter(|m| !m.have).map(|m| m.to.as_str()).collect();
+        new.sort();
+        assert_eq!(new, vec![
+            "Movies/The Hunger Games Collection/The Hunger Games - Mockingjay - Part 2 (2015)/The Hunger Games - Mockingjay - Part 2 (2015).eng.srt",
+            "Movies/The Hunger Games Collection/The Hunger Games - Mockingjay - Part 2 (2015)/The Hunger Games - Mockingjay - Part 2 (2015).mkv",
+        ], "{moves:?}");
+        assert_eq!(moves.iter().filter(|m| m.have).count(), 3);
+        let _ = std::fs::remove_dir_all(&root);
+        movie_index_forget();
     }
 }
