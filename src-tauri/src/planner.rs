@@ -250,13 +250,79 @@ fn add_sidecars(files: &[String], videos: &[(String, String, String)], ops: &mut
                 name.starts_with(&format!("{stem}.")).then_some((v, stem.len()))
             })
             .max_by_key(|(_, l)| *l);
-        let Some(((_, step, fin), len)) = best else { continue };
+        let Some(((_, step, fin), len)) = best else {
+            loose_subtitle(f, videos, ops);
+            continue;
+        };
         let rest = &name[len..];
         let with = |p: &str| {
             let (d, n) = split_path(p);
             join(d, &format!("{}{rest}", split_ext(n).0))
         };
         ops.push(op(f, &with(step), &with(fin), "sidecar"));
+    }
+}
+
+/// A subtitle that doesn't carry its video's name ("English.srt", "Subs/2_English.srt",
+/// "Subs/<video>/3_French.srt"): it goes next to the video it belongs to, named after it with
+/// its language ("Heat (1995).eng.srt"), so Jellyfin and Infuse link it. It belongs to the video
+/// in a folder named like it, or the one video in the nearest folder above it.
+fn loose_subtitle(f: &str, videos: &[(String, String, String)], ops: &mut Vec<PlanOp>) {
+    let (dir, name) = split_path(f);
+    let (stem, ext) = split_ext(name);
+    let ext = ext.to_lowercase();
+    if !matches!(ext.as_str(), "srt" | "ass" | "ssa" | "vtt" | "sub") {
+        return;
+    }
+    let vstem = |v: &(String, String, String)| split_ext(split_path(&v.0).1).0.to_string();
+    let parent = split_path(dir).1;
+    let mut owner = videos.iter().find(|v| !parent.is_empty() && vstem(v) == parent);
+    if owner.is_none() {
+        let mut d = dir.to_string();
+        loop {
+            let here: Vec<&(String, String, String)> = videos.iter().filter(|v| { let vd = split_path(&v.0).0; vd == d || (!d.is_empty() && vd.starts_with(&format!("{d}/"))) }).collect();
+            if here.len() == 1 && split_path(&here[0].0).0 == d {
+                owner = Some(here[0]);
+                break;
+            }
+            if !here.is_empty() || d.is_empty() {
+                break;
+            }
+            d = split_path(&d).0.to_string();
+        }
+    }
+    let Some((_, step, fin)) = owner else { return };
+    let low = stem.to_lowercase();
+    let words: Vec<&str> = low.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let mut tail = String::new();
+    if let Some(code) = crate::sub_cmds::guess_lang(name) {
+        tail.push('.');
+        tail.push_str(lang3(code));
+    }
+    if words.contains(&"forced") {
+        tail.push_str(".forced");
+    }
+    if words.iter().any(|w| matches!(*w, "sdh" | "hi" | "cc")) {
+        tail.push_str(".sdh");
+    }
+    let with = |p: &str| {
+        let (d, n) = split_path(p);
+        join(d, &format!("{}{tail}.{ext}", split_ext(n).0))
+    };
+    let (to_step, to_fin) = (with(step), with(fin));
+    // Two subtitles that would get the same name: the first wins, the other stays where it is.
+    if to_fin == f || ops.iter().any(|o| o.to.eq_ignore_ascii_case(&to_fin) || o.step_to.eq_ignore_ascii_case(&to_step)) {
+        return;
+    }
+    ops.push(op(f, &to_step, &to_fin, "sidecar"));
+}
+
+/// The three-letter code Jellyfin and Infuse read in subtitle names ("en" → "eng").
+fn lang3(code: &str) -> &'static str {
+    match code {
+        "en" => "eng", "nl" => "dut", "de" => "ger", "fr" => "fre", "es" => "spa", "it" => "ita", "pt" => "por",
+        "sv" => "swe", "da" => "dan", "no" => "nor", "fi" => "fin", "pl" => "pol", "ru" => "rus", "ja" => "jpn",
+        "ko" => "kor", "zh" => "chi", "tr" => "tur", "el" => "gre", "ar" => "ara", _ => "und",
     }
 }
 
@@ -1051,6 +1117,26 @@ mod tests {
         let after = simulate(&f, &ops);
         let again = plan_movies(&after, &req("Movies", MOVIE), &HashMap::new(), &nothing_exists).unwrap();
         assert!(again.iter().all(|o| o.status == "unchanged"), "{again:#?}");
+    }
+
+    #[test]
+    fn subtitles_without_the_movie_name_join_their_movie() {
+        let f = files(&[
+            "Movies/Heat.1995.1080p/Heat.1995.1080p.mkv",
+            "Movies/Heat.1995.1080p/Subs/English.srt",
+            "Movies/Heat.1995.1080p/Subs/3_French.srt",
+            "Movies/Heat.1995.1080p/Subs/English.SDH.srt",
+            "Movies/Heat.1995.1080p/Subs/Eng.srt",
+        ]);
+        let ops = plan_movies(&f, &req("Movies", MOVIE), &HashMap::new(), &nothing_exists).unwrap();
+        assert_eq!(by_from(&ops, &f[1]).to, "Movies/Heat (1995)/Heat (1995).eng.srt");
+        assert_eq!(by_from(&ops, &f[2]).to, "Movies/Heat (1995)/Heat (1995).fre.srt");
+        assert_eq!(by_from(&ops, &f[3]).to, "Movies/Heat (1995)/Heat (1995).eng.sdh.srt");
+        // A second English one would get the same name: it stays where it is.
+        assert!(!ops.iter().any(|o| o.from == f[4]), "{ops:#?}");
+        let after = simulate(&f, &ops);
+        let again = plan_movies(&after, &req("Movies", MOVIE), &HashMap::new(), &nothing_exists).unwrap();
+        assert!(again.iter().filter(|o| !o.from.ends_with("Eng.srt")).all(|o| o.status == "unchanged"), "{again:#?}");
     }
 
     #[test]

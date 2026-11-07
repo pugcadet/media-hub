@@ -260,15 +260,35 @@ pub(crate) async fn make_plan(state: &AppState, args: PlanArgs) -> Result<(PlanR
 
     let (root2, folder) = (root.clone(), req.folder.clone());
     let recurse = (mode != "movie" || recursive) && only_file.is_none();
-    let mut files = blocking(move || fsops::scan_files(&root2, &folder, recurse)).await?;
+    let mut files = match &only_file {
+        // One movie: look in its own folder (and the folders inside it, for "Subs/English.srt").
+        Some(only) => {
+            let (root3, dir) = (root.clone(), crate::naming::split_path(only).0.to_string());
+            blocking(move || {
+                let here = fsops::scan_files(&root3, &dir, false)?;
+                // Its own folder: the folders inside it too. A shared folder: just that folder.
+                let own = here.iter().filter(|f| crate::naming::is_video(crate::naming::split_path(f).1)).count() == 1;
+                if own && dir.contains('/') { fsops::scan_files(&root3, &dir, true) } else { Ok(here) }
+            })
+            .await
+            .unwrap_or_default()
+        }
+        None => blocking(move || fsops::scan_files(&root2, &folder, recurse)).await?,
+    };
     if let Some(only) = &only_file {
-        // One movie: the file itself and files next to it that share its name (subtitles, .nfo, …).
+        // The file itself and files next to it that share its name (subtitles, .nfo, …); when it's
+        // the only video in its folder, also the subtitles anywhere inside that folder.
         let (dir, name) = crate::naming::split_path(only);
         let stem = format!("{}.", crate::naming::split_ext(name).0);
+        let alone = files.iter().filter(|f| crate::naming::is_video(crate::naming::split_path(f).1)).count() == 1;
+        let is_sub = |n: &str| matches!(crate::naming::split_ext(n).1.to_lowercase().as_str(), "srt" | "ass" | "ssa" | "vtt" | "sub");
         files.retain(|f| {
             let (d, n) = crate::naming::split_path(f);
-            f == only || (d == dir && n.starts_with(&stem))
+            f == only || (d == dir && n.starts_with(&stem)) || (alone && !dir.is_empty() && is_sub(n))
         });
+        if !files.contains(only) {
+            files.push(only.clone());
+        }
     }
     // "auto": shows when most videos carry a season/episode number, otherwise movies.
     let mode = if mode == "auto" { planner::detect_kind(&files).to_string() } else { mode };

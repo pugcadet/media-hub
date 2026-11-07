@@ -217,7 +217,7 @@ pub async fn movie_folders(state: State<'_, AppState>) -> Result<Vec<MovieFolder
             }
         }
         for m in &mut list {
-            m.collection = member.get(&m.id).map(|(n, _)| sanitize(n)).filter(|n| !n.is_empty());
+            m.collection = member.get(&m.id).map(|(n, _)| sanitize(&crate::inbox::clean_collection(n))).filter(|n| !n.is_empty());
         }
     }
     Ok(list)

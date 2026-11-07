@@ -360,14 +360,31 @@ pub fn collection_base(name: &str) -> String {
     let p = parse_name(name);
     let base = if p.title.is_empty() { name.to_string() } else { p.title };
     let cut = re.replace_all(&base, " ");
-    let t = cut.split_whitespace().collect::<Vec<_>>().join(" ");
-    t.trim_matches(|c: char| c == '-' || c == ' ' || c == '&' || c == ',').to_string()
+    // Words left dangling by the cut: "Police Academy - The [Complete Collection]" → "Police Academy".
+    let mut words: Vec<&str> = cut.split_whitespace().collect();
+    while let Some(w) = words.last() {
+        let l = w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+        if l.is_empty() || matches!(l.as_str(), "the" | "and" | "of" | "a" | "all" | "in") {
+            words.pop();
+        } else {
+            break;
+        }
+    }
+    let t = words.join(" ");
+    t.trim_matches(|c: char| c == '-' || c == ' ' || c == '&' || c == ',' || c == ':').to_string()
 }
 
 /// The clean name for a collection folder: "Indiana Jones Collection".
 pub fn collection_name(name: &str) -> String {
     let b = collection_base(name);
     if b.is_empty() { String::new() } else { format!("{b} Collection") }
+}
+
+/// A collection's name as a folder: extra words cut ("Police Academy - The Complete Collection
+/// (1984-1994)" → "Police Academy Collection"); a name without them stays as it is ("Pixar").
+pub fn clean_collection(name: &str) -> String {
+    let base = collection_base(name);
+    if base.is_empty() || base == name.trim() { name.trim().to_string() } else { format!("{base} Collection") }
 }
 
 /// What a collection is called without the extra words, for comparing: "The Alien Collection" → "alien".
@@ -1531,6 +1548,10 @@ mod tests {
         assert!(new[0].ends_with("(1985).eng.srt") && new[1].ends_with("(1985).mkv") && new[2].ends_with("(1986).mkv"), "{new:?}");
         // The one you have: its video and English subtitle are doubles.
         assert_eq!(moves.iter().filter(|m| m.have).count(), 2, "{moves:?}");
+        assert_eq!(collection_name("Police Academy - The Complete Collection (1984-1994)"), "Police Academy Collection");
+        assert_eq!(collection_name("The Lord of the Rings Trilogy"), "The Lord of the Rings Collection");
+        assert_eq!(clean_collection("Pixar"), "Pixar");
+        assert_eq!(clean_collection("Indiana Jones Collection 1-5 (1981)"), "Indiana Jones Collection");
         assert!(pack_word("The Matrix Trilogy") && pack_word("Alien.Quadrilogy.1080p") && pack_word("Rocky 1-6") && !pack_word("Heat.1995.1080p.x265-RARBG"));
         assert!(is_part("Movie.CD2.avi") && !is_part("Movie.2.avi"));
         let _ = std::fs::remove_dir_all(&root);
