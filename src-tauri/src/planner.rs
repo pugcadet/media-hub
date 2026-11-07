@@ -203,7 +203,8 @@ pub fn without_year(name: &str) -> String {
 /// Sets ok / unchanged / conflict. Files are checked on their own step (inside their
 /// current folder); folders on their new name next to them.
 fn status_pass(ops: &mut [PlanOp], exists: &dyn Fn(&str) -> bool) {
-    let lower = |s: &str| s.to_lowercase();
+    // Same name written in another Unicode form (é as one letter or as e + accent) is the same file.
+    let lower = |s: &str| crate::naming::same_form(&s.to_lowercase());
     let mut count: HashMap<String, usize> = HashMap::new();
     for o in ops.iter().filter(|o| o.status != "unparsed") {
         *count.entry(lower(&o.step_to)).or_default() += 1;
@@ -213,7 +214,7 @@ fn status_pass(ops: &mut [PlanOp], exists: &dyn Fn(&str) -> bool) {
         if o.status == "unparsed" {
             continue;
         }
-        if o.from == o.step_to {
+        if o.from == o.step_to || crate::naming::same_form(&o.from) == crate::naming::same_form(&o.step_to) {
             o.status = "unchanged";
             continue;
         }
@@ -246,8 +247,10 @@ fn add_sidecars(files: &[String], videos: &[(String, String, String)], ops: &mut
             .iter()
             .filter(|(from, _, _)| split_path(from).0 == dir)
             .filter_map(|v| {
-                let stem = split_ext(split_path(&v.0).1).0;
-                name.starts_with(&format!("{stem}.")).then_some((v, stem.len()))
+                let stem = crate::naming::same_form(split_ext(split_path(&v.0).1).0);
+                let n = crate::naming::same_form(name);
+                // How much of the subtitle's own name that is (it may be written in another form).
+                n.starts_with(&format!("{stem}.")).then(|| (v, name.char_indices().map(|(i, _)| i).chain([name.len()]).find(|&i| crate::naming::same_form(&name[..i]) == stem).unwrap_or(stem.len().min(name.len()))))
             })
             .max_by_key(|(_, l)| *l);
         let Some(((_, step, fin), len)) = best else {
@@ -1117,6 +1120,19 @@ mod tests {
         let after = simulate(&f, &ops);
         let again = plan_movies(&after, &req("Movies", MOVIE), &HashMap::new(), &nothing_exists).unwrap();
         assert!(again.iter().all(|o| o.status == "unchanged"), "{again:#?}");
+    }
+
+    #[test]
+    fn accents_written_two_ways_are_the_same_name() {
+        // The video's "é" is one letter, the subtitle's is "e" + accent mark (as macOS writes it).
+        let f = files(&[
+            "Movies/L\u{e9}on - The Professional (1994)/L\u{e9}on - The Professional (1994).mkv",
+            "Movies/L\u{e9}on - The Professional (1994)/Le\u{301}on - The Professional (1994).srt",
+        ]);
+        let exists = |p: &str| f.iter().any(|x| crate::naming::same_form(x) == crate::naming::same_form(p));
+        let ops = plan_movies(&f, &req("Movies", MOVIE), &HashMap::new(), &exists).unwrap();
+        assert!(ops.iter().all(|o| o.status != "conflict"), "{ops:#?}");
+        assert_eq!(crate::naming::same_form("L\u{e9}on"), crate::naming::same_form("Le\u{301}on"));
     }
 
     #[test]

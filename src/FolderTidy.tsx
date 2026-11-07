@@ -217,7 +217,10 @@ function MovieSuggestions({ top, list: everything, readOnly, onDone }: { top: st
   const outOf = (g: string) => !!groupOut[g];
   const needs = (m: MovieFolder) => (collected.includes(m) ? movieNeeds(m, true) : m.group && outOf(m.group) ? true : movieNeeds(m, false));
   const all = [...collected, ...rest].filter(needs);
-  useEffect(() => { sel.reset(all.map((m) => m.video)); }, [list, keepCollections]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Everything starts selected when the list itself changes (not on every redraw, or unticking
+  // a box would be undone straight away).
+  const listKey = list.map((m) => m.video).join("|");
+  useEffect(() => { sel.reset(all.map((m) => m.video)); }, [listKey, keepCollections]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function apply() {
     const moves = all.filter((m) => sel.has(m.video)).map((m) => ({ video: m.video, mode: (collected.includes(m) ? "collect" : m.group && outOf(m.group) ? "out" : "fix") as "fix" | "out" | "collect" }));
@@ -305,7 +308,8 @@ function ShowSuggestions({ folder, readOnly, onDone }: { folder: TopFolder | nul
   const [error, setError] = useState<string | null>(null);
   const { run, mark, bar, busy } = useRun(onDone);
   const shows = folder?.shows ?? [];
-  useEffect(() => { sel.reset(shows.map((s) => s.folder)); }, [folder]); // eslint-disable-line react-hooks/exhaustive-deps
+  const showsKey = shows.map((s) => s.folder).join("|");
+  useEffect(() => { sel.reset(shows.map((s) => s.folder)); }, [showsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!shows.length) return null;
   async function apply() {
     const actions = shows.filter((s) => sel.has(s.folder)).map((s) => ({ kind: "seasons", path: s.folder }));

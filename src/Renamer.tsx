@@ -9,7 +9,6 @@ import { BulkSelect, Icon, itemMenu, openMenu, TriCheck, useUndoableSet } from "
 import { folderTabs, IconBtn, KTabs, PageHead, SearchBox, Seg } from "./kit";
 import { usePageState } from "./saved";
 import { Studio, StudioItem } from "./Studio";
-import Folders from "./FolderTidy";
 import { folderOff, setPrefs, usePrefs, withShowYear, yearOptional, minimalNames, type Prefs } from "./prefs";
 
 type Source = PlanArgs["source"];
@@ -1288,7 +1287,7 @@ export default function Renamer({ status, onChanged, start, embedded }: {
 }) {
   // A folder given (from Clean-up → Folders) opens that folder; a title selects it in the check.
   const [savedMode, setSavedMode] = usePageState<"check" | "bulk" | "folders">("renamer.mode", "check");
-  const [mode, setModeState] = useState<"check" | "bulk" | "folder" | "folders">(start?.section === "folders" ? "folders" : start?.folder !== undefined && !start?.item ? "folder" : start?.item ? "check" : savedMode);
+  const [mode, setModeState] = useState<"check" | "bulk" | "folder" | "folders">(start?.section === "folders" ? "folders" : start?.folder !== undefined && !start?.item ? "folder" : start?.item ? "check" : savedMode === "folders" ? "check" : savedMode);
   const setMode = (m: "check" | "bulk" | "folder" | "folders") => { setModeState(m); if (m !== "folder") setSavedMode(m); };
   const [preset, setPreset] = useState<Preset | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
@@ -1330,7 +1329,6 @@ export default function Renamer({ status, onChanged, start, embedded }: {
           <Seg value={mode === "folder" ? "check" : mode} onChange={(m) => setMode(m)} options={[
             { id: "check", label: <><Icon name="check" size={13} /> Names to fix</> },
             { id: "bulk", label: <><Icon name="rename" size={13} /> Find &amp; replace</> },
-            { id: "folders", label: <><Icon name="folder" size={13} /> Folders</> },
           ]} />
         ) : undefined}
       />
@@ -1338,7 +1336,7 @@ export default function Renamer({ status, onChanged, start, embedded }: {
       {!status.libraryRoot ? <FolderFix status={status} onChanged={onChanged} />
         : mode === "check" ? <CheckList status={status} focus={start?.item} />
         : mode === "bulk" ? <BulkEdit status={status} onCheck={() => setMode("check")} />
-        : mode === "folders" ? <Folders status={status} />
+        : mode === "folders" ? <FoldersMoved />
         : (
           <>
             <p className="muted small"><button className="link" onClick={() => setMode("check")}>← Back to the list</button></p>
@@ -1347,4 +1345,10 @@ export default function Renamer({ status, onChanged, start, embedded }: {
         )}
     </div>
   );
+}
+
+/** Folders now live in the Library (its Folders tab): an old link lands there. */
+function FoldersMoved() {
+  useEffect(() => nav.route({ view: "library", section: "folders" }), []);
+  return null;
 }

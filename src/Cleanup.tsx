@@ -31,7 +31,7 @@ export default function Cleanup({ status, tab, onNav }: { status: Status; tab?: 
     setSaved(k as CleanupTab);
   };
   useEffect(() => {
-    if (tab === "folders") nav.route({ view: "renamer", section: "folders" });
+    if (tab === "folders") nav.route({ view: "library", section: "folders" });
   }, [tab]);
   const sum = useScanSummary();
   const [scanning, setScanning] = useState(false);

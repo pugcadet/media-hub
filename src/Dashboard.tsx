@@ -210,7 +210,7 @@ export default function Dashboard({ status }: { status: Status }) {
         <div className="home-notice" role="status">
           <b>Clean up folders:</b>
           <span className="grow">{[sum.folders!.shows ? `${sum.folders!.shows} show${sum.folders!.shows === 1 ? "" : "s"} without season folders` : "", sum.folders!.movies ? `${sum.folders!.movies} movie${sum.folders!.movies === 1 ? "" : "s"} not in a folder of their own` : ""].filter(Boolean).join(", ")}.</span>
-          <button className="link" onClick={() => nav.route({ view: "renamer", section: "folders" })}>Show</button>
+          <button className="link" onClick={() => nav.route({ view: "library", section: "folders" })}>Show</button>
           <button className="link muted-link" onClick={() => setPrefs({ foldersDismissed: folderKey })}>Dismiss</button>
         </div>
       )}
@@ -274,7 +274,7 @@ export default function Dashboard({ status }: { status: Status }) {
 export function cleanupBlocks(sum: ScanSummary, _series: number): Block[] {
   const cleanup: Block[] = [
     { key: "duplicates", icon: "copy", count: sum.duplicates?.files ?? null, title: "Duplicate files", okTitle: "No duplicates", detail: sum.duplicates ? `${sum.duplicates.groups} title${sum.duplicates.groups === 1 ? "" : "s"} with more than one file.` : "Not checked yet.", tone: "warn", go: { view: "cleanup", section: "duplicates" }, at: sum.duplicates?.at },
-    { key: "folders", icon: "folder", count: sum.folders?.fixes ?? null, title: "Folder fixes", okTitle: "Folders tidy", detail: sum.folders ? `${sum.folders.shows} show${sum.folders.shows === 1 ? "" : "s"} without season folders, ${sum.folders.movies} loose movie${sum.folders.movies === 1 ? "" : "s"}.` : "Not checked yet.", tone: "info", go: { view: "renamer", section: "folders" }, at: sum.folders?.at },
+    { key: "folders", icon: "folder", count: sum.folders?.fixes ?? null, title: "Folder fixes", okTitle: "Folders tidy", detail: sum.folders ? `${sum.folders.shows} show${sum.folders.shows === 1 ? "" : "s"} without season folders, ${sum.folders.movies} loose movie${sum.folders.movies === 1 ? "" : "s"}.` : "Not checked yet.", tone: "info", go: { view: "library", section: "folders" }, at: sum.folders?.at },
     { key: "storage", icon: "disk", count: sum.storage ? sum.storage.big : null, title: "Unusually big files", okTitle: "No oversized files", detail: sum.storage ? `${gbText(sum.storage.bytes)} in ${sum.storage.videos.toLocaleString()} videos · H.265 could save ~${gbText(sum.storage.shrinkSave)}.` : "Not checked yet.", tone: "info", go: { view: "cleanup", section: "storage" }, at: sum.storage?.at },
     { key: "pictures", icon: "image", count: sum.pictures?.episodes ?? null, title: "Episodes without a picture", okTitle: "Every episode has a picture", detail: "From TMDB first, otherwise a frame from the video.", tone: "info", go: { view: "cleanup", section: "pictures" }, at: sum.pictures?.at },
   ];
