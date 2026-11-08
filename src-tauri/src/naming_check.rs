@@ -221,6 +221,15 @@ pub fn naming_check_last(state: State<'_, AppState>) -> Result<Option<CheckResul
         if let Ok(moves) = state.store().and_then(|s| s.renames_since(oldest)) {
             mark_stale(&mut r.rows, r.at, &moves);
         }
+        // A check that failed (the NAS or Jellyfin wasn't there at that moment) is looked at again
+        // once the library folder is reachable; until then its old error isn't shown as current.
+        let reachable = state.library_root().is_ok();
+        let now = now_secs();
+        for x in r.rows.iter_mut().filter(|x| x.error.is_some()) {
+            if reachable && now - (if x.checked > 0 { x.checked } else { r.at }) > 600 {
+                x.stale = true;
+            }
+        }
     }
     Ok(r)
 }

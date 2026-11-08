@@ -68,7 +68,7 @@ export function namesToFix(c: CheckRow | null): boolean {
 export function namingStatus(c: CheckRow | null | undefined): { ok: boolean | null; line: string; count: number } {
   if (!c) return { ok: null, line: "Not checked yet", count: 0 };
   if (namingLeftAlone(c)) return { ok: null, line: "You chose to leave these names as they are", count: 0 };
-  if (c.stale) return { ok: null, line: "Renamed since the last check: open it to look again", count: 0 };
+  if (c.stale) return { ok: null, line: c.error ? "Checking again (the last check couldn't reach the library)" : "Changed since the last check: checking again", count: 0 };
   if (c.error) return { ok: false, line: `Couldn't check: ${c.error}`, count: 0 };
   const count = c.toRename + c.folders + c.problems;
   if (count === 0) return { ok: true, line: "Files and folders are named right", count: 0 };

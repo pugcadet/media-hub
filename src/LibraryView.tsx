@@ -102,13 +102,17 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
       // Titles renamed since their naming check (Inbox, Identify, Folders …): checked again quietly.
       const stale = (nc?.rows ?? []).filter((x) => x.stale && !namingLeftAlone(x)).map((x) => x.id);
       if (stale.length) {
-        void import("./Renamer").then((m) => {
-          const args = m.namingArgs();
-          return api.namingCheck(args[0], args[1], stale.slice(0, 40), args[2], args[3]);
-        }).then((res) => {
-          const fresh = new Map(res.rows.map((x) => [clean(x.id), x]));
-          setRows((rs) => rs?.map((x) => (fresh.has(clean(x.id)) ? { ...x, check: fresh.get(clean(x.id)) ?? x.check } : x)) ?? null);
-        }).catch(() => undefined);
+        void (async () => {
+          const args = (await import("./Renamer")).namingArgs();
+          // 40 at a time, all of them; each batch shows up as soon as it's done.
+          for (let i = 0; i < stale.length; i += 40) {
+            const res = await api.namingCheck(args[0], args[1], stale.slice(i, i + 40), args[2], args[3]).catch(() => null);
+            if (!res) break;
+            const want = new Set(stale.slice(i, i + 40).map(clean));
+            const fresh = new Map(res.rows.filter((x) => want.has(clean(x.id))).map((x) => [clean(x.id), x]));
+            setRows((rs) => rs?.map((x) => (fresh.has(clean(x.id)) ? { ...x, check: fresh.get(clean(x.id)) ?? x.check } : x)) ?? null);
+          }
+        })();
       }
       if (!fresh && Date.now() / 1000 - h.at > 86_400) void load(true);
     } catch (e) {
