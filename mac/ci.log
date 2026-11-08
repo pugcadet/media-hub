@@ -1,42 +1,14 @@
 
-added 75 packages in 6s
+added 75 packages in 4s
 [1m[92m    Updating[0m crates.io index
-[1m[92m   Compiling[0m media-hub v0.26.10 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[33mwarning[0m[1m: unreachable pattern[0m
-   [1m[94m--> [0msrc/library.rs:787:9
-    [1m[94m|[0m
-[1m[94m787[0m [1m[94m|[0m         _ => {}
-    [1m[94m|[0m         [1m[33m^[0m [1m[33mno value can reach this[0m
-    [1m[94m|[0m
-[1m[92mnote[0m: multiple earlier patterns match some of the same values
-   [1m[94m--> [0msrc/library.rs:787:9
-    [1m[94m|[0m
-[1m[94m775[0m [1m[94m|[0m [1m[94m...[0m   None => out.push(alert_fix("warn", "No library folder chosen", "The renamer, intro detection and adding new titles need it.",[1m[94m...[0m
-    [1m[94m|[0m       [1m[94m----[0m [1m[94mmatches some of the same values[0m
-[1m[94m...[0m
-[1m[94m786[0m [1m[94m|[0m [1m[94m...[0m   Some(r) => crate::nas::remember(&state, r),
-    [1m[94m|[0m       [1m[94m-------[0m [1m[94mmatches some of the same values[0m
-[1m[94m787[0m [1m[94m|[0m [1m[94m...[0m   _ => {}
-    [1m[94m|[0m       [1m[92m^[0m [1m[92mcollectively making this unreachable[0m
-    [1m[94m= [0m[1mnote[0m: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
-
-[1m[33mwarning[0m[1m: function `has_lang` is never used[0m
-  [1m[94m--> [0msrc/sub_cmds.rs:53:4
-   [1m[94m|[0m
-[1m[94m53[0m [1m[94m|[0m fn has_lang(list: &[SubStream], codes: &[String]) -> bool {
-   [1m[94m|[0m    [1m[33m^^^^^^^^[0m
-   [1m[94m|[0m
-   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-[1m[33mwarning[0m: `media-hub` (lib test) generated 1 warning (1 duplicate)
-[1m[33mwarning[0m: `media-hub` (lib) generated 2 warnings
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 2m 28s
-[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-5cdcb5e7a3fca3d8)
+[1m[92m   Compiling[0m media-hub v0.26.11 (/Users/runner/work/media-hub/media-hub/src-tauri)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 24s
+[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-0881454a380db2f5)
 
 running 209 tests
 test backend::tests::versions ... ok
-test backend::tests::library_rows_compare_with_recommended ... ok
 test backend::tests::schedules_read_nicely ... ok
+test backend::tests::library_rows_compare_with_recommended ... ok
 test cancel::tests::stop_and_restart ... ok
 test cleanup::tests::languages_group_by_family ... ok
 test collections::tests::episode_cards_point_at_the_show ... ok
@@ -47,12 +19,12 @@ test config::tests::rejects_bad_input ... ok
 test config::tests::strips_trailing_slash_query_and_fragment ... ok
 test detect::tests::chapters_with_names_are_used ... ok
 test bulk::tests::removes_and_adds_episode_tags ... ok
-test bulk::tests::drops_release_tags ... ok
-test downloads::tests::audio_mode ... ok
 test detect::tests::windows_and_snapping ... ok
+test downloads::tests::audio_mode ... ok
 test downloads::tests::builds_safe_arguments ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
 test downloads::tests::plain_error_text ... ok
+test bulk::tests::drops_release_tags ... ok
 test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
 test downloads::tests::search_targets_and_results ... ok
@@ -63,12 +35,12 @@ test fake_jellyfin::tests::a_missing_picture_is_none_not_an_error ... ok
 test fake_jellyfin::tests::a_conflict_reads_again_and_still_saves ... ok
 test fake_jellyfin::tests::clearing_removes_only_that_kind ... ok
 test fake_jellyfin::tests::missing_markers_plugin_is_not_called_a_missing_title ... ok
-test fake_jellyfin::tests::markers_are_saved_like_the_segment_editor_and_confirmed ... ok
-test fake_jellyfin::tests::position_falls_back_to_the_older_route_when_the_new_one_keeps_nothing ... ok
-test fake_jellyfin::tests::position_is_saved_and_read_back ... ok
-test fake_jellyfin::tests::subtitle_download_limit_is_reported_not_hidden ... ok
-test fingerprint::tests::fft_matches_a_plain_dft ... ok
 test fake_jellyfin::tests::older_intro_skipper_gets_delete_then_add ... ok
+test fake_jellyfin::tests::markers_are_saved_like_the_segment_editor_and_confirmed ... ok
+test fake_jellyfin::tests::position_is_saved_and_read_back ... ok
+test fake_jellyfin::tests::position_falls_back_to_the_older_route_when_the_new_one_keeps_nothing ... ok
+test fingerprint::tests::fft_matches_a_plain_dft ... ok
+test fake_jellyfin::tests::subtitle_download_limit_is_reported_not_hidden ... ok
 test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
 test fingerprint::tests::silence_does_not_match ... ok
 test fake_jellyfin::tests::hidden_from_players_is_said_not_called_saved ... ok
@@ -93,16 +65,15 @@ test inbox::tests::a_title_you_have_is_never_given_a_second_folder ... ok
 test inbox::tests::artists_combine_under_their_first_name ... ok
 test inbox::tests::episodes_get_their_title_and_junk_stays_behind ... ok
 test inbox::tests::episodes_without_a_season_go_in_the_show_folder ... ok
-test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
+test inbox::tests::movies_find_the_collection_you_already_have ... ok
 test inbox::tests::plans_episodes_into_the_show_and_skips_what_is_there ... ok
 test inbox::tests::season_folders_follow_the_show ... ok
-test inbox::tests::movies_find_the_collection_you_already_have ... ok
+test inbox::tests::season_packs_are_seen_as_seasons_of_the_show ... ok
 test inbox::tests::show_titles_and_artists ... ok
 test inbox::tests::the_copy_you_have_is_found ... ok
 test jellyfin::date_tests::dates_look_right ... ok
 test jellyfin::tests::bad_edits_are_refused ... ok
 test jellyfin::tests::client_rejects_odd_keys ... ok
-test inbox::tests::season_packs_are_seen_as_seasons_of_the_show ... ok
 test jellyfin::tests::edits_touch_only_what_changed ... ok
 test jellyfin::tests::episode_titles_cover_double_episodes ... ok
 test jellyfin::tests::finds_segment_endpoints_in_the_api_description ... ok
@@ -111,9 +82,10 @@ test jellyfin::tests::missing_null_and_value_are_different ... ok
 test jellyfin::tests::not_found_names_the_right_thing ... ok
 test jellyfin::tests::parses_a_jellyfin_page ... ok
 test jfserver::tests::playing_and_watched_read_plainly ... ok
-test jfserver::tests::versions_compare ... ok
 test jfserver::tests::update_respects_server_version ... ok
+test jfserver::tests::versions_compare ... ok
 test library::tests::best_version_wins_on_resolution_then_hdr ... ok
+test library::tests::different_shows_are_not_duplicates ... ok
 test library::tests::merging_genres ... ok
 test library::tests::missing_skips_unaired_and_counts_specials ... ok
 test library::tests::today_looks_like_a_date ... ok
@@ -135,27 +107,27 @@ test meta_cmds::tests::youtube_videos_are_numbered_oldest_first ... ok
 test moviefolders::tests::nested_folders_are_flattened ... ok
 test moviefolders::tests::never_swallows_or_nests_movies ... ok
 test moviefolders::tests::plans_keep_out_and_collection_rename ... ok
-test moviefolders::tests::sorts_movies_by_their_folders ... ok
+test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test music::tests::tracks_borrow_the_album_picture ... ok
+test moviefolders::tests::sorts_movies_by_their_folders ... ok
 test naming::tests::a_year_is_written_once ... ok
 test naming::tests::bad_templates_are_rejected ... ok
 test naming::tests::edition_words_are_not_the_title ... ok
 test naming::tests::episode_formats ... ok
 test naming::tests::fuller_titles ... ok
-test naming::tests::messy_names ... ok
 test naming::tests::names_with_years_and_ids ... ok
-test naming::tests::release_season_folders ... ok
+test naming::tests::messy_names ... ok
 test naming::tests::resolution_is_not_an_episode ... ok
 test naming::tests::sanitizing ... ok
 test naming::tests::seasons_from_folders ... ok
 test naming::tests::templates_fill_in_and_skip_optional_parts ... ok
 test naming::tests::titles_after_marker ... ok
-test library::tests::different_shows_are_not_duplicates ... ok
+test naming::tests::release_season_folders ... ok
 test naming_check::tests::already_right_has_no_reasons ... ok
 test naming_check::tests::problems_are_counted ... ok
 test naming_check::tests::rows_renamed_since_their_check_are_stale ... ok
-test naming_check::tests::a_quick_check_sees_which_titles_changed ... ok
 test naming_check::tests::sure_only_when_identified_and_every_episode_known ... ok
+test naming_check::tests::a_quick_check_sees_which_titles_changed ... ok
 test nas::tests::reads_the_share_from_the_list_of_mounts ... ok
 test picks::tests::date_check ... ok
 test picks::tests::handles_small_and_empty_lists ... ok
@@ -172,21 +144,21 @@ test planner::tests::detects_shows_and_movies ... ok
 test planner::tests::conflicts_and_unreadable_names ... ok
 test planner::tests::find_replace_only_touches_file_names ... ok
 test planner::tests::episodes_can_be_moved_into_season_folders_on_request ... ok
-test planner::tests::movies_rename_their_own_folder ... ok
 test planner::tests::minimal_only_tidies_messy_names ... ok
+test planner::tests::movies_rename_their_own_folder ... ok
 test planner::tests::online_movie_matches_fix_titles ... ok
 test planner::tests::release_season_folders_become_season_folders ... ok
 test planner::tests::renames_in_place_including_folders ... ok
 test planner::tests::show_year_can_be_optional ... ok
 test planner::tests::subtitles_without_the_movie_name_join_their_movie ... ok
-test planner::tests::the_fuller_title_wins ... ok
 test planner::tests::running_twice_finds_nothing_to_do ... ok
-test planner::tests::titles_from_the_internet_win ... ok
+test planner::tests::the_fuller_title_wins ... ok
 test planner::tests::titles_another_database_agrees_with_are_kept ... ok
+test planner::tests::titles_from_the_internet_win ... ok
 test planner::tests::year_and_name_come_from_files_and_folder_is_kept_when_unrelated ... ok
-test player::tests::keys_are_removed ... ok
 test player::tests::playlists_stay_inside_the_session ... ok
 test player::tests::splits_folder_and_file ... ok
+test player::tests::keys_are_removed ... ok
 test renumber::tests::moves_to_the_right_season_folder ... ok
 test seg_cmds::tests::reads_jellyfin_segments ... ok
 test seg_cmds::tests::span_checks ... ok
@@ -220,17 +192,17 @@ test sub_cmds::tests::language_lists_are_checked ... ok
 test sub_cmds::tests::limits_are_named ... ok
 test sub_cmds::tests::reads_streams_and_file_name ... ok
 test sub_cmds::tests::subtitle_text_and_format ... ok
-test sublock::tests::finds_the_same_language_by_name ... ok
+test structure::tests::suggests_and_plans_structure ... ok
 test subpreview::tests::spots_spread_out ... ok
 test subpreview::tests::tags_are_removed ... ok
 test subs::tests::hash_match_wins ... ok
+test sublock::tests::finds_the_same_language_by_name ... ok
 test subs::tests::language_codes ... ok
-test structure::tests::suggests_and_plans_structure ... ok
 test subs::tests::parses_jellyfin_json ... ok
 test subs::tests::machine_translation_is_penalised ... ok
 test subs::tests::plain_subtitles_are_taken_before_sdh_ones ... ok
-test subs::tests::ranking_sorts_and_drops_empty_ids ... ok
 test subs::tests::same_release_beats_other_release ... ok
+test subs::tests::ranking_sorts_and_drops_empty_ids ... ok
 test subs::tests::wrong_episode_is_zero ... ok
 test subsync::tests::reads_and_writes_srt_and_vtt ... ok
 test subsync::tests::speech_detection_follows_loudness ... ok
@@ -241,12 +213,12 @@ test updater::tests::checksums_and_assets ... ok
 test updater::tests::swap_keeps_old_when_new_is_missing ... ok
 test updater::tests::versions_compare ... ok
 test subsync::tests::finds_a_shift ... ok
-test fingerprint::tests::unrelated_audio_has_no_match ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
+test fingerprint::tests::unrelated_audio_has_no_match ... ok
 
-test result: ok. 209 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.79s
+test result: ok. 209 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.31s
 
-[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-cf3d85657ace854e)
+[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-04b8d826f4058f4f)
 
 running 0 tests
 
@@ -261,7 +233,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         Info Looking up installed tauri packages to check mismatched versions...
      Running beforeBuildCommand `npm run build`
 
-> media-hub@0.26.10 build
+> media-hub@0.26.11 build
 > tsc && vite build
 
 [36mvite v5.4.21 [32mbuilding for production...[36m[39m
@@ -297,8 +269,8 @@ computing gzip size...
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-ext-400-normal-Bc8Ftmh3.woff2  [39m[1m[2m    7.34 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-400-normal-BMzJvInZ.woff2          [39m[1m[2m    7.84 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-700-normal-Dw_fZAg2.woff2          [39m[1m[2m    7.85 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-500-normal-B1OEZity.woff2          [39m[1m[2m    7.87 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-600-normal-DvRl3Mj-.woff2          [39m[1m[2m    7.87 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-cyrillic-500-normal-B1OEZity.woff2          [39m[1m[2m    7.87 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-dm74KBQw.woff2         [39m[1m[2m    8.19 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-700-normal-DYOwVNan.woff2         [39m[1m[2m    8.28 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-400-normal-CMDvPJRp.woff2         [39m[1m[2m    8.29 kB[22m[1m[22m
@@ -310,8 +282,8 @@ computing gzip size...
 [2mdist/[22m[2massets/[22m[32mjetbrains-mono-latin-ext-400-normal-fXTG6kC5.woff   [39m[1m[2m   10.13 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32minter-vietnamese-wght-normal-CBcvBZtf.woff2         [39m[1m[2m   10.25 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32minter-greek-ext-wght-normal-DlzME5K_.woff2          [39m[1m[2m   11.23 kB[22m[1m[22m
-[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-EtoS1VaI.woff          [39m[1m[2m   11.25 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-600-normal-u5Pl7hTU.woff          [39m[1m[2m   11.25 kB[22m[1m[22m
+[2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-500-normal-EtoS1VaI.woff          [39m[1m[2m   11.25 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-400-normal-C-X6QNXX.woff          [39m[1m[2m   11.32 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-ext-700-normal-eVCcYqtJ.woff          [39m[1m[2m   11.35 kB[22m[1m[22m
 [2mdist/[22m[2massets/[22m[32mmanrope-latin-500-normal-BYYD-dBL.woff2             [39m[1m[2m   14.04 kB[22m[1m[22m
@@ -336,36 +308,9 @@ computing gzip size...
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 4.11s[39m
-[1m[92m   Compiling[0m media-hub v0.26.10 (/Users/runner/work/media-hub/media-hub/src-tauri)
-[1m[33mwarning[0m[1m: unreachable pattern[0m
-   [1m[94m--> [0msrc/library.rs:787:9
-    [1m[94m|[0m
-[1m[94m787[0m [1m[94m|[0m         _ => {}
-    [1m[94m|[0m         [1m[33m^[0m [1m[33mno value can reach this[0m
-    [1m[94m|[0m
-[1m[92mnote[0m: multiple earlier patterns match some of the same values
-   [1m[94m--> [0msrc/library.rs:787:9
-    [1m[94m|[0m
-[1m[94m775[0m [1m[94m|[0m [1m[94m...[0m   None => out.push(alert_fix("warn", "No library folder chosen", "The renamer, intro detection and adding new titles need it.",[1m[94m...[0m
-    [1m[94m|[0m       [1m[94m----[0m [1m[94mmatches some of the same values[0m
-[1m[94m...[0m
-[1m[94m786[0m [1m[94m|[0m [1m[94m...[0m   Some(r) => crate::nas::remember(&state, r),
-    [1m[94m|[0m       [1m[94m-------[0m [1m[94mmatches some of the same values[0m
-[1m[94m787[0m [1m[94m|[0m [1m[94m...[0m   _ => {}
-    [1m[94m|[0m       [1m[92m^[0m [1m[92mcollectively making this unreachable[0m
-    [1m[94m= [0m[1mnote[0m: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
-
-[1m[33mwarning[0m[1m: function `has_lang` is never used[0m
-  [1m[94m--> [0msrc/sub_cmds.rs:53:4
-   [1m[94m|[0m
-[1m[94m53[0m [1m[94m|[0m fn has_lang(list: &[SubStream], codes: &[String]) -> bool {
-   [1m[94m|[0m    [1m[33m^^^^^^^^[0m
-   [1m[94m|[0m
-   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-[1m[33mwarning[0m: `media-hub` (lib) generated 2 warnings
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 12m 43s
+[32m✓ built in 3.51s[39m
+[1m[92m   Compiling[0m media-hub v0.26.11 (/Users/runner/work/media-hub/media-hub/src-tauri)
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 8m 35s
        Built application at: /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/media-hub
     Bundling Media Hub.app (/Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app)
      Signing with identity "-"
@@ -376,9 +321,9 @@ Signing with identity "-"
 Signing /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app
 /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app: replacing existing signature
         Warn skipping app notarization, no APPLE_ID & APPLE_PASSWORD & APPLE_TEAM_ID or APPLE_API_KEY & APPLE_API_ISSUER & APPLE_API_KEY_PATH environment variables found
-    Bundling Media Hub_0.26.10_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Media Hub_0.26.10_aarch64.dmg)
+    Bundling Media Hub_0.26.11_aarch64.dmg (/Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Media Hub_0.26.11_aarch64.dmg)
      Running bundle_dmg.sh
     Finished 2 bundles at:
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app (17.81 MiB)
-        /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Media Hub_0.26.10_aarch64.dmg (8.68 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Media Hub.app (17.80 MiB)
+        /Users/runner/work/media-hub/media-hub/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Media Hub_0.26.11_aarch64.dmg (8.68 MiB)
 
