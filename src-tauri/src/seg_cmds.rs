@@ -126,6 +126,19 @@ pub async fn segments_overview(state: State<'_, AppState>, season_id: String) ->
     Ok(Overview { episodes, ffmpeg, can_write_segments })
 }
 
+/// Which episodes to listen to: all of them, or the asked-for ones plus the 3 nearest others.
+fn listen_to(ids: &[String], only: Option<&[String]>) -> Vec<bool> {
+    let Some(only) = only.filter(|o| !o.is_empty()) else { return vec![true; ids.len()] };
+    let picked: Vec<usize> = (0..ids.len()).filter(|&i| only.contains(&ids[i])).collect();
+    let mut out: Vec<bool> = (0..ids.len()).map(|i| picked.contains(&i)).collect();
+    let mut others: Vec<usize> = (0..ids.len()).filter(|i| !out[*i]).collect();
+    others.sort_by_key(|&i| picked.iter().map(|&p| p.abs_diff(i)).min().unwrap_or(usize::MAX));
+    for i in others.into_iter().take(3) {
+        out[i] = true;
+    }
+    out
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Suggestion {
@@ -155,6 +168,7 @@ pub async fn detect_season(
     credits_max: f64,
     find_intro: Option<bool>,
     find_credits: Option<bool>,
+    only: Option<Vec<String>>,
 ) -> Result<Vec<Suggestion>> {
     let (find_intro, find_credits) = (find_intro.unwrap_or(true), find_credits.unwrap_or(true));
     if !find_intro && !find_credits {
@@ -172,7 +186,12 @@ pub async fn detect_season(
         .iter()
         .filter(|e| e.get("Type").and_then(Value::as_str) == Some("Episode"))
         .collect();
-    let total = episodes.len();
+    // Only some episodes asked for: those, plus the 3 nearest others to compare with (an intro
+    // is found by hearing the same music in several episodes). The rest isn't listened to.
+    let ids: Vec<String> = episodes.iter().map(|e| e.get("Id").and_then(Value::as_str).unwrap_or("").to_string()).collect();
+    let listen = listen_to(&ids, only.as_deref());
+    let total = listen.iter().filter(|x| **x).count();
+    let mut heard = 0usize;
 
     let mut intros: Vec<Option<Window>> = Vec::new();
     let mut credits: Vec<Option<Window>> = Vec::new();
@@ -182,8 +201,15 @@ pub async fn detect_season(
     for (n, e) in episodes.iter().enumerate() {
         crate::cancel::check("detect")?;
         let id = e.get("Id").and_then(Value::as_str).unwrap_or("").to_string();
+        if !listen[n] {
+            intros.push(None);
+            credits.push(None);
+            out.push(Suggestion { id, intro: None, credits: None, intro_source: String::new(), credits_source: String::new(), problem: None });
+            continue;
+        }
         let name = e.get("Name").and_then(Value::as_str).unwrap_or("").to_string();
-        let _ = app.emit("detect-progress", Progress { done: n, total, label: format!("Listening to {name}") });
+        let _ = app.emit("detect-progress", Progress { done: heard, total, label: format!("Listening to {name}") });
+        heard += 1;
 
         let item = c.item_json(&id).await?;
         let duration = item.get("RunTimeTicks").and_then(Value::as_f64).unwrap_or(0.0) / TICKS_PER_SECOND;
@@ -537,6 +563,15 @@ pub async fn pick_ffmpeg(app: AppHandle, state: State<'_, AppState>) -> Result<O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_picked_episodes_and_a_few_neighbours_are_heard() {
+        let ids: Vec<String> = (1..=10).map(|i| format!("e{i}")).collect();
+        let got = listen_to(&ids, Some(&["e5".to_string()]));
+        assert_eq!(got.iter().filter(|x| **x).count(), 4);
+        assert!(got[4] && got[3] && got[5]);
+        assert_eq!(listen_to(&ids, None), vec![true; 10]);
+    }
 
     #[test]
     fn a_bad_marker_from_intro_skipper_gives_way_to_the_good_one() {

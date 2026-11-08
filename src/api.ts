@@ -982,8 +982,9 @@ export const api = {
   subtitleAuto: (id: string, lang: string, codes: string[], minScore: number) =>
     invoke<AutoResult>("subtitle_auto", { id, lang, codes, minScore }),
   segmentsOverview: (seasonId: string) => invoke<SegOverview>("segments_overview", { seasonId }),
-  detectSeason: (seasonId: string, introMax: number, creditsMax: number, findIntro = true, findCredits = true) =>
-    invoke<Suggestion[]>("detect_season", { seasonId, introMax, creditsMax, findIntro, findCredits }),
+  /** `only`: just these episodes (plus a few others to compare with); null = the whole season. */
+  detectSeason: (seasonId: string, introMax: number, creditsMax: number, findIntro = true, findCredits = true, only: string[] | null = null) =>
+    invoke<Suggestion[]>("detect_season", { seasonId, introMax, creditsMax, findIntro, findCredits, only }),
   saveSegments: (itemId: string, intro: Span | null, credits: Span | null, recap: Span | null, clear: string[]) =>
     invoke<SaveReport>("save_segments", { itemId, intro, credits, recap, clear }),
   ffmpegInfo: () => invoke<{ path: string | null; version: string | null }>("ffmpeg_info"),

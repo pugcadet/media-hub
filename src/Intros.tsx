@@ -104,7 +104,7 @@ export async function detectAndSave(seasonIds: string[], job?: JobHandle, only?:
     const un = await listenNow();
     let res;
     try {
-      res = await api.detectSeason(sid, 6 * 60, 5 * 60, detectIntro, detectCredits);
+      res = await api.detectSeason(sid, 6 * 60, 5 * 60, detectIntro, detectCredits, only ? ov.episodes.filter((e) => only.has(e.id)).map((e) => e.id) : null);
     } finally {
       un();
     }
@@ -331,7 +331,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
       const res = await track(`Finding ${what}`, async (job) => {
         const un = await listen<{ done: number; total: number; label: string }>("detect-progress", (e) => job.update(e.payload.label, e.payload.total ? e.payload.done / e.payload.total : null));
         try {
-          return await api.detectSeason(seasonId, 6 * 60, 5 * 60, detectIntro, detectCredits);
+          return await api.detectSeason(seasonId, 6 * 60, 5 * 60, detectIntro, detectCredits, scope === "season" ? null : [...only]);
         } finally {
           un();
         }

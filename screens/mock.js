@@ -28,7 +28,7 @@
     missing_episodes: { source: "TMDB", have: 20, known: 24, missing: [{ season: 1, episode: 3, title: "Hotel", airDate: "2019-01-01" }, { season: 0, episode: 1, title: "Special", airDate: null }], upcoming: [], specialsMissing: 1 },
     segment_summary: { episodes: 24, intro: 20, credits: 18, recap: 0 },
     save_segments: { confirmed: true, message: "Saved and confirmed" },
-    segments_overview: { episodes: episodes.map((e) => ({ id: e.Id, name: e.Name, index: e.IndexNumber ?? null, duration: 1320, segments: [{ id: "a", kind: "Intro", start: 5, end: 40 }] })), ffmpeg: "/opt/homebrew/bin/ffmpeg", canWriteSegments: true },
+    segments_overview: { episodes: episodes.map((e, i) => ({ id: e.Id, name: e.Name, index: e.IndexNumber ?? null, duration: 1474, segments: i === episodes.length - 1 ? [{ id: "c" + i, kind: "Outro", start: 0, end: 1474 }] : [{ id: "a" + i, kind: "Intro", start: [120, 175, 308, 283, 160, 276][i % 6], end: [120, 175, 308, 283, 160, 276][i % 6] + 63 }, { id: "b" + i, kind: "Outro", start: 1427, end: 1474 }] })), ffmpeg: "/opt/homebrew/bin/ffmpeg", canWriteSegments: true },
     inbox_list: ["/Users/me/Downloads", []],
     music_source: { folder: null, source: "jellyfin" },
     music_list: Array.from({ length: 10 }, (_, i) => ({ id: hex(300 + i), kind: "album", name: `Album ${i + 1}`, artist: `Artist ${i % 4}`, album: `Album ${i + 1}`, albumId: hex(300 + i), year: 2010 + i, index: null, disc: null, duration: 2400, artId: hex(300 + i), hasArt: true, count: 12, favorite: false })),
