@@ -1,4 +1,5 @@
 mod backend;
+mod books;
 mod bulk;
 mod cancel;
 mod cleanup;
@@ -174,6 +175,10 @@ pub fn run() {
             collections::collections_of,
             collections::collection_members,
             collections::collections_remove_empty,
+            books::books_list,
+            books::books_search,
+            books::books_description,
+            books::books_save,
             collections::similar_items,
             collections::person_items,
             collections::collection_create,

@@ -2562,3 +2562,46 @@ button.link-plain.sx-name { display: flex; flex-direction: column; align-items: 
 button.link-plain.sx-name > span { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sx-detail .seg-preview { padding: 0; }
 .art-opt .src.low { color: #f5c46b; }
+
+/* ------------------------------------------- title page: the steps are the buttons */
+.step-tabs { display: grid; gap: 10px; margin: 4px 0 16px; }
+.step-tab { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 76px; padding: 12px 14px; border-radius: 12px; background: #161616; border: 1.5px solid #262626; transition: border-color .15s, background .15s; }
+.step-tab:hover { background: #1c1c1c; border-color: #3a3a3a; }
+.step-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.step-tab.s-warn { border-color: #4a3a1c; }
+.step-tab.on { background: rgba(0,164,220,.10); border-color: var(--accent); }
+.step-tab-head { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.step-tab-head b { font-weight: 650; }
+.step-tab .step-mark { width: 20px; height: 20px; flex: 0 0 20px; font-size: 12px; }
+.step-tab.s-ok .step-mark { background: var(--green); }
+.step-tab.s-warn .step-mark { background: var(--amber); }
+.step-tab.s-unknown .step-mark { background: #3a3a3a; color: #cfcfcf; }
+.step-away { margin-left: auto; color: var(--muted); display: inline-flex; }
+.step-tab-line { color: var(--muted); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.step-tab.s-warn .step-tab-line { color: #f5c46b; }
+@media (max-width: 1100px) { .step-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; } }
+
+/* ------------------------------------------------------------------- ebooks */
+.bk-thumb { width: 34px; height: 48px; border-radius: 5px; background: #222; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; flex: 0 0 34px; }
+.bk-match { display: flex; flex-direction: column; gap: 16px; }
+.bk-row { display: flex; gap: 22px; align-items: flex-start; }
+.bk-cover { width: 170px; flex: 0 0 170px; }
+.bk-cover img { width: 100%; border-radius: 8px; box-shadow: 0 4px 18px rgba(0,0,0,.45); }
+.bk-nocover { aspect-ratio: 2 / 3; border-radius: 8px; border: 1.5px dashed #3a3a3a; color: var(--muted); display: flex; flex-direction: column; gap: 8px; align-items: center; justify-content: center; text-align: center; padding: 10px; }
+.bk-title { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.2; }
+.bk-facts { display: flex; flex-wrap: wrap; gap: 6px 22px; }
+.bk-desc { margin: 0; color: #c4c4c4; line-height: 1.55; white-space: pre-line; }
+.bk-desc.short { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.bk-does { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 10px; background: #121212; border: 1px solid #242424; color: #c4c4c4; }
+.bk-others { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 12px; }
+.bk-other { all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; }
+.bk-other:hover { background: #1c1c1c; }
+.bk-other.on { border-color: var(--accent); background: rgba(0,164,220,.08); }
+.bk-other:focus-visible { outline: 2px solid var(--accent); }
+.bk-mini { width: 30px; height: 44px; flex: 0 0 30px; border-radius: 4px; background: #222; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
+.bk-mini img { width: 100%; height: 100%; object-fit: cover; }
+.bk-search input { flex: 1; min-width: 0; }
+@media (max-width: 900px) { .bk-row { flex-direction: column; } .bk-cover { width: 140px; flex-basis: auto; } }
+.bk-detail > .card { padding: 16px 20px; }
+.bk-detail { gap: 14px; }
+.bk-note { margin: 0 0 12px; }

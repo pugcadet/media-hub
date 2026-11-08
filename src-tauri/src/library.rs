@@ -924,7 +924,9 @@ pub fn journal_all(state: State<'_, AppState>, limit: i64) -> Result<Vec<Journal
         .into_iter()
         .map(|r| {
             let key = r.target.split('|').next().unwrap_or("").to_string();
-            JournalRow { title: names.get(&key).cloned().unwrap_or_default(), id: r.id, at: r.at, action: r.action, target: r.target, undone: r.undone }
+            // An ebook: its file name (the target is its path in the library folder).
+            let book = (r.action == "book").then(|| r.target.rsplit('/').next().unwrap_or("").rsplit_once('.').map(|(n, _)| n.to_string()).unwrap_or_default());
+            JournalRow { title: book.unwrap_or_else(|| names.get(&key).cloned().unwrap_or_default()), id: r.id, at: r.at, action: r.action, target: r.target, undone: r.undone }
         })
         .collect())
 }

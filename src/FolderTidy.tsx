@@ -15,6 +15,9 @@ import { folderOff, setPrefs, usePrefs } from "./prefs";
 import { foldersSummary, savePart } from "./scan";
 import { nav } from "./nav";
 
+/** The books folder: tidied in the Ebooks tab, not as movies or shows. */
+const BOOKS = /^(e-?books?|books|boeken)$/i;
+
 export interface LooseShow { folder: string; name: string; loose: number; seasons: number; messy?: string[] }
 export interface TopFolder { folder: string; kind: "tv" | "movies" | "mixed" | "empty"; shows: LooseShow[]; looseMovies: string[]; folderedMovies: string[] }
 interface ArtistMerge { from: string; to: string; albums: string[] }
@@ -192,7 +195,13 @@ export default function Folders({ status }: { status: Status }) {
         </details>
       )}
       {active && off && <div className="card form"><p className="muted">{active} is left alone. Turn that off under Options to tidy it.</p></div>}
-      {active && !off && (
+      {active && !off && BOOKS.test(active) && (
+        <div className="card form row">
+          <p className="grow muted">Books are tidied in the Ebooks tab: each one gets its own folder with its details and cover, the way Jellyfin reads them.</p>
+          <button className="primary" onClick={() => nav.route({ view: "library", section: "books", n: Date.now() })}><Icon name="book" /> Open Ebooks</button>
+        </div>
+      )}
+      {active && !off && !BOOKS.test(active) && (
         <div className="folders-main">
           {!structure && !movies && <div className="pg-loading"><span className="spinner" /> Looking at your folders…</div>}
           {movies && movies.data.some((m) => m.top === active) && <MovieSuggestions key={`m-${active}`} top={active} list={movies.data.filter((m) => m.top === active)} readOnly={status.readOnly} onDone={() => void look()} />}

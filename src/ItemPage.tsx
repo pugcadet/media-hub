@@ -301,6 +301,7 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
       )}
       {message && <p className={message.error ? "error" : "note"} role="status">{message.text}</p>}
 
+      {kind ? <StepTabs d={d} kind={kind} tab={shownTab} onTab={setTab} onIdentify={() => identify(d)} /> : (
       <div className="tabs item-tabs" role="tablist">
         {tabs.map((t) => (
           <button key={t.id} role="tab" aria-selected={shownTab === t.id} className={shownTab === t.id ? "on" : ""} onClick={() => setTab(t.id)}>
@@ -308,12 +309,13 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
           </button>
         ))}
       </div>
+      )}
 
       {shownTab === "main" && isSeason && <SeasonPanel season={item} canEdit={d.canEdit} subLangs={subLangs} />}
       {shownTab === "main" && isBoxSet && <BoxSetTitles id={id} canEdit={d.canEdit} />}
       {shownTab === "main" && !isSeason && (
         <div className="stack">
-          {kind && <StatusCards d={d} kind={kind} onTab={setTab} onIdentify={() => identify(d)} />}
+          {kind && <IdentifyCard d={d} onIdentify={() => identify(d)} />}
           <SaveToFilesHint canEdit={d.canEdit} />
           <div className="card form">
             <div className="section-head"><h2><Icon name="info" /> Details</h2>{kind && <button className="link small" onClick={() => identify(d)}>Identify again…</button>}</div>
@@ -477,13 +479,6 @@ function TitleHealth({ d, kind, canEdit, subLangs, onTab, onIdentify }: { d: Det
 
   return (
     <>
-      <div className="cine-chips">
-        {chips.map((c) => (
-          <button key={c.label} className={`hchip ${c.ok === null ? "" : c.ok ? "ok" : "warn"}`} onClick={c.go}>
-            {c.ok ? <Icon name="check" size={12} /> : c.ok === false ? <Icon name="warn" size={12} /> : null} {c.label}
-          </button>
-        ))}
-      </div>
       <div className="row bb-actions">
         {kind === "movie" && (
           <button className="bb-play" onClick={() => void api.openVideo(item.Id).catch(() => undefined)} title="Opens the video in your own player (QuickTime, IINA, VLC …)">
@@ -495,37 +490,61 @@ function TitleHealth({ d, kind, canEdit, subLangs, onTab, onIdentify }: { d: Det
             <Icon name="wrench" size={18} /> Fix {auto.length} thing{auto.length === 1 ? "" : "s"}
           </button>
         )}
-        {todo > auto.length && <span className="muted small">{todo - auto.length} need{todo - auto.length === 1 ? "s" : ""} you: click the yellow chip</span>}
+        {todo > auto.length && <span className="muted small">{todo - auto.length} need{todo - auto.length === 1 ? "s" : ""} you: see the amber step{todo - auto.length === 1 ? "" : "s"} below</span>}
       </div>
     </>
   );
 }
 
-/** The five library steps for this title, in order, each with one button (same as the Library). */
-function StatusCards({ d, kind, onTab, onIdentify }: { d: Details; kind: "series" | "movie"; onTab: (t: TabId) => void; onIdentify: () => void }) {
+/**
+ * The library steps for this title as the page's buttons, in the Library's order: each says
+ * whether it's fine (tick) or needs something (amber "!" and what), and opens its part below.
+ */
+function StepTabs({ d, kind, tab, onTab, onIdentify }: { d: Details; kind: "series" | "movie"; tab: TabId; onTab: (t: TabId) => void; onIdentify: () => void }) {
   const item = d.item;
   const { check, seg, identified, noSubs, row, has } = useTitleState(d, kind);
-  const ids = Object.entries(item.ProviderIds ?? {}).filter(([k, v]) => v && ["Tmdb", "Tvdb", "Imdb"].includes(k));
-  const artKinds: ImageKind[] = ["Primary", "Backdrop", "Logo", "Thumb"];
-  const artNames: Record<string, string> = { Primary: "poster", Backdrop: "background", Logo: "logo", Thumb: "thumbnail" };
-  const missingArt = artKinds.filter((k) => !has(k));
+  const artNames: Record<string, string> = { Primary: "poster", Backdrop: "background", Logo: "logo", Thumb: "thumb" };
+  const missingArt = (["Primary", "Backdrop", "Logo", "Thumb"] as ImageKind[]).filter((k) => !has(k) && !artSkipped(item.Id.replace(/-/g, "")).includes(k));
   const naming = namingStatus(check);
-  const step = (n: number, label: string, ok: boolean | null, line: React.ReactNode, button: string, run: () => void) => (
-    <div key={n} className={`step-row ${ok === null ? "s-unknown" : ok ? "s-ok" : "s-warn"}`}>
-      <span className="step-mark">{ok === null ? "?" : ok ? <Icon name="check" size={14} /> : "!"}</span>
-      <span className="grow stack-xs step-text"><b>{label}</b><span className="muted small ellipsis">{line}</span></span>
-      <button className={ok === false ? "primary" : ""} disabled={!d.canEdit && ok === false} onClick={run}>{button}</button>
-    </div>
-  );
+  const nameCount = check ? check.toRename + check.folders : 0;
   // Some episodes simply have no intro: a show is fine when most episodes have intro or credits markers.
   const introOk = seg ? seg.episodes > 0 && Math.max(seg.intro, seg.credits) >= seg.episodes * 0.8 : null;
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const steps: { id: string; label: string; icon: IconName; ok: boolean | null; line: string; on: boolean; go: () => void; away?: boolean }[] = [
+    { id: "identify", label: "Identify", icon: "search", ok: identified, line: identified ? "Matched" : "No match yet", on: tab === "main", go: () => (identified ? onTab("main") : onIdentify()) },
+    { id: "art", label: "Artwork", icon: "image", ok: missingArt.length === 0, line: missingArt.length ? `${cap(missingArt.map((k) => artNames[k]).join(", "))} missing` : "All there", on: tab === "art", go: () => onTab("art") },
+    { id: "naming", label: "Naming", icon: "rename", ok: naming.ok, line: !check ? "Not checked yet" : naming.ok === false ? (nameCount ? `${nameCount} name${nameCount === 1 ? "" : "s"} to fix` : "Look at names") : naming.ok ? "Names are right" : "Check again", on: false, go: () => nav.route({ view: "renamer", item: item.Id }), away: true },
+    { id: "subs", label: "Subtitles", icon: "subtitles", ok: kind === "series" && !row ? null : noSubs === 0, line: kind === "movie" ? (noSubs ? "None in your language" : "In your language") : row ? (noSubs ? `${noSubs} of ${row.videos} episodes without` : `All ${row.videos} episodes`) : "Not checked yet", on: tab === "subs", go: () => onTab("subs") },
+  ];
+  if (kind === "series") {
+    steps.push({ id: "intros", label: "Intros", icon: "skip", ok: introOk, line: seg ? `${Math.max(seg.intro, seg.credits)} of ${seg.episodes} have markers` : "Not read yet", on: tab === "intros", go: () => onTab("intros") });
+    steps.push({ id: "episodes", label: "Episodes", icon: "list", ok: null, line: d.seasons.length ? `${d.seasons.length} season${d.seasons.length === 1 ? "" : "s"}${row ? `, ${row.videos} episodes` : ""}` : "Seasons and episodes", on: tab === "episodes", go: () => onTab("episodes") });
+  }
   return (
-    <div className="step-rows">
-      {step(1, "Identify", identified, identified ? `Matched${ids.length ? `: ${ids.map(([k, v]) => `${k.toUpperCase()} ${v}`).join(" · ")}` : ""}` : "No match with TMDB or TVDB yet", identified ? "Change" : "Identify", onIdentify)}
-      {step(2, "Artwork", missingArt.length === 0, missingArt.length ? `Missing: ${missingArt.map((k) => artNames[k]).join(", ")}` : "Poster, background, logo and thumbnail are there", missingArt.length ? "Add artwork" : "Change", () => onTab("art"))}
-      {step(3, "Naming", naming.ok, <span title={naming.line}>{naming.line}</span>, naming.ok === false ? (check && check.toRename + check.folders > 0 ? `Fix names (${check.toRename + check.folders})` : "Look at names") : "Open", () => nav.route({ view: "renamer", item: item.Id }))}
-      {step(4, "Subtitles", kind === "series" && !row ? null : noSubs === 0, kind === "movie" ? (noSubs ? "No subtitles in your language yet" : "Subtitles in your language are there") : row ? (noSubs ? `${noSubs} of ${row.videos} episodes without your language` : `All ${row.videos} episodes have them`) : "Not checked yet", noSubs ? "Find subtitles" : "Open", () => onTab("subs"))}
-      {kind === "series" && step(5, "Intros", introOk, seg ? `Of ${seg.episodes} episodes: ${seg.intro} with an intro, ${seg.credits} with credits` : "Not read yet", introOk ? "Open" : "Set intros", () => onTab("intros"))}
+    <div className="step-tabs" role="tablist" aria-label="Library steps" style={{ gridTemplateColumns: `repeat(${steps.length}, minmax(0, 1fr))` }}>
+      {steps.map((s) => (
+        <button key={s.id} role="tab" aria-selected={s.on} className={`step-tab ${s.on ? "on" : ""} ${s.ok === null ? "s-unknown" : s.ok ? "s-ok" : "s-warn"}`} onClick={s.go} title={s.away ? "Opens the Renamer for this title" : undefined}>
+          <span className="step-tab-head">
+            <span className="step-mark">{s.ok === null ? <Icon name={s.icon} size={12} /> : s.ok ? <Icon name="check" size={12} /> : "!"}</span>
+            <b>{s.label}</b>
+            {s.away && <span className="step-away"><Icon name="external" size={12} /></span>}
+          </span>
+          <span className="step-tab-line small">{s.line}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Identify, on the details part: what it's matched with, and a button to change it. */
+function IdentifyCard({ d, onIdentify }: { d: Details; onIdentify: () => void }) {
+  const ids = Object.entries(d.item.ProviderIds ?? {}).filter(([k, v]) => v && ["Tmdb", "Tvdb", "Imdb"].includes(k));
+  const identified = ["Tmdb", "Tvdb"].some((k) => !!d.item.ProviderIds?.[k]);
+  return (
+    <div className={`step-row ${identified ? "s-ok" : "s-warn"}`}>
+      <span className="step-mark">{identified ? <Icon name="check" size={14} /> : "!"}</span>
+      <span className="grow stack-xs step-text"><b>Identify</b><span className="muted small ellipsis">{identified ? `Matched${ids.length ? `: ${ids.map(([k, v]) => `${k.toUpperCase()} ${v}`).join(" · ")}` : ""}` : "No match with TMDB or TVDB yet"}</span></span>
+      <button className={identified ? "" : "primary"} disabled={!d.canEdit && !identified} onClick={onIdentify}>{identified ? "Change" : "Identify"}</button>
     </div>
   );
 }

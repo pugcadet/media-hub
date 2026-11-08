@@ -24,6 +24,8 @@ const REMOTE_HOSTS: &[&str] = &[
     "coverartarchive.org",
     "archive.org",
     "theaudiodb.com",
+    // Book covers (Open Library; they may redirect to archive.org).
+    "covers.openlibrary.org",
 ];
 const MAX_REMOTE_BYTES: usize = 15 * 1024 * 1024;
 

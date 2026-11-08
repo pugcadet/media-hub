@@ -17,6 +17,7 @@ import { askIdentify } from "./IdentifyDialog";
 import { namingLeftAlone, prefs, setPrefs, usePrefs } from "./prefs";
 import { folderTabs, KTabs, SearchBox, Seg, StatusIcons } from "./kit";
 import MusicManage from "./MusicManage";
+import Ebooks from "./Ebooks";
 import Folders from "./FolderTidy";
 import { TITLE_ART, titleState, type Check } from "./checks";
 
@@ -79,6 +80,7 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
     }
     if (route.view === "collections") setFolder("@collections");
     if (route.section === "folders") setFolder("@folders");
+    if (route.section === "books") setFolder("@books");
     if (route.collection) nav.open(route.collection);
   }, [route.flag, route.view, route.n, route.collection, route.section]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -196,7 +198,7 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
   // artwork, a rename …) keeps the title you had selected.
   const lastFolder = useRef(folder);
   useEffect(() => {
-    if (libraryView !== "list" || folder.startsWith("@c") || folder === "@music" || folder === "@folders" || !shown.length) return;
+    if (libraryView !== "list" || folder.startsWith("@c") || folder === "@music" || folder === "@folders" || folder === "@books" || !shown.length) return;
     const switched = lastFolder.current !== folder;
     lastFolder.current = folder;
     if (switched || !sel || !shown.some((r) => r.id === sel)) setSel(shown[0].id);
@@ -228,6 +230,7 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
         { id: "@collections", label: "Collections", icon: "heart" },
         { id: "@folders", label: "Folders", icon: "folder" },
         { id: "@music", label: "Music", icon: "music" },
+        { id: "@books", label: "Ebooks", icon: "book" },
       ]}
     />
   );
@@ -237,7 +240,7 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
     <div className="lib-bar-row">
       {tabs}
       <span className="spacer" />
-      {folder !== "@music" && folder !== "@collections" && folder !== "@folders" && (
+      {folder !== "@music" && folder !== "@collections" && folder !== "@folders" && folder !== "@books" && (
         <>
           <span className="muted small lib-summary">{checking ? "Checking…" : rows ? `${perfect} of ${inFolder.length} complete` : ""}</span>
           <button disabled={checking} onClick={() => void reloadData().then(() => load(true)).catch(() => undefined)} title="Reads the library again from Jellyfin and your folders">{checking ? <span className="spinner small-spin" /> : <Icon name="reload" />} Refresh</button>
@@ -253,6 +256,17 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
         <div className="lib-bar">{barTop}</div>
         <div className="lib-body pad">
           <Folders status={st} />
+        </div>
+      </div>
+    );
+  }
+
+  if (folder === "@books") {
+    return (
+      <div className="pg lib-page lib2">
+        <div className="lib-bar">{barTop}</div>
+        <div className="lib-body pad">
+          <Ebooks canEdit={canEdit} />
         </div>
       </div>
     );

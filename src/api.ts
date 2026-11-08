@@ -740,6 +740,18 @@ export interface Alert {
   fix: string;
 }
 
+export interface BookMeta { title: string; authors: string[]; year: number | null; isbn: string | null; language: string | null }
+export interface Book {
+  rel: string; file: string; ext: string; size: number; meta: BookMeta;
+  /** Where the details came from: a metadata.opf next to it, inside the file, or only its name. */
+  from: "opf" | "file" | "name";
+  ownFolder: boolean; hasCover: boolean; hasOpf: boolean; done: boolean;
+}
+export interface BookMatch {
+  key: string; title: string; authors: string[]; year: number | null; isbn: string | null; coverId: number | null;
+  pages: number | null; subjects: string[]; languages: string[]; publisher: string | null; editions: number; sure: boolean;
+}
+
 export interface MusicItem {
   id: string;
   kind: "album" | "artist" | "track" | "playlist";
@@ -1041,6 +1053,10 @@ export const api = {
   collectionMembers: () => invoke<Record<string, string[]>>("collection_members"),
   /** Removes collections with nothing in them; returns how many (Undo in History makes them again). */
   collectionsRemoveEmpty: () => invoke<number>("collections_remove_empty"),
+  booksList: () => invoke<{ folder: string | null; books: Book[] }>("books_list"),
+  booksSearch: (guess: BookMeta, text?: string) => invoke<BookMatch[]>("books_search", { guess, text: text ?? null }),
+  booksDescription: (key: string) => invoke<string | null>("books_description", { key }),
+  booksSave: (rel: string, m: BookMatch, description: string | null) => invoke<string>("books_save", { rel, m, description }),
   similar: (id: string) => invoke<Card[]>("similar_items", { id }),
   personItems: (id: string) => invoke<Card[]>("person_items", { id }),
   collectionCreate: (name: string, ids: string[]) => invoke<string>("collection_create", { name, ids }),

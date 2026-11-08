@@ -8,7 +8,7 @@ import { KTabs, PageHead, SearchBox, Toolbar } from "./kit";
 
 export const KIND: Record<string, string> = {
   item_update: "Details", identify: "Identified", image: "Picture", image_removed: "Picture removed", collection: "Collection",
-  subtitle: "Subtitle", subtitle_file: "Subtitle", subtitle_timing: "Subtitle timing", segment: "Intro/credits", storage: "Storage", file_trashed: "Moved to trash", rename: "Renamed files", music_tags: "Song details", library_options: "Library setting",
+  subtitle: "Subtitle", subtitle_file: "Subtitle", subtitle_timing: "Subtitle timing", segment: "Intro/credits", storage: "Storage", file_trashed: "Moved to trash", rename: "Renamed files", music_tags: "Song details", book: "Ebook", library_options: "Library setting",
 };
 
 interface Entry {

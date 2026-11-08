@@ -101,6 +101,18 @@
     missing_subtitles: { TotalRecordCount: 8, Items: episodes },
     server_update_plugins: ["Intro Skipper 1.10.10.5"],
     collections_remove_empty: 1,
+    books_list: { folder: "Ebooks", books: [
+      { rel: "Ebooks/hail mary weir.epub", file: "hail mary weir.epub", ext: "epub", size: 3.2e6, meta: { title: "hail mary weir", authors: [], year: null, isbn: null, language: null }, from: "name", ownFolder: false, hasCover: false, hasOpf: false, done: false },
+      { rel: "Ebooks/Frank Herbert - Dune (1965)/Frank Herbert - Dune (1965).epub", file: "Frank Herbert - Dune (1965).epub", ext: "epub", size: 2.1e6, meta: { title: "Dune", authors: ["Frank Herbert"], year: 1965, isbn: null, language: "en" }, from: "opf", ownFolder: true, hasCover: true, hasOpf: true, done: true },
+      { rel: "Ebooks/Circe.epub", file: "Circe.epub", ext: "epub", size: 1.4e6, meta: { title: "Circe", authors: ["Madeline Miller"], year: 2018, isbn: "9780316556347", language: "en" }, from: "file", ownFolder: false, hasCover: false, hasOpf: false, done: false },
+      { rel: "Ebooks/scan_0042.pdf", file: "scan_0042.pdf", ext: "pdf", size: 9e6, meta: { title: "scan 0042", authors: [], year: null, isbn: null, language: null }, from: "name", ownFolder: false, hasCover: false, hasOpf: false, done: false },
+    ] },
+    books_search: (a) => /scan/.test(a?.guess?.title ?? "") && !a?.text ? [] : [
+      { key: "/works/OL1W", title: a?.guess?.title === "Circe" ? "Circe" : "Project Hail Mary", authors: [a?.guess?.title === "Circe" ? "Madeline Miller" : "Andy Weir"], year: a?.guess?.title === "Circe" ? 2018 : 2021, isbn: "9780593135204", coverId: null, pages: 496, subjects: ["Science fiction", "Space"], languages: ["eng"], publisher: "Ballantine Books", editions: 41, sure: a?.guess?.title === "Circe" },
+      { key: "/works/OL2W", title: "The Martian", authors: ["Andy Weir"], year: 2011, isbn: null, coverId: null, pages: 384, subjects: [], languages: ["eng"], publisher: null, editions: 90, sure: false },
+    ],
+    books_description: "A lone astronaut must save the earth from disaster in this propulsive interstellar thriller. Ryland Grace is the sole survivor on a desperate, last-chance mission.",
+    books_save: "Ebooks/Andy Weir - Project Hail Mary (2021)/Andy Weir - Project Hail Mary (2021).epub",
     music_album_files: Array.from({ length: 10 }, (_, i) => [hex(300 + i), `/Volumes/media/Music/Album/${String(i + 1).padStart(2, "0")} Song.flac`]),
     music_tags_apply: 10,
   };

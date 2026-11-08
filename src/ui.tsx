@@ -323,7 +323,7 @@ export type IconName =
   | "home" | "tv" | "film" | "stack" | "heart" | "inbox" | "rename" | "image" | "subtitles" | "skip"
   | "missing" | "copy" | "tag" | "disk" | "history" | "settings" | "music" | "info" | "warn" | "pause"
   | "next" | "prev" | "shuffle" | "volume" | "clock" | "wand" | "download" | "list" | "grid" | "trash" | "external"
-  | "undo" | "lock" | "server" | "stop" | "chevron" | "infuse" | "wrench" | "queue" | "sort" | "grip" | "eye";
+  | "undo" | "lock" | "server" | "stop" | "chevron" | "infuse" | "wrench" | "queue" | "sort" | "grip" | "eye" | "book";
 
 const ICONS: Record<IconName, ReactNode> = {
   reload: <><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></>,
@@ -354,6 +354,7 @@ const ICONS: Record<IconName, ReactNode> = {
   disk: <><ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>,
   history: <><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /><path d="M12 8v4l3 2" /></>,
   settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></>,
+  book: <><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z" /><path d="M4 21V5" /><path d="M8 7h7" /></>,
   music: <><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></>,
   info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></>,
   warn: <><path d="M12 3l10 18H2z" /><path d="M12 10v5M12 18v.5" /></>,

@@ -1914,6 +1914,7 @@ name = "media-hub"
 version = "0.26.17"
 dependencies = [
  "base64 0.22.1",
+ "flate2",
  "getrandom 0.2.17",
  "keyring",
  "lofty",
