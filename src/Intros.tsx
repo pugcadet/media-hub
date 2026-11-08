@@ -164,11 +164,6 @@ export function parseTime(v: string): number | null {
   return parts.reduce((acc, p) => acc * 60 + Number(p), 0);
 }
 
-/** "Intro 0:05–0:35 · Credits 19:40" or "No markers yet". */
-function summary(d: Draft, parts: Part[]): string {
-  const bits = parts.filter((p) => d[p]).map((p) => `${LABEL[p]} ${fmt(d[p]!.start)}–${fmt(d[p]!.end)}`);
-  return bits.length ? bits.join(" · ") + (d.source && d.source !== "manual" ? ` (${d.source})` : "") : "No markers yet";
-}
 
 function saved(ep: SegEpisode, part: Part): Span | null {
   const s = ep.segments.find((x) => x.kind === KIND[part]);
@@ -234,6 +229,9 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
   const [lines, setLines] = useState<SaveLine[]>([]);
   const [status, setStatus] = useState<{ text: string; pct: number | null; done: boolean } | null>(null);
   const [keep, setKeep] = useState(true);
+  const [view, setView] = useState<"all" | "look" | "nointro" | "changed">("all");
+  const [setOpenPanel, setSetOpenPanel] = useState(false);
+  const [showLines, setShowLines] = useState(false);
   const stopRef = useRef<{ cancelled: boolean }>({ cancelled: false });
   const onLine = (l: SaveLine, done: number, total: number) => {
     setLines((old) => {
@@ -487,7 +485,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
       if (d.credits && fromEnd !== null && Math.abs(e.duration - d.credits.start - fromEnd) > 90) {
         out.push({
           id: `credits-${e.id}`, ep: e, title: `${epName(e)} · Credits start at ${fmt(d.credits.start)}`,
-          why: `Most episodes have credits from ${fmt(fromEnd)} before the end; this one has ${fmt(e.duration - d.credits.start)}.`,
+          why: `Starts ${fmt(e.duration - d.credits.start)} before the end; usually ${fmt(fromEnd)}.`,
           actions: [
             { label: "Fix to median", run: () => set(e.id, "credits", { start: Math.max(0, e.duration - fromEnd), end: e.duration }) },
             { label: "Remove", danger: true, run: () => set(e.id, "credits", null) },
@@ -534,189 +532,218 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
   const step = maxDur > 3600 ? 1200 : maxDur > 1200 ? 600 : 300;
   for (let t = 0; t <= maxDur; t += step) ticks.push(t);
 
+  const fixable = flags.filter((f) => f.actions.some((a) => a.label === "Fix to median"));
+  const flagged = new Set(flags.map((f) => f.ep.id));
+  const changedIds = new Set(changes.map((c) => c.ep.id));
+  const shownEps = eps.filter((e) => view === "all" || (view === "look" ? flagged.has(e.id) : view === "nointro" ? !drafts[e.id]?.intro : changedIds.has(e.id)));
+  const withIntroN = eps.filter((e) => drafts[e.id]?.intro).length;
+  const withCreditsN = eps.filter((e) => drafts[e.id]?.credits).length;
+  const span = (x: Span | null | undefined) => (x ? `${fmt(x.start)}–${fmt(x.end)}` : null);
+  const scopeLabel = applyTo === "show" ? "whole show" : applyTo === "selected" ? `${selected.size} selected` : "season";
+
   return (
-    <div className="seg-layout">
-      <aside className="seg-side">
-        <div className="card form">
-          <h2>Set, clear or find</h2>
-          <div className="seg-scope">
-            <span className="muted small">Set for</span>
-            <div className="seg wide3">
-              <button className={applyTo === "selected" ? "on" : ""} onClick={() => setApplyTo("selected")} title="The episodes you ticked in the list">{selected.size ? `${selected.size} episode${selected.size === 1 ? "" : "s"}` : "Episode"}</button>
-              <button className={applyTo === "season" ? "on" : ""} onClick={() => setApplyTo("season")}>{seasonName ?? "Season"}</button>
-              {show && <button className={applyTo === "show" ? "on" : ""} onClick={() => setApplyTo("show")}>Whole show</button>}
+    <div className="sx">
+      <div className="sx-head">
+        <div className="sx-head-l">
+          <h2 className="sx-title" onContextMenu={(e) => openMenu(e, menuFor("season"))}>
+            {seasonName ?? "Season"} · Intros and credits
+            <button className="icon-btn" aria-label="Season actions" onClick={(e) => openMenu(e, menuFor("season"))}><Icon name="more" /></button>
+          </h2>
+          <div className="sx-chips">
+            <span className="sx-chip"><span className="key intro" />Intro on {withIntroN} of {eps.length}</span>
+            <span className="sx-chip"><span className="key credits" />Credits on {withCreditsN} of {eps.length}</span>
+            {flags.length > 0 && <span className="sx-chip warn"><span className="sx-dot" />{flags.length} need{flags.length === 1 ? "s" : ""} a look</span>}
+          </div>
+        </div>
+        <div className="sx-head-r">
+          <button disabled={!!progress || !ov.ffmpeg || (!p.detectIntro && !p.detectCredits) || (applyTo === "selected" && !selected.size)} onClick={() => void detect()} title={!ov.ffmpeg ? "Needs ffmpeg (Settings → Tools)" : undefined}>
+            <Icon name="search" /> {progress ? "Listening…" : applyTo === "show" ? "Analyze the whole show" : applyTo === "selected" ? `Analyze ${selected.size} selected` : "Analyze season"}
+          </button>
+          <button className={setOpenPanel ? "on" : ""} onClick={() => setSetOpenPanel((x) => !x)}>Set times for {scopeLabel}…</button>
+        </div>
+      </div>
+
+      {setOpenPanel && (
+        <div className="card form sx-set">
+          <div className="sx-set-grid">
+            <div className="sx-field">
+              <span className="muted small">For</span>
+              <div className="seg">
+                <button className={applyTo === "selected" ? "on" : ""} onClick={() => setApplyTo("selected")} title="The episodes you ticked in the list">{selected.size ? `${selected.size} ticked` : "Ticked episodes"}</button>
+                <button className={applyTo === "season" ? "on" : ""} onClick={() => setApplyTo("season")}>{seasonName ?? "Season"}</button>
+                {show && <button className={applyTo === "show" ? "on" : ""} onClick={() => setApplyTo("show")}>Whole show</button>}
+              </div>
             </div>
-            {applyTo === "selected" && !selected.size && <span className="muted small">Tick episodes in the list on the right.</span>}
-            <label className="check small"><input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />Keep existing markers</label>
+            <div className="sx-field">
+              <span className="muted small">Part</span>
+              <div className="seg">
+                {(["intro", "recap", "credits"] as Part[]).map((x) => (
+                  <button key={x} className={part === x ? "on" : ""} disabled={x === "recap" && recapsOff} onClick={() => setPart(x)}>{LABEL[x]}</button>
+                ))}
+              </div>
+            </div>
+            <div className="sx-field">
+              <span className="muted small">How</span>
+              <div className="seg">
+                <button className={mode === "fixed" ? "on" : ""} onClick={() => setMode("fixed")}>Fixed time</button>
+                <button className={mode === "end" ? "on" : ""} onClick={() => setMode("end")}>From the end</button>
+                <button className={mode === "percent" ? "on" : ""} onClick={() => setMode("percent")}>Percent</button>
+              </div>
+            </div>
           </div>
-          <div className="seg wide3">
-            {(["intro", "recap", "credits"] as Part[]).map((x) => (
-              <button key={x} className={part === x ? "on" : ""} disabled={x === "recap" && recapsOff} onClick={() => setPart(x)}>{LABEL[x]}</button>
-            ))}
-          </div>
-          <div className="seg wide3">
-            <button className={mode === "fixed" ? "on" : ""} onClick={() => setMode("fixed")}>Fixed time</button>
-            <button className={mode === "end" ? "on" : ""} onClick={() => setMode("end")}>From the end</button>
-            <button className={mode === "percent" ? "on" : ""} onClick={() => setMode("percent")}>Percent</button>
-          </div>
-          {mode === "fixed" && (
-            <div className="row">
+          <div className="sx-set-grid">
+            {mode === "fixed" && <>
               <label>{LABEL[part]} starts at<input ref={firstInput} className="mono" value={v1} onChange={(e) => setV1(e.target.value)} placeholder="0:45" /></label>
               <label>and ends at<input className="mono" value={v2} onChange={(e) => setV2(e.target.value)} placeholder={part === "credits" ? "end of the episode" : "1:45"} /></label>
-            </div>
-          )}
-          {mode === "end" && (
-            <label>{LABEL[part]} start{part === "credits" ? "s" : ""} this long before the end<input ref={firstInput} className="mono" value={v1} onChange={(e) => setV1(e.target.value)} placeholder="3:00" /></label>
-          )}
-          {mode === "percent" && (
-            <div className="row">
+            </>}
+            {mode === "end" && <label>{LABEL[part]} start{part === "credits" ? "s" : ""} this long before the end<input ref={firstInput} className="mono" value={v1} onChange={(e) => setV1(e.target.value)} placeholder="3:00" /></label>}
+            {mode === "percent" && <>
               <label>Starts at (%)<input ref={firstInput} className="mono" value={v1} onChange={(e) => setV1(e.target.value)} placeholder="95" /></label>
               <label>Ends at (%)<input className="mono" value={v2} onChange={(e) => setV2(e.target.value)} placeholder={part === "credits" ? "100" : ""} /></label>
-            </div>
-          )}
-          <div className="row">
-            <button className="grow" disabled={applyTo === "show" && !canEdit} onClick={() => void applyRule()}>Set {LABEL[part].toLowerCase()} times</button>
-            <button className="danger-outline" disabled={applyTo === "show" && !canEdit} onClick={() => void clearPart(part)} title={applyTo === "show" ? "Saved straight to Jellyfin; can be undone" : "Clears it in the episodes; review, then save"}>Clear {part === "credits" ? "credits" : LABEL[part].toLowerCase()}</button>
+            </>}
           </div>
-          <div className="detect-what">
-            <span className="muted small">Auto-detect finds</span>
+          {applyTo === "selected" && !selected.size && <span className="muted small">Tick episodes in the list below first.</span>}
+          <div className="row wrap">
+            <button className="primary" disabled={applyTo === "show" && !canEdit} onClick={() => void applyRule()}>Set {LABEL[part].toLowerCase()} times</button>
+            <button className="danger-outline" disabled={applyTo === "show" && !canEdit} onClick={() => void clearPart(part)} title={applyTo === "show" ? "Saved straight to Jellyfin; can be undone" : "Clears it in the episodes; review, then save"}>Clear {part === "credits" ? "credits" : LABEL[part].toLowerCase()}</button>
+            <span className="spacer" />
+            <span className="muted small">Analyze finds</span>
             <label className="check small"><input type="checkbox" checked={p.detectIntro} onChange={(e) => setPrefs({ detectIntro: e.target.checked })} />Intros</label>
             <label className="check small"><input type="checkbox" checked={p.detectCredits} onChange={(e) => setPrefs({ detectCredits: e.target.checked })} />Credits</label>
+            <label className="check small"><input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />Keep existing markers</label>
           </div>
-          <button className="outline" disabled={!!progress || !ov.ffmpeg || (!p.detectIntro && !p.detectCredits) || (applyTo === "selected" && !selected.size)} onClick={() => void detect()}>
-            {progress ? "Listening…" : applyTo === "show" ? "Auto-detect the whole show" : applyTo === "selected" ? `Auto-detect ${selected.size} selected` : "Auto-detect this season"}
-          </button>
-          <p className="muted small">{applyTo === "show" ? "Whole-show changes are saved straight away." : "Right-click an episode, the season or the show for more."}</p>
-          {!ov.ffmpeg && <p className="muted small">Auto-detect needs ffmpeg. <SettingsLink section="tools">How to install</SettingsLink></p>}
-          <button className="primary" disabled={!changes.length || saving || !canEdit || !ov.canWriteSegments} onClick={() => void saveAll()}>
-            {saving ? "Saving…" : `Save ${changes.length || ""} change${changes.length === 1 ? "" : "s"} to Jellyfin`}
-          </button>
-          {!canEdit && <p className="muted small">Saving needs changes to Jellyfin switched on. <SettingsLink section="changes">Turn them on</SettingsLink></p>}
-          {canEdit && !ov.canWriteSegments && <p className="muted small">To save, install the “Intro Skipper” plugin in Jellyfin (Jellyfin page → Plugins), then restart Jellyfin.</p>}
+          {applyTo === "show" && <p className="muted small">Whole-show changes are saved straight away.</p>}
+          {!ov.ffmpeg && <p className="muted small">Analyze needs ffmpeg. <SettingsLink section="tools">How to install</SettingsLink></p>}
         </div>
+      )}
 
-        {status && (
-          <div className="card form seg-progress" aria-live="polite">
-            <div className="row between"><h2>Progress</h2>{!status.done ? <button className="small-btn" onClick={() => (stopRef.current.cancelled = true)}>Stop</button> : <button className="link small" onClick={() => { setStatus(null); setLines([]); }}>Close</button>}</div>
-            <span className="muted small">{status.text}</span>
-            <div className="seg-progress-bar"><span style={{ width: `${Math.round((status.pct ?? 0) * 100)}%` }} className={status.pct == null && !status.done ? "busy" : ""} /></div>
-            <div className="seg-progress-lines">
+      {progress && <p className="muted small">{progress}. This reads the start and end of each episode from your NAS.</p>}
+      {note && <p className="note">{note}</p>}
+      {error && <p className="error">{error}</p>}
+
+      {flags.length > 0 && (
+        <div className="sx-banner">
+          <span className="sx-banner-i">!</span>
+          <div className="sx-banner-t">
+            <strong>{flags.length === 1 ? "1 episode looks" : `${flags.length} episodes look`} different from the rest of the season</strong>
+            <span className="small">{flags.slice(0, 3).map((f) => f.title).join(" · ")}{flags.length > 3 ? " …" : ""}</span>
+          </div>
+          <button className="ghost" onClick={() => setView(view === "look" ? "all" : "look")}>{view === "look" ? "Show all" : "Show only these"}</button>
+          {canEdit && fixable.length > 0 && <button className="warn-btn" onClick={() => fixable.forEach((f) => f.actions.find((a) => a.label === "Fix to median")?.run())}>{fixable.length === 1 ? "Fix to median" : `Fix all ${fixable.length} to median`}</button>}
+        </div>
+      )}
+
+      <div className="sx-bar">
+        <div className="seg">
+          <button className={view === "all" ? "on" : ""} onClick={() => setView("all")}>All {eps.length}</button>
+          <button className={view === "look" ? "on" : ""} onClick={() => setView("look")}>Need a look {flags.length}</button>
+          <button className={view === "nointro" ? "on" : ""} onClick={() => setView("nointro")}>No intro {eps.length - withIntroN}</button>
+          <button className={view === "changed" ? "on" : ""} onClick={() => setView("changed")}>Changed {changedIds.size}</button>
+        </div>
+        <div className="sx-legend small muted">
+          <span>Drag on a bar to draw</span>
+          <div className="seg small">
+            {parts.map((x) => <button key={x} className={drawing === x ? "on" : ""} onClick={() => setDrawing(x)}><span className={`key ${x}`} />{LABEL[x]}</button>)}
+          </div>
+          <span title="The dashed outline is what Jellyfin (and Infuse) have right now. Filled bars are your version; Save sends it."><span className="key saved" />In Jellyfin now</span>
+        </div>
+      </div>
+
+      <div className="card sx-table">
+        <div className="sx-row sx-th">
+          <span />
+          <span>Episode</span>
+          <span>Intro</span>
+          <span>Credits</span>
+          <div className="tl-track ticks">{ticks.map((t) => <span key={t} style={{ left: `${(t / maxDur) * 100}%` }}>{fmt(t)}</span>)}</div>
+          <span />
+        </div>
+        {shownEps.length === 0 && <p className="muted small sx-empty">Nothing here.</p>}
+        {shownEps.map((e) => {
+          const d0 = drafts[e.id];
+          if (!d0) return null;
+          const d = recapsOff ? { ...d0, recap: null } : d0;
+          const mine = flags.filter((x) => x.ep.id === e.id);
+          const isOpen = open === e.id;
+          return (
+            <div key={e.id} className={`sx-ep ${mine.length ? "sx-flagged" : ""} ${isOpen ? "sx-opened" : ""}`} onContextMenu={(ev) => openMenu(ev, selected.size > 1 && selected.has(e.id) ? menuFor("selected") : menuFor("episode", e.id))}>
+              <div className="sx-row">
+                <label className="sx-check"><input type="checkbox" checked={selected.has(e.id)} onChange={() => setSelected((s0) => { const n = new Set(s0); if (n.has(e.id)) n.delete(e.id); else n.add(e.id); return n; })} aria-label={`Select ${epName(e)}`} /></label>
+                <button className="sx-name link-plain" onClick={() => { setOpen(isOpen ? null : e.id); setPreview(isOpen ? null : e.id); }} title="Open: times and preview">
+                  <span className="sx-ep-t ellipsis"><span className="muted">{e.index != null ? `E${e.index}` : ""}</span> {e.name}</span>
+                  {mine.length > 0 && <span className="small warn-t ellipsis">{mine.map((f) => f.why).join(" ")}</span>}
+                  {!mine.length && d.problem && <span className="small warn-t ellipsis">{d.problem}</span>}
+                </button>
+                <span className={`mono small ${d.intro ? (wrong(e.id, "intro") ? "warn-t" : "intro-t") : "muted"}`}>{span(d.intro) ?? "No intro"}</span>
+                <span className={`mono small ${d.credits ? (wrong(e.id, "credits") ? "warn-t" : "credits-t") : "muted"}`}>{span(d.credits) ?? "–"}</span>
+                <Bars ep={e} draft={d} maxDur={maxDur} drawing={drawing} wrong={wrong} onDraw={(x, s2) => set(e.id, x, s2)} />
+                <button className="icon-btn" aria-label={`More for ${epName(e)}`} onClick={(ev) => openMenu(ev, menuFor("episode", e.id))}><Icon name="more" /></button>
+              </div>
+              {mine.length > 0 && canEdit && (
+                <div className="sx-fixes">
+                  {mine.flatMap((f) => f.actions.map((a) => <button key={f.id + a.label} className={`small-btn show ${a.danger ? "danger-outline" : ""}`} onClick={a.run}>{a.label}{mine.length > 1 ? ` (${f.id.split("-")[0]})` : ""}</button>))}
+                </div>
+              )}
+              {isOpen && (
+                <div className="sx-detail">
+                  <div className="sx-times">
+                    {parts.map((x) => (
+                      <span key={x} className="tl-times">
+                        <span className={`key ${x}`} />{LABEL[x]}
+                        <TimeInput value={d[x]?.start} onChange={(v) => v === null ? set(e.id, x, null) : set(e.id, x, { start: v, end: Math.max(v + 1, d[x]?.end ?? Math.min(e.duration, v + 60)) })} />
+                        –
+                        <TimeInput value={d[x]?.end} onChange={(v) => v !== null && v > (d[x]?.start ?? 0) && set(e.id, x, { start: d[x]?.start ?? 0, end: v })} />
+                      </span>
+                    ))}
+                    <span className="muted small">Episode length {fmt(e.duration)}</span>
+                  </div>
+                  {preview === e.id && <SegPreview ep={e} draft={d} parts={parts} first={drawing} onSet={(x, s2) => set(e.id, x, s2)} />}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {(changes.length > 0 || status) && (
+        <div className="sx-save" aria-live="polite">
+          {status && showLines && (
+            <div className="sx-lines">
               {lines.slice(-60).map((l, i) => (
                 <div key={i} className={`seg-line ${l.mark}`}><span className="seg-line-m">{l.mark === "ok" ? "✓" : l.mark === "warn" ? "!" : l.mark === "bad" ? "✗" : "…"}</span><span className="mono seg-line-ep">{l.ep}</span><span className="grow">{l.text}</span></div>
               ))}
+              <span className="muted small">“Saved and confirmed” means Media Hub read it back from Jellyfin, so Infuse and Jellyfin show the Skip button.</span>
             </div>
-            <span className="muted small">“Saved and confirmed” means Media Hub read it back from Jellyfin, so Infuse and Jellyfin will show the Skip button.</span>
-          </div>
-        )}
-
-        <div className="card form">
-          <h2>Changes to review</h2>
-          {changes.length === 0 && <p className="muted small">No changes yet.</p>}
-          {changes.slice(0, 40).map((c, i) => (
-            <div className="diff" key={i}>
-              <span className="diff-ep">{epName(c.ep)} · {LABEL[c.part]}</span>
-              <span className="mono small muted">{c.from ? fmt(c.from.start) : "none"} <span className="accent">→ {c.to ? `${fmt(c.to.start)}–${fmt(c.to.end)}` : "removed"}</span></span>
-            </div>
-          ))}
-          {changes.length > 0 && <button className="link small" onClick={() => void load()}>Go back to what's in Jellyfin</button>}
-          <p className="muted small">Every saved change goes into the undo list, so you can put it back.</p>
-        </div>
-
-      </aside>
-
-      <section className="seg-main">
-        <div className="section-head" onContextMenu={(e) => openMenu(e, menuFor("season"))}>
-          <h2 className="big">{seasonName ?? "Season"} timeline <button className="icon-btn" aria-label="Season actions" onClick={(e) => openMenu(e, menuFor("season"))}><Icon name="more" /></button></h2>
-          <div className="legend small muted">
-            <span><span className="key intro" />Intro</span>
-            <span><span className="key recap" />Recap</span>
-            <span><span className="key credits" />Credits</span>
-            <span><span className="key wrong" />Looks wrong</span>
-            <span title="The dashed outline is what Jellyfin (and Infuse) have right now. Coloured bars are your version; Save sends it."><span className="key saved" />In Jellyfin now</span>
-          </div>
-        </div>
-        {progress && <p className="muted small">{progress}. This reads the start and end of each episode from your NAS.</p>}
-        {note && <p className="note">{note}</p>}
-        {error && <p className="error">{error}</p>}
-
-        <div className="card timeline-card">
-          <div className="seg-draw small muted">
-            Drag on a bar to draw, or open an episode and press Preview to set the points while watching:
-            <div className="seg">
-              {parts.map((p) => (
-                <button key={p} className={drawing === p ? "on" : ""} onClick={() => setDrawing(p)}>{LABEL[p]}</button>
-              ))}
-            </div>
-          </div>
-          <div className="tl-row tl-ticks">
-            <div className="tl-name" />
-            <div className="tl-track ticks">
-              {ticks.map((t) => <span key={t} style={{ left: `${(t / maxDur) * 100}%` }}>{fmt(t)}</span>)}
-            </div>
-          </div>
-          {eps.map((e) => {
-            const d0 = drafts[e.id];
-            if (!d0) return null;
-            const d = recapsOff ? { ...d0, recap: null } : d0;
-            const f = flags.find((x) => x.ep.id === e.id);
-            return (
-              <div key={e.id}>
-                <div className="tl-row" onContextMenu={(ev) => openMenu(ev, selected.size > 1 && selected.has(e.id) ? menuFor("selected") : menuFor("episode", e.id))}>
-                  <div className="tl-name">
-                    <input type="checkbox" checked={selected.has(e.id)} onChange={() => setSelected((s) => { const n = new Set(s); if (n.has(e.id)) n.delete(e.id); else n.add(e.id); return n; })} aria-label="Select episode" />
-                    <button className="link-plain" onClick={() => setOpen(open === e.id ? null : e.id)}>
-                      <span className="tl-title">{epName(e)}</span>
-                      <span className={`small ${f ? "bad" : d.problem ? "warn" : !d.intro && !d.credits ? "muted" : "ok"}`}>{f ? f.title.split(" · ")[1] : d.problem ?? summary(d, parts)}</span>
-                    </button>
-                  </div>
-                  <Bars ep={e} draft={d} maxDur={maxDur} drawing={drawing} wrong={wrong} onDraw={(p, s) => set(e.id, p, s)} />
+          )}
+          <div className="sx-save-row">
+            {status ? (
+              <div className="sx-save-l">
+                <div className="seg-progress-bar sx-prog"><span style={{ width: `${Math.round((status.pct ?? 0) * 100)}%` }} className={status.pct == null && !status.done ? "busy" : ""} /></div>
+                <span className="small">{status.text}</span>
+                <button className="link small" onClick={() => setShowLines((x) => !x)}>{showLines ? "Hide details" : "Details"}</button>
+              </div>
+            ) : (
+              <div className="sx-save-l">
+                <span className="sx-count">{changes.length}</span>
+                <div className="sx-save-t">
+                  <strong>{changes.length} change{changes.length === 1 ? "" : "s"} ready to save</strong>
+                  <span className="small muted ellipsis">{changes.slice(0, 4).map((c) => `${c.ep.index != null ? `E${c.ep.index}` : c.ep.name} ${LABEL[c.part].toLowerCase()} ${c.to ? `${fmt(c.to.start)}–${fmt(c.to.end)}` : "removed"}`).join(" · ")}{changes.length > 4 ? " …" : ""}</span>
                 </div>
-                {open === e.id && (
-                  <div className="tl-detail">
-                    {parts.map((p) => (
-                      <span key={p} className="tl-times">
-                        <span className={`key ${p}`} />{LABEL[p]}
-                        <TimeInput value={d[p]?.start} onChange={(v) => v === null ? set(e.id, p, null) : set(e.id, p, { start: v, end: Math.max(v + 1, d[p]?.end ?? Math.min(e.duration, v + 60)) })} />
-                        –
-                        <TimeInput value={d[p]?.end} onChange={(v) => v !== null && v > (d[p]?.start ?? 0) && set(e.id, p, { start: d[p]?.start ?? 0, end: v })} />
-                      </span>
-                    ))}
-                    <span className="muted small">length {fmt(e.duration)}</span>
-                    <button className="small-btn show" onClick={() => setPreview(preview === e.id ? null : e.id)}>{preview === e.id ? "Close preview" : "▶ Preview"}</button>
-                  </div>
-                )}
-                {open === e.id && preview === e.id && (
-                  <SegPreview ep={e} draft={d} parts={parts} first={drawing} onSet={(p, s2) => set(e.id, p, s2)} />
-                )}
               </div>
-            );
-          })}
-        </div>
-
-        <div className="card form">
-          <div className="section-head">
-            <h2>Suspicious segments</h2>
-            <span className="muted small">Compared with the season median</span>
-            {canEdit && flags.filter((f) => f.actions.some((a) => a.label === "Fix to median")).length > 1 && (
-              <button className="small-btn" onClick={() => flags.forEach((f) => f.actions.find((a) => a.label === "Fix to median")?.run())}>
-                Fix all to median ({flags.filter((f) => f.actions.some((a) => a.label === "Fix to median")).length})
-              </button>
             )}
-          </div>
-          {flags.length === 0 && <p className="muted small">Nothing looks off.</p>}
-          {flags.map((f) => (
-            <div className="flag-row" key={f.id}>
-              <div>
-                <div className="title">{f.title}</div>
-                <div className="muted small">{f.why}</div>
-              </div>
-              <div className="row">
-                {f.actions.map((a) => <button key={a.label} className={a.danger ? "danger-outline" : ""} onClick={a.run}>{a.label}</button>)}
-              </div>
+            <div className="row">
+              {status && !status.done && <button onClick={() => (stopRef.current.cancelled = true)}>Stop</button>}
+              {status?.done && <button className="ghost" onClick={() => { setStatus(null); setLines([]); setShowLines(false); }}>Close</button>}
+              {changes.length > 0 && !saving && <button className="ghost" onClick={() => void load()} title="Go back to what's in Jellyfin">Undo all</button>}
+              {changes.length > 0 && (
+                <button className="primary" disabled={saving || !canEdit || !ov.canWriteSegments} onClick={() => void saveAll()} title={!canEdit ? "Saving needs changes to Jellyfin switched on (Settings)" : !ov.canWriteSegments ? "Install the Intro Skipper plugin in Jellyfin first" : undefined}>
+                  {saving ? "Saving…" : "Save to Jellyfin"}
+                </button>
+              )}
             </div>
-          ))}
+          </div>
         </div>
-      </section>
+      )}
     </div>
   );
 }
@@ -900,7 +927,7 @@ function SegPreview({ ep, draft, parts, first, onSet }: { ep: SegEpisode; draft:
           {cur && <button onClick={() => seek(cur.end - 3)}>Go to end</button>}
           {cur && <button className="danger-outline" onClick={() => onSet(part, null)}>Clear</button>}
         </div>
-        <p className="muted small">Changes appear in “Changes to review”; press Save to send them to Jellyfin.</p>
+        <p className="muted small">Changes wait in the bar at the bottom until you press Save to Jellyfin.</p>
       </div>
     </div>
   );

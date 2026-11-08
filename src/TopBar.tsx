@@ -23,7 +23,8 @@ export function Logo({ size = 28 }: { size?: number }) {
         </linearGradient>
       </defs>
       <rect x="100" y="100" width="824" height="824" rx="185" fill="#222" />
-      <path d="M402 318 C402 286 436 266 464 282 L716 470 C742 488 742 536 716 554 L464 742 C436 758 402 738 402 706 Z" fill="url(#mh-logo)" />
+      {/* The same play mark as the app icon, centred by eye (a little left of its box). */}
+      <polygon points="379,310 379,714 727,512" fill="url(#mh-logo)" stroke="url(#mh-logo)" strokeWidth="73" strokeLinejoin="round" />
     </svg>
   );
 }
