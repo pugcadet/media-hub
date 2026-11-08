@@ -201,22 +201,18 @@ pub async fn movie_folders(state: State<'_, AppState>) -> Result<Vec<MovieFolder
     }
     let mut list = classify(movies);
     // Which collection each movie is in (the smallest one, when it's in several).
-    if let Ok(colls) = c.collections().await {
-        let tasks: Vec<_> = colls
+    if let Ok(m) = crate::collections::membership(&c).await {
+        let named: Vec<(String, Vec<Value>)> = m
+            .collections
             .iter()
             .filter_map(|x| {
                 let id = x.get("Id").and_then(Value::as_str)?.replace('-', "");
                 let name = x.get("Name").and_then(Value::as_str)?.to_string();
-                if !valid_item_id(&id) || name == crate::collections::PICKS_NAME {
-                    return None;
-                }
-                let c2 = c.clone();
-                Some(tauri::async_runtime::spawn(async move { (name, c2.collection_items(&id).await.unwrap_or_default()) }))
+                (name != crate::collections::PICKS_NAME).then(|| (name, m.items.get(&id).cloned().unwrap_or_default()))
             })
             .collect();
         let mut member: HashMap<String, (String, usize)> = HashMap::new();
-        for t in tasks {
-            let Ok((name, items)) = t.await else { continue };
+        for (name, items) in named {
             let ids: Vec<String> = items.iter().filter(|v| v.get("Type").and_then(Value::as_str) == Some("Movie")).filter_map(|v| v.get("Id").and_then(Value::as_str).map(|i| i.replace('-', ""))).collect();
             if ids.len() < 2 {
                 continue;

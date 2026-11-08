@@ -438,32 +438,27 @@ function LibraryGrid({ rows, loading, error, grouped, tileSize, empty, onMenu }:
   );
 }
 
+const COLL_CACHE: { list: Card[] | null; members: Record<string, string[]> | null } = { list: null, members: null };
+
 /** Collections: find one by its name or by a movie in it; list or grid. */
 function CollectionsView({ canEdit, top, view, toggle }: { canEdit: boolean; top: React.ReactNode; view: "list" | "tiles"; toggle: React.ReactNode }) {
   const epoch = useEpoch();
-  const [list, setList] = useState<Card[] | null>(null);
+  // Kept between visits: opening Collections again shows the list at once and refreshes it quietly.
+  const [list, setList] = useState<Card[] | null>(COLL_CACHE.list);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = usePageState("collections.query", "");
-  const [members, setMembers] = useState<Record<string, string[]>>({});
-  const [reading, setReading] = useState(false);
+  const [members, setMembers] = useState<Record<string, string[]> | null>(COLL_CACHE.members);
   useEffect(() => {
-    api.collections().then(setList).catch((e) => setError(errorText(e)));
+    api.collections().then((l) => { COLL_CACHE.list = l; setList(l); }).catch((e) => setError(errorText(e)));
   }, [epoch]);
-  // Searching for a movie: read what's in each collection once (a few at a time).
+  // Searching for a movie: what's in every collection, read once for all of them.
   useEffect(() => {
-    if (!query.trim() || !list || reading) return;
-    const todo = list.filter((c) => !(c.id in members));
-    if (!todo.length) return;
-    setReading(true);
-    void (async () => {
-      const got: Record<string, string[]> = {};
-      for (let i = 0; i < todo.length; i += 6) {
-        await Promise.all(todo.slice(i, i + 6).map((c) => api.collectionItems(c.id).then((l) => { got[c.id] = l.map((x) => x.title.toLowerCase()); }).catch(() => { got[c.id] = []; })));
-        setMembers((m) => ({ ...m, ...got }));
-      }
-      setReading(false);
-    })();
-  }, [query, list]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!query.trim() || members) return;
+    let live = true;
+    api.collectionMembers().then((m) => { COLL_CACHE.members = m; if (live) setMembers(m); }).catch(() => live && setMembers({}));
+    return () => { live = false; };
+  }, [query, members]);
+  useEffect(() => { COLL_CACHE.members = null; setMembers(null); }, [epoch]);
 
   async function create() {
     const r = await askChoice("New collection", [], { label: "Name", placeholder: "e.g. Pixar, Christmas, Marvel", okLabel: "Create" });
@@ -488,7 +483,7 @@ function CollectionsView({ canEdit, top, view, toggle }: { canEdit: boolean; top
   const hit = (c: Card): string | null => {
     if (!q) return "";
     if (c.title.toLowerCase().includes(q)) return "";
-    const m = (members[c.id] ?? []).find((t) => t.includes(q));
+    const m = (members?.[c.id.replace(/-/g, "")] ?? []).find((t) => t.includes(q));
     return m ? m : null;
   };
   const shown = (list ?? []).map((c) => ({ c, why: hit(c) })).filter((x) => x.why !== null);
@@ -507,9 +502,9 @@ function CollectionsView({ canEdit, top, view, toggle }: { canEdit: boolean; top
       </div>
       <div className="lib-body pad">
         {error && <p className="error">{error}</p>}
-        {reading && q && <p className="muted small"><span className="spinner small-spin" /> Looking inside the collections…</p>}
+        {!members && q && <p className="muted small"><span className="spinner small-spin" /> Looking inside the collections…</p>}
         {list && list.length === 0 && <p className="muted">No collections yet. Make one here, or use the Collection tab of a movie.</p>}
-        {list && list.length > 0 && shown.length === 0 && !reading && <p className="muted">No collection has “{query}” in its name or among its movies.</p>}
+        {list && list.length > 0 && shown.length === 0 && !!members && <p className="muted">No collection has “{query}” in its name or among its movies.</p>}
         {view === "tiles" ? (
           <div className="lib-grid" style={{ ["--tile" as string]: "160px" }}>
             {shown.map(({ c, why }) => (

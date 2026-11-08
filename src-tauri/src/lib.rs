@@ -171,6 +171,7 @@ pub fn run() {
             collections::collections_list,
             collections::collection_items,
             collections::collections_of,
+            collections::collection_members,
             collections::similar_items,
             collections::person_items,
             collections::collection_create,

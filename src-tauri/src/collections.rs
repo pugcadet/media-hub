@@ -8,6 +8,61 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
 
+/// What's in every collection, read once (8 at a time) and kept for 10 minutes, so a title's
+/// Collection tab, the Folders tab and searching collections by movie don't open every
+/// collection one by one each time. Changing a collection here clears it.
+pub struct Membership {
+    pub collections: Vec<Value>,
+    /// collection id (no dashes) → its titles
+    pub items: std::collections::HashMap<String, Vec<Value>>,
+}
+
+static MEMBERS: std::sync::Mutex<Option<(std::time::Instant, std::sync::Arc<Membership>)>> = std::sync::Mutex::new(None);
+
+/// Forget the kept list (a collection was changed).
+pub fn forget_members() {
+    if let Ok(mut m) = MEMBERS.lock() {
+        *m = None;
+    }
+}
+
+pub async fn membership(c: &crate::jellyfin::Client) -> Result<std::sync::Arc<Membership>> {
+    if let Some((at, m)) = MEMBERS.lock().ok().and_then(|g| g.clone()) {
+        if at.elapsed() < std::time::Duration::from_secs(600) {
+            return Ok(m);
+        }
+    }
+    let collections = c.collections().await?;
+    let ids: Vec<String> = collections.iter().filter_map(|x| x.get("Id").and_then(Value::as_str).map(|i| i.replace('-', ""))).filter(|i| valid_item_id(i)).collect();
+    let mut items = std::collections::HashMap::new();
+    for chunk in ids.chunks(8) {
+        let tasks: Vec<_> = chunk
+            .iter()
+            .map(|id| {
+                let (c2, id) = (c.clone(), id.clone());
+                tauri::async_runtime::spawn(async move { (id.clone(), c2.collection_items(&id).await.unwrap_or_default()) })
+            })
+            .collect();
+        for t in tasks {
+            if let Ok((id, list)) = t.await {
+                items.insert(id, list);
+            }
+        }
+    }
+    let m = std::sync::Arc::new(Membership { collections, items });
+    if let Ok(mut g) = MEMBERS.lock() {
+        *g = Some((std::time::Instant::now(), m.clone()));
+    }
+    Ok(m)
+}
+
+/// Every collection's titles in lower case (to find a collection by a movie in it), in one go.
+#[tauri::command]
+pub async fn collection_members(state: State<'_, AppState>) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    let m = membership(&state.reader().await?).await?;
+    Ok(m.items.iter().map(|(k, v)| (k.clone(), v.iter().filter_map(|x| x.get("Name").and_then(Value::as_str).map(str::to_lowercase)).collect())).collect())
+}
+
 /// One tile in a row: enough to draw it and open it.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -120,19 +175,17 @@ pub async fn collections_of(state: State<'_, AppState>, id: String) -> Result<Ve
     if !valid_item_id(&id) {
         return Err(Error::msg("bad id"));
     }
-    let c = state.reader().await?;
+    let m = membership(&state.reader().await?).await?;
     let want = id.replace('-', "").to_lowercase();
-    let mut out = Vec::new();
-    for col in c.collections().await? {
-        let cid = col.get("Id").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
-        if !valid_item_id(&cid.replace('-', "")) {
-            continue;
-        }
-        let items = c.collection_items(&cid).await.unwrap_or_default();
-        if items.iter().any(|v| v.get("Id").and_then(serde_json::Value::as_str).map(|x| x.replace('-', "").to_lowercase() == want).unwrap_or(false)) {
-            out.push(col);
-        }
-    }
+    let out: Vec<Value> = m
+        .collections
+        .iter()
+        .filter(|col| {
+            let cid = col.get("Id").and_then(Value::as_str).unwrap_or("").replace('-', "");
+            m.items.get(&cid).is_some_and(|items| items.iter().any(|v| v.get("Id").and_then(Value::as_str).map(|x| x.replace('-', "").to_lowercase() == want).unwrap_or(false)))
+        })
+        .cloned()
+        .collect();
     Ok(cards(&out))
 }
 
@@ -163,6 +216,7 @@ pub async fn collection_create(state: State<'_, AppState>, name: String, ids: Ve
         check_ids(&ids)?;
     }
     let w = state.writer().await?;
+    forget_members();
     let id = w.collection_create(&name, &ids).await?;
     state.store()?.journal_add("collection", &id, "created", &ids_json(&ids))?;
     Ok(id)
@@ -173,6 +227,7 @@ pub async fn collection_add(state: State<'_, AppState>, id: String, ids: Vec<Str
     check_ids(&ids)?;
     let w = state.writer().await?;
     let entry = state.store()?.journal_add("collection", &id, "added", &ids_json(&ids))?;
+    forget_members();
     if let Err(e) = w.collection_add(&id, &ids).await {
         state.store()?.journal_delete(entry)?;
         return Err(e);
@@ -185,6 +240,7 @@ pub async fn collection_remove(state: State<'_, AppState>, id: String, ids: Vec<
     check_ids(&ids)?;
     let w = state.writer().await?;
     let entry = state.store()?.journal_add("collection", &id, "removed", &ids_json(&ids))?;
+    forget_members();
     if let Err(e) = w.collection_remove(&id, &ids).await {
         state.store()?.journal_delete(entry)?;
         return Err(e);
@@ -195,6 +251,7 @@ pub async fn collection_remove(state: State<'_, AppState>, id: String, ids: Vec<
 /// Undo for the "collection" journal entries.
 pub async fn undo(w: &Writer, id: &str, what: &str, ids_json: &str) -> Result<()> {
     let ids: Vec<String> = serde_json::from_str(ids_json).map_err(|_| Error::msg("bad journal entry"))?;
+    forget_members();
     match what {
         "added" => w.collection_remove(id, &ids).await,
         "removed" => w.collection_add(id, &ids).await,
@@ -213,6 +270,7 @@ pub async fn sync_picks_collection(state: State<'_, AppState>, ids: Vec<String>,
     let ids: Vec<String> = ids.into_iter().filter(|i| valid_item_id(i)).take(30).collect();
     check_ids(&ids)?;
     let w = state.writer().await?;
+    forget_members();
     let existing = w
         .reader()
         .collections()
@@ -272,6 +330,7 @@ pub async fn picks_leftovers(state: State<'_, AppState>) -> Result<usize> {
 #[tauri::command]
 pub async fn picks_remove(state: State<'_, AppState>) -> Result<usize> {
     let w = state.writer().await?;
+    forget_members();
     let mut n = 0;
     for x in w.reader().collections().await?.into_iter().filter(|x| s(x, "Name") == PICKS_NAME) {
         let id = clean_id(s(&x, "Id"));
@@ -421,6 +480,7 @@ pub async fn collection_relink(app: tauri::AppHandle, state: State<'_, AppState>
         return Err(Error::msg("bad id"));
     }
     let w = state.writer().await?;
+    forget_members();
     tauri::async_runtime::spawn(async move {
         use tauri::Emitter;
         let norm = |s: &str| s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();

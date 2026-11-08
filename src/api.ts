@@ -1037,6 +1037,8 @@ export const api = {
   homeFeed: () => invoke<HomeFeed>("home_feed"),
   collections: () => invoke<Card[]>("collections_list"),
   collectionItems: (id: string) => invoke<Card[]>("collection_items", { id }),
+  /** Every collection's titles (lower case), keyed by collection id without dashes. */
+  collectionMembers: () => invoke<Record<string, string[]>>("collection_members"),
   similar: (id: string) => invoke<Card[]>("similar_items", { id }),
   personItems: (id: string) => invoke<Card[]>("person_items", { id }),
   collectionCreate: (name: string, ids: string[]) => invoke<string>("collection_create", { name, ids }),
