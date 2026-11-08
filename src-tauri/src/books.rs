@@ -102,12 +102,13 @@ pub fn parse_opf(xml: &str) -> Meta {
     let year = tags(xml, "date").iter().find_map(|d| d.get(0..4).and_then(|y| y.parse::<u32>().ok())).filter(|y| (1400..2100).contains(y));
     let isbn = {
         let re = regex::Regex::new(r"(?is)<(?:dc:)?identifier\b([^>]*)>(.*?)</(?:dc:)?identifier>").expect("regex");
-        re.captures_iter(xml).find_map(|c| {
+        let found = re.captures_iter(xml).find_map(|c| {
             let attrs = c[1].to_lowercase();
             let v: String = unescape(&c[2]).chars().filter(|ch| ch.is_ascii_digit() || *ch == 'X' || *ch == 'x').collect();
             let looks = v.len() == 13 || v.len() == 10;
             (looks && (attrs.contains("isbn") || c[2].to_lowercase().contains("isbn") || v.starts_with("978") || v.starts_with("979"))).then(|| v.to_uppercase())
-        })
+        });
+        found
     };
     Meta {
         title: tags(xml, "title").into_iter().next().unwrap_or_default(),
