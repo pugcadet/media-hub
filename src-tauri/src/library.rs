@@ -757,7 +757,14 @@ fn alert_fix(level: &'static str, title: &str, detail: &str, fix: &str) -> Alert
 /// Is the library folder (the NAS share) there right now? A quick look, for waiting screens.
 #[tauri::command]
 pub fn library_reachable(state: State<'_, AppState>) -> Result<bool> {
-    Ok(state.settings()?.library_root.as_deref().map(crate::state::root_ok).unwrap_or(false))
+    let Some(root) = state.settings()?.library_root else { return Ok(false) };
+    let ok = crate::state::root_ok(&root);
+    if ok {
+        crate::nas::remember(&state, &root);
+    } else {
+        crate::nas::reconnect(&state, &root);
+    }
+    Ok(ok)
 }
 
 #[tauri::command]
@@ -770,10 +777,13 @@ pub async fn health_alerts(state: State<'_, AppState>) -> Result<Vec<Alert>> {
             let denied = matches!(std::fs::metadata(r).and_then(|_| std::fs::read_dir(r).map(|_| ())), Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied);
             if denied {
                 out.push(alert_fix("error", "Media Hub isn't allowed to open the NAS", &format!("{r} is connected, but the Mac is blocking Media Hub. Open System Settings → Privacy & Security → Files & Folders, and turn on Network Volumes for Media Hub."), "settings:folder"));
+            } else if crate::nas::reconnect(&state, r) || st.nas_url.is_some() {
+                out.push(alert_fix("error", "The NAS isn't connected", &format!("{r} can't be reached. Media Hub is connecting it again by itself. On a VPN? Turn on \"allow local network\" (LAN) in the VPN app, or the NAS can't be seen."), "settings:folder"));
             } else {
-                out.push(alert_fix("error", "The NAS isn't connected", &format!("{r} can't be reached. Connect to the share in Finder; this alert goes away by itself once it's back."), "settings:folder"));
+                out.push(alert_fix("error", "The NAS isn't connected", &format!("{r} can't be reached. Connect to the share in Finder; after that Media Hub reconnects it by itself when it drops."), "settings:folder"));
             }
         }
+        Some(r) => crate::nas::remember(&state, r),
         _ => {}
     }
     let c: Option<Client> = match state.reader().await {

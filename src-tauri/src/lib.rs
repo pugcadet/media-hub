@@ -32,6 +32,7 @@ mod renumber;
 mod sublock;
 mod pin;
 mod moviefolders;
+mod nas;
 mod inbox;
 mod secrets;
 mod seg_cmds;

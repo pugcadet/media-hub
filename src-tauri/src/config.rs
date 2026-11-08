@@ -44,6 +44,9 @@ pub struct Settings {
     pub music_dir: Option<String>,
     /// Music comes from that folder instead of Jellyfin.
     pub music_from_folder: bool,
+    /// The NAS share the library folder is on ("smb://me@nas.local/Media"), read from the Mac
+    /// while it's connected, so it can be connected again by itself after a VPN drop.
+    pub nas_url: Option<String>,
 }
 
 impl Default for Settings {
@@ -67,6 +70,7 @@ impl Default for Settings {
             lock_edits: true,
             music_dir: None,
             music_from_folder: false,
+            nas_url: None,
         }
     }
 }
