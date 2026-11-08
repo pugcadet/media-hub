@@ -18,14 +18,6 @@
     [1m[94m|[0m       [1m[92m^[0m [1m[92mcollectively making this unreachable[0m
     [1m[94m= [0m[1mnote[0m: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
 
-[1m[33mwarning[0m[1m: unused variable: `n`[0m
-    [1m[94m--> [0msrc/inbox.rs:1148:110
-     [1m[94m|[0m
-[1m[94m1148[0m [1m[94m|[0m [1m[94m...[0mu64, total: u64, label: &str, n: usize, of: usize) -> Result<()> {
-     [1m[94m|[0m                                  [1m[33m^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_n`[0m
-     [1m[94m|[0m
-     [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
-
 [1m[33mwarning[0m[1m: function `has_lang` is never used[0m
   [1m[94m--> [0msrc/sub_cmds.rs:53:4
    [1m[94m|[0m
@@ -34,15 +26,15 @@
    [1m[94m|[0m
    [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
-[1m[33mwarning[0m: `media-hub` (lib test) generated 2 warnings (1 duplicate)
-[1m[33mwarning[0m: `media-hub` (lib) generated 3 warnings (1 duplicate) (run `cargo fix --lib -p media-hub` to apply 1 suggestion)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 25.05s
+[1m[33mwarning[0m: `media-hub` (lib test) generated 1 warning
+[1m[33mwarning[0m: `media-hub` (lib) generated 2 warnings (1 duplicate)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 38.75s
 [1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/media_hub_lib-1e92e3062f3048df)
 
 running 208 tests
+test backend::tests::versions ... ok
 test backend::tests::schedules_read_nicely ... ok
 test backend::tests::library_rows_compare_with_recommended ... ok
-test backend::tests::versions ... ok
 test cancel::tests::stop_and_restart ... ok
 test cleanup::tests::languages_group_by_family ... ok
 test collections::tests::episode_cards_point_at_the_show ... ok
@@ -54,9 +46,8 @@ test config::tests::strips_trailing_slash_query_and_fragment ... ok
 test detect::tests::chapters_with_names_are_used ... ok
 test bulk::tests::removes_and_adds_episode_tags ... ok
 test detect::tests::windows_and_snapping ... ok
-test bulk::tests::drops_release_tags ... ok
 test downloads::tests::audio_mode ... ok
-test bulk::tests::plans_files_sidecars_and_folder ... ok
+test bulk::tests::drops_release_tags ... ok
 test downloads::tests::builds_safe_arguments ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
 test downloads::tests::plain_error_text ... ok
@@ -64,6 +55,7 @@ test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
 test downloads::tests::search_targets_and_results ... ok
 test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
+test bulk::tests::plans_files_sidecars_and_folder ... ok
 test downloads::tests::summarizes_playlists ... ok
 test fake_jellyfin::tests::a_missing_picture_is_none_not_an_error ... ok
 test fake_jellyfin::tests::clearing_removes_only_that_kind ... ok
@@ -77,8 +69,8 @@ test fingerprint::tests::fft_matches_a_plain_dft ... ok
 test fake_jellyfin::tests::subtitle_download_limit_is_reported_not_hidden ... ok
 test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
 test fingerprint::tests::silence_does_not_match ... ok
-test fingerprint::tests::survives_noise_like_a_different_encode ... ok
-test fingerprint::tests::unrelated_audio_has_no_match ... ok
+test fake_jellyfin::tests::hidden_from_players_is_said_not_called_saved ... ok
+test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test fsops::tests::apply_then_undo_restores_everything ... ok
 test fsops::tests::case_only_rename_works ... ok
 test fsops::tests::folders_are_renamed_after_their_files_and_undo_reverses_it ... ok
@@ -245,11 +237,11 @@ test tidy::tests::years_only_come_out_of_episode_names ... ok
 test updater::tests::checksums_and_assets ... ok
 test updater::tests::swap_keeps_old_when_new_is_missing ... ok
 test updater::tests::versions_compare ... ok
-test fake_jellyfin::tests::hidden_from_players_is_said_not_called_saved ... ok
-test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
+test fingerprint::tests::survives_noise_like_a_different_encode ... ok
+test fingerprint::tests::unrelated_audio_has_no_match ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
 
-test result: ok. 208 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.68s
+test result: ok. 208 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.42s
 
 [1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/media_hub-ff01a82490cb3695)
 
@@ -261,5 +253,5 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 running 0 tests
 
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 
