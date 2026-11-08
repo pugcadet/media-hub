@@ -784,7 +784,6 @@ pub async fn health_alerts(state: State<'_, AppState>) -> Result<Vec<Alert>> {
             }
         }
         Some(r) => crate::nas::remember(&state, r),
-        _ => {}
     }
     let c: Option<Client> = match state.reader().await {
         Ok(c) => match c.ping().await {

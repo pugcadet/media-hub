@@ -50,6 +50,7 @@ fn file_stem(item: &Value) -> String {
     crate::naming::split_ext(name).0.to_string()
 }
 
+#[cfg(test)]
 fn has_lang(list: &[SubStream], codes: &[String]) -> bool {
     has_lang_for(list, codes, "")
 }
