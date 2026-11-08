@@ -208,7 +208,10 @@ pub async fn detect_season(
             continue;
         }
         let name = e.get("Name").and_then(Value::as_str).unwrap_or("").to_string();
-        let _ = app.emit("detect-progress", Progress { done: heard, total, label: format!("Listening to {name}") });
+        // The ones only listened to for comparing say so (only the asked-for ones get markers).
+        let asked = match &only { Some(o) if !o.is_empty() => o.contains(&id), _ => true };
+        let label = if asked { format!("Listening to {name}") } else { format!("Listening to {name} (to compare with)") };
+        let _ = app.emit("detect-progress", Progress { done: heard, total, label });
         heard += 1;
 
         let item = c.item_json(&id).await?;

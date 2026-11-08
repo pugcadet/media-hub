@@ -326,7 +326,8 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
       const { detectIntro, detectCredits } = prefs();
       const what = detectIntro && detectCredits ? "intros and credits" : detectIntro ? "intros" : "credits";
       // Shown in the top bar too, with a progress bar and Stop.
-      const res = await track(`Finding ${what}`, async (job) => {
+      const forWhom = scope === "episode" ? ` for ${epName(eps.find((e) => e.id === epId) ?? eps[0])}` : scope === "selected" ? ` for ${only.size} episodes` : "";
+      const res = await track(`Finding ${what}${forWhom}`, async (job) => {
         const un = await listen<{ done: number; total: number; label: string }>("detect-progress", (e) => job.update(e.payload.label, e.payload.total ? e.payload.done / e.payload.total : null));
         try {
           return await api.detectSeason(seasonId, 6 * 60, 5 * 60, detectIntro, detectCredits, scope === "season" ? null : [...only]);
