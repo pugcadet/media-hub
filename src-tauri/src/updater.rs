@@ -163,16 +163,47 @@ fn asset_url(rel: &Value, name: &str) -> Option<String> {
         .map(String::from)
 }
 
-async fn download(url: &str) -> Result<Vec<u8>> {
-    let resp = http()?.get(url).send().await.map_err(|e| Error::Network(e.without_url().to_string()))?;
-    if !resp.status().is_success() {
-        return Err(Error::msg(format!("Download failed with status {}.", resp.status())));
+/// A download from GitHub, tried up to 4 times: its download servers now and then answer
+/// "504 Gateway Timeout" or drop the connection, and a few seconds later it works.
+pub async fn fetch(http: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+    let mut last = Error::msg("Download failed.");
+    for (i, wait) in [0u64, 3, 8, 20].into_iter().enumerate() {
+        if wait > 0 {
+            tokio_sleep(wait).await;
+        }
+        let resp = match http.get(url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last = Error::Network(e.without_url().to_string());
+                continue;
+            }
+        };
+        let status = resp.status();
+        if status.is_server_error() || status.as_u16() == 429 {
+            last = Error::msg(format!("GitHub's download server didn't answer ({status}), {} tries. Try again in a few minutes.", i + 1));
+            continue;
+        }
+        if !status.is_success() {
+            return Err(Error::msg(format!("Download failed with status {status}.")));
+        }
+        match resp.bytes().await {
+            Ok(b) => return Ok(b.to_vec()),
+            Err(e) => last = Error::Network(e.without_url().to_string()),
+        }
     }
-    let bytes = resp.bytes().await.map_err(|e| Error::Network(e.without_url().to_string()))?;
+    Err(last)
+}
+
+async fn tokio_sleep(secs: u64) {
+    tauri::async_runtime::spawn_blocking(move || std::thread::sleep(Duration::from_secs(secs))).await.ok();
+}
+
+async fn download(url: &str) -> Result<Vec<u8>> {
+    let bytes = fetch(&http()?, url).await?;
     if bytes.len() > MAX_BYTES {
         return Err(Error::msg("Unexpectedly large download; stopped."));
     }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 /// The running app's bundle: /Applications/Media Hub.app (from .../Contents/MacOS/media-hub).

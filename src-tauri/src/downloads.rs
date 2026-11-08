@@ -204,13 +204,7 @@ pub async fn ytdlp_install(state: State<'_, AppState>) -> Result<String> {
         .map_err(|e| Error::msg(e.to_string()))?;
     let get = |url: String| {
         let http = http.clone();
-        async move {
-            let r = http.get(&url).send().await.map_err(|e| Error::Network(e.without_url().to_string()))?;
-            if !r.status().is_success() {
-                return Err(Error::msg(format!("Download failed with status {}", r.status())));
-            }
-            r.bytes().await.map_err(|e| Error::Network(e.without_url().to_string()))
-        }
+        async move { crate::updater::fetch(&http, &url).await }
     };
     let sums = get(format!("{RELEASE}SHA2-256SUMS")).await?;
     let expected = checksum_for(&String::from_utf8_lossy(&sums), asset_name())
