@@ -225,7 +225,7 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<string | null>(null);
-  const [ignored, setIgnored] = useState<Set<string>>(new Set());
+  const [ignored] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
@@ -299,9 +299,14 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
     return () => void un.then((f) => f());
   }, []);
 
-  // An episode without a known length is drawn as long as its last marker (plus a minute).
-  const eps = (ov?.episodes ?? []).map((e) => (e.duration > 0 ? e : { ...e, duration: Math.max(60, ...e.segments.map((x) => x.end + 60)) }));
-  const maxDur = Math.max(60, ...eps.map((e) => e.duration));
+  // An episode without a known length gets the season's usual length (a bad marker from Intro
+  // Skipper can run far past the end, so its last marker isn't used).
+  const known = (ov?.episodes ?? []).map((e) => e.duration).filter((d) => d > 0);
+  const usual = median(known) ?? Math.max(60, ...(ov?.episodes ?? []).flatMap((e) => e.segments.map((x) => x.end)));
+  const eps = (ov?.episodes ?? []).map((e) => (e.duration > 0 ? e : { ...e, duration: usual }));
+  // The scale fits normal episodes; one with a length far off (a wrong length in Jellyfin) is
+  // cut off at the edge instead of squeezing all the others.
+  const maxDur = Math.max(60, ...eps.map((e) => e.duration).filter((d) => d <= usual * 1.6), Math.min(usual * 1.6, Math.max(...eps.map((e) => e.duration), 60)));
   const set = (id: string, p: Part, s: Span | null) => setDrafts((d) => ({ ...d, [id]: { ...d[id], [p]: s, source: "manual" } }));
   const targetsOf = (scope: Scope, epId?: string) => eps.filter((e) => (scope === "episode" ? e.id === epId : scope === "selected" ? selected.has(e.id) : true));
 
@@ -458,29 +463,27 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
     const introLen = median(withIntro.map((e) => drafts[e.id].intro!.end - drafts[e.id].intro!.start));
     const withCredits = eps.filter((e) => drafts[e.id]?.credits);
     const fromEnd = median(withCredits.map((e) => e.duration - drafts[e.id].credits!.start));
-    eps.forEach((e, i) => {
+    eps.forEach((e) => {
       const d = drafts[e.id];
       if (!d) return;
-      if (d.intro && introStart !== null && introLen !== null && Math.abs(d.intro.start - introStart) > 45) {
-        out.push({
-          id: `intro-${e.id}`, ep: e, title: `${epName(e)} · Intro starts at ${fmt(d.intro.start)}`,
-          why: `The other episodes start around ${fmt(introStart)}. A cold open may be the reason.`,
-          actions: [
-            { label: "Fix to median", run: () => set(e.id, "intro", { start: introStart, end: introStart + introLen }) },
-            { label: "Remove", danger: true, run: () => set(e.id, "intro", null) },
-          ],
-        });
+      // Where an intro starts differs (a cold open before it is normal); its length hardly does.
+      if (d.intro && introStart !== null && introLen !== null) {
+        const len = d.intro.end - d.intro.start;
+        const late = d.intro.start > Math.min(900, e.duration * 0.5);
+        const off = withIntro.length >= 3 && Math.abs(len - introLen) > 25;
+        if (late || off) {
+          const from = late ? introStart : d.intro.start;
+          out.push({
+            id: `intro-${e.id}`, ep: e, title: `${epName(e)} · Intro ${fmt(d.intro.start)}–${fmt(d.intro.end)}`,
+            why: late ? `It starts very late; the others start around ${fmt(introStart)}.` : `It's ${fmt(len)} long; the others are about ${fmt(introLen)}.`,
+            actions: [
+              { label: "Fix to median", run: () => set(e.id, "intro", { start: from, end: Math.min(e.duration || from + introLen, from + introLen) }) },
+              { label: "Remove", danger: true, run: () => set(e.id, "intro", null) },
+            ],
+          });
+        }
       }
-      if (!d.intro && withIntro.length >= Math.max(2, eps.length * 0.6)) {
-        const prev = [...eps.slice(0, i)].reverse().find((p) => drafts[p.id]?.intro) ?? eps.slice(i + 1).find((p) => drafts[p.id]?.intro);
-        out.push({
-          id: `nointro-${e.id}`, ep: e, title: `${epName(e)} · No intro found`, why: "Most other episodes have one.",
-          actions: [
-            ...(prev ? [{ label: `Copy from ${prev.index != null ? `E${prev.index}` : prev.name}`, run: () => set(e.id, "intro", { ...drafts[prev.id].intro! }) }] : []),
-            { label: "Ignore", run: () => setIgnored((s) => new Set(s).add(`nointro-${e.id}`)) },
-          ],
-        });
-      }
+      // No intro is fine: some episodes don't have one.
       if (d.credits && fromEnd !== null && Math.abs(e.duration - d.credits.start - fromEnd) > 90) {
         out.push({
           id: `credits-${e.id}`, ep: e, title: `${epName(e)} · Credits start at ${fmt(d.credits.start)}`,
@@ -691,7 +694,15 @@ export function IntrosTab({ seasonId, seasonName, canEdit, show, command }: {
         </div>
 
         <div className="card form">
-          <div className="section-head"><h2>Suspicious segments</h2><span className="muted small">Compared with the season median</span></div>
+          <div className="section-head">
+            <h2>Suspicious segments</h2>
+            <span className="muted small">Compared with the season median</span>
+            {canEdit && flags.filter((f) => f.actions.some((a) => a.label === "Fix to median")).length > 1 && (
+              <button className="small-btn" onClick={() => flags.forEach((f) => f.actions.find((a) => a.label === "Fix to median")?.run())}>
+                Fix all to median ({flags.filter((f) => f.actions.some((a) => a.label === "Fix to median")).length})
+              </button>
+            )}
+          </div>
           {flags.length === 0 && <p className="muted small">Nothing looks off.</p>}
           {flags.map((f) => (
             <div className="flag-row" key={f.id}>
@@ -759,7 +770,17 @@ function SegPreview({ ep, draft, parts, first, onSet }: { ep: SegEpisode; draft:
 
   // Fast path: a window of the episode read straight from the NAS (start, or the end for
   // credits). If that can't be done (other video formats), Jellyfin's stream is used.
-  const winFor = (p: Part): [number, number] => (p === "credits" ? [Math.max(0, ep.duration - 420), Math.min(ep.duration, 420)] : [0, Math.min(ep.duration || 480, 480)]);
+  // Only the part around the marker is copied from the NAS (a minute or three, not 8), so it
+  // starts quickly; seeking elsewhere fetches that piece. Whole seconds, so a piece made before is reused.
+  const winFor = (p: Part): [number, number] => {
+    const d = ep.duration || 480;
+    const sp = draft[p];
+    if (sp && sp.end > sp.start && sp.end <= d + 1 && sp.end - sp.start < d * 0.5) {
+      const b0 = Math.max(0, Math.floor(sp.start - 20));
+      return [b0, Math.max(60, Math.min(300, Math.ceil(sp.end + 25 - b0)))];
+    }
+    return p === "credits" ? [Math.max(0, Math.floor(d - 240)), Math.min(Math.ceil(d), 240)] : [0, Math.min(Math.ceil(d), 240)];
+  };
   const [win, setWin] = useState<{ base: number; len: number; url: string } | null>(null);
   const [useHls, setUseHls] = useState(false);
   const base = useHls ? 0 : win?.base ?? 0;
@@ -820,8 +841,8 @@ function SegPreview({ ep, draft, parts, first, onSet }: { ep: SegEpisode; draft:
     const want = Math.max(0, Math.min(ep.duration, t));
     if (!useHls && win && (want < win.base || want > win.base + win.len)) {
       // Outside the piece that's loaded: fetch the piece around it.
-      const b0 = Math.max(0, want - 60);
-      void api.previewWindow(ep.id, b0, 420).then((url) => { setWin({ base: b0, len: 420, url }); v.src = url; v.currentTime = want - b0; }).catch(() => setUseHls(true));
+      const b0 = Math.max(0, Math.floor(want - 30));
+      void api.previewWindow(ep.id, b0, 150).then((url) => { setWin({ base: b0, len: 150, url }); v.src = url; v.currentTime = want - b0; }).catch(() => setUseHls(true));
       return;
     }
     v.currentTime = want - base;

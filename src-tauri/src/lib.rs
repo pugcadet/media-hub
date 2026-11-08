@@ -90,6 +90,7 @@ pub fn run() {
             subpreview::subtitle_preview,
             tidy::tidy_names_plan,
             subpreview::video_clip,
+            subpreview::subtitle_peek,
             player::preview_window,
             jfserver::server_task_run,
             jfserver::server_task_stop,

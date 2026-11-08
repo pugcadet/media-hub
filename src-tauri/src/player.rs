@@ -659,8 +659,11 @@ pub async fn preview_window(state: State<'_, AppState>, id: String, start: f64, 
     let dir = state.dir.join("tmp");
     std::fs::create_dir_all(&dir)?;
     let (start, seconds) = (start.max(0.0), seconds.clamp(10.0, 900.0));
-    let out = dir.join(format!("win-{id}-{}.mp4", start.round() as i64));
+    let out = dir.join(format!("win-{id}-{}-{}.mp4", start.round() as i64, seconds.round() as i64));
     let o = out.clone();
+    // Made before (this episode was open a moment ago): used again, nothing copied.
+    let made = std::fs::metadata(&out).map(|m| m.len() > 10_000).unwrap_or(false);
+    if !made {
     tauri::async_runtime::spawn_blocking(move || -> Result<()> {
         use std::process::{Command, Stdio};
         // Which video codec (from ffmpeg's own description of the file).
@@ -688,12 +691,14 @@ pub async fn preview_window(state: State<'_, AppState>, id: String, start: f64, 
         crate::media_tools::hide_window(&mut cmd);
         let r = cmd.output().map_err(|e| Error::msg(format!("Could not start ffmpeg: {e}")))?;
         if !r.status.success() {
+            let _ = std::fs::remove_file(&o);
             return Err(Error::msg("ffmpeg could not repackage it"));
         }
         Ok(())
     })
     .await
     .map_err(|e| Error::msg(e.to_string()))??;
+    }
     let tok = token()?;
     let mut map = windows().lock().map_err(|_| Error::msg("internal error"))?;
     // Keep only the last few windows (their temporary files are ours to remove).
@@ -701,7 +706,7 @@ pub async fn preview_window(state: State<'_, AppState>, id: String, start: f64, 
         let old: Vec<String> = map.keys().cloned().collect();
         for k in old.into_iter().take(map.len() - 5) {
             if let Some(p) = map.remove(&k) {
-                if p != out {
+                if p != out && !map.values().any(|v| *v == p) {
                     let _ = std::fs::remove_file(p);
                 }
             }

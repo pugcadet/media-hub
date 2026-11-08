@@ -55,7 +55,7 @@ let LIB_ROWS: Row[] | null = null;
 
 export default function LibraryView({ status: st, route }: { status: Status; route: Route }) {
   const epoch = useEpoch();
-  const { libraryView, tileSize } = usePrefs();
+  const { libraryView, collectionsView, tileSize } = usePrefs();
   const [rows, setRows] = useState<Row[] | null>(LIB_ROWS);
   useEffect(() => { if (rows) LIB_ROWS = rows; }, [rows]);
   const [error, setError] = useState<string | null>(null);
@@ -145,9 +145,10 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
   const gaps = (c: Check) => inFolder.filter((r) => state(r, c) === false).length;
   const shown = inFolder
     .filter((r) => !query || r.name.toLowerCase().includes(query.toLowerCase()))
-    // A title leaves the list as soon as it no longer matches (you just fixed it).
-    .filter((r) => !only || state(r, only) === false)
-    .filter((r) => (filter === "all" ? true : filter === "ok" ? score(r) === 1 : score(r) < 1))
+    // A title leaves the list once it no longer matches the filter, but not the one that's
+    // open: it stays while you work on it (removing a subtitle doesn't make it vanish).
+    .filter((r) => r.id === sel || !only || state(r, only) === false)
+    .filter((r) => r.id === sel || (filter === "all" ? true : filter === "ok" ? score(r) === 1 : score(r) < 1))
     .sort((a, b) =>
       (sort === "todo" ? score(a) - score(b) : sort === "year" ? (b.year ?? 0) - (a.year ?? 0) : sort === "added" ? (b.added ?? "").localeCompare(a.added ?? "") : 0)
       || sortName(a.name).localeCompare(sortName(b.name)));
@@ -270,7 +271,7 @@ export default function LibraryView({ status: st, route }: { status: Status; rou
   if (folder === "@collections") {
     return (
       <div className="pg lib-page lib2">
-        <CollectionsView canEdit={canEdit} top={barTop} view={libraryView} toggle={viewToggle} />
+        <CollectionsView canEdit={canEdit} top={barTop} view={collectionsView} toggle={<Seg icons value={collectionsView} onChange={(v) => setPrefs({ collectionsView: v })} options={[{ id: "list", label: "List", title: "List", icon: "list" }, { id: "tiles", label: "Grid", title: "Grid", icon: "grid" }]} />} />
       </div>
     );
   }

@@ -26,6 +26,20 @@ pub async fn locate(state: &AppState, id: &str) -> Result<PathBuf> {
     }
 }
 
+/// Where a file is now after the renames Media Hub made (oldest first), for when Jellyfin
+/// hasn't looked yet and still gives the old place. None when no rename touched it.
+pub fn follow_renames(rel: &str, newest_first: &[(i64, String, String)]) -> Option<String> {
+    let mut cur = rel.to_string();
+    for (_, from, to) in newest_first.iter().rev() {
+        if cur == *from {
+            cur = to.clone();
+        } else if let Some(rest) = cur.strip_prefix(&format!("{from}/")) {
+            cur = format!("{to}/{rest}");
+        }
+    }
+    (cur != rel).then_some(cur)
+}
+
 /// `to_local` for a long list at once: 16 lookups at a time, because each one may wait on the
 /// NAS (slow over a VPN). Same order as the list; None where it isn't found.
 pub fn to_local_many(state: &AppState, servers: &[&str]) -> Vec<Option<PathBuf>> {
@@ -285,6 +299,16 @@ pub async fn library_scan(state: State<'_, AppState>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_moved_file_is_followed() {
+        let moves = vec![
+            (3, "Movies/Heat (1995)/Heat.mkv".to_string(), "Movies/Heat (1995)/Heat (1995).mkv".to_string()),
+            (2, "Movies/Heat".to_string(), "Movies/Heat (1995)".to_string()),
+        ];
+        assert_eq!(follow_renames("Movies/Heat/Heat.mkv", &moves).as_deref(), Some("Movies/Heat (1995)/Heat (1995).mkv"));
+        assert_eq!(follow_renames("Movies/Dune/Dune.mkv", &moves), None);
+    }
 
     #[test]
     fn relative_paths_use_forward_slashes() {

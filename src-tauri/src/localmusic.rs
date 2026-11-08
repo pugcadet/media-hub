@@ -28,7 +28,10 @@ pub struct Track {
     pub key: String,
     pub path: PathBuf,
     pub title: String,
+    /// The album's artist ("Various Artists" for a compilation).
     pub artist: String,
+    /// Who sings this song (on a compilation it differs per song).
+    pub song_artist: String,
     pub album: String,
     pub album_key: String,
     pub year: Option<i64>,
@@ -89,6 +92,8 @@ struct SavedTrack {
     rel: String,
     title: String,
     artist: String,
+    #[serde(default)]
+    song_artist: String,
     album: String,
     album_key: String,
     year: Option<i64>,
@@ -112,6 +117,7 @@ fn from_lib(root: &Path) -> Option<Index> {
             path: root.join(&t.rel),
             title: t.title.clone(),
             artist: t.artist.clone(),
+            song_artist: if t.song_artist.is_empty() { t.artist.clone() } else { t.song_artist.clone() },
             album: t.album.clone(),
             album_key: t.album_key.clone(),
             year: t.year,
@@ -271,6 +277,8 @@ fn scan(root: &Path, tags: bool) -> Index {
         let folder_artist = if parts.len() >= 2 { parts[parts.len() - 2].to_string() } else { "Unknown artist".to_string() };
         let album_key = key_of(&rel_dir);
         let mut album_tracks: Vec<Track> = Vec::new();
+        // The files say who the album is by (else it's worked out from the songs).
+        let mut has_album_artist = false;
         let mut art_in_file: Option<PathBuf> = None;
         for (f, md) in &files {
             let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
@@ -301,11 +309,15 @@ fn scan(root: &Path, tags: bool) -> Index {
             if entry.embedded_art && art_in_file.is_none() {
                 art_in_file = Some(f.clone());
             }
+            if entry.album_artist.is_some() {
+                has_album_artist = true;
+            }
             album_tracks.push(Track {
                 key: key_of(&rel),
                 path: f.clone(),
                 title: entry.title.clone().unwrap_or(file_title),
                 artist: entry.album_artist.clone().or_else(|| entry.artist.clone()).unwrap_or_else(|| folder_artist.clone()),
+                song_artist: entry.artist.clone().or_else(|| entry.album_artist.clone()).unwrap_or_else(|| folder_artist.clone()),
                 album: entry.album.clone().unwrap_or_else(|| folder_album.clone()),
                 album_key: album_key.clone(),
                 year: entry.year.or(folder_year),
@@ -328,7 +340,7 @@ fn scan(root: &Path, tags: bool) -> Index {
             c.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0))).map(|x| x.0).unwrap_or_default()
         };
         let album = common(&|t| t.album.clone());
-        let artist = common(&|t| t.artist.clone());
+        let artist = if has_album_artist { common(&|t| t.artist.clone()) } else { album_artist_of(&album_tracks.iter().map(|t| t.song_artist.as_str()).collect::<Vec<_>>()) };
         let year = album_tracks.iter().filter_map(|t| t.year).min();
         for t in &mut album_tracks {
             t.album = album.clone();
@@ -371,7 +383,7 @@ fn scan(root: &Path, tags: bool) -> Index {
         entries.sort_by(|a, b| a.rel.cmp(&b.rel));
         let saved: Vec<SavedTrack> = tracks
             .iter()
-            .map(|t| SavedTrack { rel: rel_of(root, &t.path), title: t.title.clone(), artist: t.artist.clone(), album: t.album.clone(), album_key: t.album_key.clone(), year: t.year, index: t.index, disc: t.disc, duration: t.duration, added: t.added })
+            .map(|t| SavedTrack { rel: rel_of(root, &t.path), title: t.title.clone(), artist: t.artist.clone(), song_artist: t.song_artist.clone(), album: t.album.clone(), album_key: t.album_key.clone(), year: t.year, index: t.index, disc: t.disc, duration: t.duration, added: t.added })
             .collect();
         let covers_rel = covers.iter().map(|(k, v): (&String, &PathBuf)| (k.clone(), rel_of(root, v))).collect();
         let artists_rel = artists.iter().map(|(k, v): (&String, &PathBuf)| (k.clone(), rel_of(root, v))).collect();
@@ -436,12 +448,29 @@ fn base() -> &'static str {
     }
 }
 
+/// The album's artist from its songs' artists, when the files don't say: the one artist when
+/// (nearly) all songs are theirs, "Various Artists" when the songs are by many different ones.
+pub fn album_artist_of(song_artists: &[&str]) -> String {
+    let mut c: HashMap<String, (usize, String)> = HashMap::new();
+    for a in song_artists {
+        let e = c.entry(norm_name(a)).or_insert((0, a.to_string()));
+        e.0 += 1;
+    }
+    let n = song_artists.len().max(1);
+    let top = c.values().max_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1))).cloned().unwrap_or((0, String::new()));
+    if c.len() >= 3 && top.0 * 2 < n {
+        "Various Artists".into()
+    } else {
+        top.1
+    }
+}
+
 fn track_item(t: &Track, has_cover: bool) -> MusicItem {
     let mut m = MusicItem::local(
         format!("L{}", t.key),
         "track",
         t.title.clone(),
-        t.artist.clone(),
+        if t.song_artist.is_empty() { t.artist.clone() } else { t.song_artist.clone() },
         t.album.clone(),
         Some(format!("A{}", t.album_key)),
         t.year,
@@ -1791,6 +1820,9 @@ mod edit_tests {
         assert_eq!(norm_name("AC/DC"), "acdc");
         assert_eq!(norm_name("The The"), "the");
         assert!(is_placeholder_artist("Various Artists"));
+        assert_eq!(album_artist_of(&["Adele", "Queen", "Muse", "Adele"]), "Various Artists");
+        assert_eq!(album_artist_of(&["Queen", "Queen", "Queen feat. Bowie"]), "Queen");
+        assert_eq!(album_artist_of(&["Daft Punk", "Daft Punk", "Daft Punk", "Pharrell", "Nile"]), "Daft Punk");
         assert!(!is_placeholder_artist("Air"));
     }
 

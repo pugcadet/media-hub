@@ -44,6 +44,26 @@ fn read_segs(list: &[Value]) -> Vec<Seg> {
         .collect()
 }
 
+/// Does this marker fit in the episode? (Intro Skipper sometimes stores credits from 0:00 over
+/// the whole episode, or past its end.)
+fn plausible(s: &Seg, duration: f64) -> bool {
+    s.start >= 0.0 && s.end > s.start + 0.5 && (duration <= 0.0 || (s.end <= duration + 5.0 && s.end - s.start <= duration * 0.5))
+}
+
+/// One marker per kind: when Jellyfin has two (one saved here, an older one from Intro
+/// Skipper), the one that fits the episode. A kind with only a bad one keeps it, so it's flagged.
+fn best_per_kind(segs: Vec<Seg>, duration: f64) -> Vec<Seg> {
+    let mut out: Vec<Seg> = Vec::new();
+    for s in segs {
+        match out.iter().position(|o| o.kind == s.kind) {
+            None => out.push(s),
+            Some(i) if !plausible(&out[i], duration) && plausible(&s, duration) => out[i] = s,
+            Some(_) => {}
+        }
+    }
+    out
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeRow {
@@ -89,11 +109,12 @@ pub async fn segments_overview(state: State<'_, AppState>, season_id: String) ->
     for (e, task) in eps.iter().zip(tasks) {
         let id = e.get("Id").and_then(Value::as_str).unwrap_or("").to_string();
         let Some(segments) = task.await.ok().flatten() else { continue };
+        let duration = e.get("RunTimeTicks").and_then(Value::as_f64).unwrap_or(0.0) / TICKS_PER_SECOND;
         episodes.push(EpisodeRow {
             name: e.get("Name").and_then(Value::as_str).unwrap_or("").to_string(),
             index: e.get("IndexNumber").and_then(Value::as_i64),
-            duration: e.get("RunTimeTicks").and_then(Value::as_f64).unwrap_or(0.0) / TICKS_PER_SECOND,
-            segments,
+            segments: best_per_kind(segments, duration),
+            duration,
             id,
         });
     }
@@ -429,6 +450,23 @@ pub async fn store_markers(w: &Writer, item_id: &str, kinds: &[String], new: &[S
     if !wrote {
         return Err(Error::msg("The markers kept changing on the server while saving (Intro Skipper may be analysing this show). Try again in a minute."));
     }
+    // Other markers of the same kind still there (Intro Skipper's own, from another provider):
+    // removed, so players don't pick the old one.
+    let editor = w.reader().segments_editor(item_id).await.ok().flatten().is_some();
+    let api = if editor { None } else { w.reader().segment_api().await.ok().flatten() };
+    for old in read_segs(&w.reader().segments(item_id).await.unwrap_or_default()) {
+        let ours = new.iter().any(|n| n.kind == old.kind && (n.start - old.start).abs() < 0.5 && (n.end - old.end).abs() < 0.5);
+        if ours || old.id.is_empty() || !kinds.contains(&old.kind) {
+            continue;
+        }
+        let _ = if editor {
+            w.segment_delete_editor(&old.id, item_id, &old.kind).await
+        } else if let Some(api) = &api {
+            w.segment_delete(api, &old.id).await
+        } else {
+            Ok(())
+        };
+    }
 
     // Read back. Players read the filtered list; the editor list shows what was stored at all.
     for wait in [300u64, 1200, 2500] {
@@ -499,6 +537,19 @@ pub async fn pick_ffmpeg(app: AppHandle, state: State<'_, AppState>) -> Result<O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bad_marker_from_intro_skipper_gives_way_to_the_good_one() {
+        let seg = |k: &str, a: f64, b: f64| Seg { id: String::new(), kind: k.into(), start: a, end: b };
+        // Credits over the whole episode (Intro Skipper), then the one saved here.
+        let got = best_per_kind(vec![seg("Outro", 0.0, 1474.0), seg("Intro", 55.0, 110.0), seg("Outro", 1427.0, 1474.0)], 1474.0);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got.iter().find(|s| s.kind == "Outro").map(|s| s.start), Some(1427.0));
+        // Only a bad one: kept, so it shows up as suspicious.
+        let got = best_per_kind(vec![seg("Outro", 0.0, 1474.0)], 1474.0);
+        assert_eq!(got[0].start, 0.0);
+        assert!(!plausible(&seg("Outro", 1400.0, 3000.0), 1474.0), "past the end");
+    }
 
     #[test]
     fn reads_jellyfin_segments() {

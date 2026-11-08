@@ -34,7 +34,7 @@ export default function SubPreview({ id, path, lang, label, others, canEdit, onC
   const video = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    setData(null); setError(null); setOffset(0); setClips({}); setSpot(0); setAuto(null);
+    setData(null); setError(null); setOffset(0); setClips({}); setSpot(0); setAuto(null); setFailed(new Set());
     api.subtitlePreview(id, path).then(setData).catch((e) => setError(errorText(e)));
   }, [id, path]);
 
@@ -43,23 +43,37 @@ export default function SubPreview({ id, path, lang, label, others, canEdit, onC
 
   const at = data?.spots[spot] ?? null;
   const start = at === null ? 0 : Math.max(0, at - LEAD);
+  // The clip on screen first, then the other moments one by one in the background, so
+  // switching between Start, Early, Middle and Late is instant.
+  const asking = useRef<Set<number>>(new Set());
+  const [failed, setFailed] = useState<Set<number>>(new Set());
   useEffect(() => {
-    if (at === null || clips[spot]) return;
+    if (!data) return;
+    const want = [spot, ...data.spots.map((_, i) => i).filter((i) => i !== spot)].find((i) => !clips[i] && !failed.has(i));
+    if (want === undefined || asking.current.size) return;
     let live = true;
-    setLoading(true);
-    api.videoClip(id, start, CLIP)
+    asking.current.add(want);
+    if (want === spot) setLoading(true);
+    api.videoClip(id, Math.max(0, data.spots[want] - LEAD), CLIP)
       .then((b64) => {
-        if (!live) return;
         const bin = atob(b64);
         const bytes = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
         const url = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
-        setClips((c) => ({ ...c, [spot]: url }));
+        if (live) setClips((c) => ({ ...c, [want]: url }));
+        else URL.revokeObjectURL(url);
       })
-      .catch((e) => live && setError(errorText(e)))
-      .finally(() => live && setLoading(false));
-    return () => { live = false; };
-  }, [at, spot, id, start, clips]);
+      .catch((e) => {
+        if (!live) return;
+        setFailed((f) => new Set(f).add(want));
+        if (want === spot) setError(errorText(e));
+      })
+      .finally(() => {
+        asking.current.delete(want);
+        if (live) setLoading(false);
+      });
+    return () => { live = false; asking.current.delete(want); };
+  }, [data, spot, id, clips, failed]);
 
   // The line on screen: shifted by the chosen timing.
   const line = useMemo(() => {
@@ -117,7 +131,7 @@ export default function SubPreview({ id, path, lang, label, others, canEdit, onC
             {clips[spot] ? (
               <video ref={video} key={clips[spot]} src={clips[spot]} controls autoPlay onTimeUpdate={(e) => setNow(e.currentTarget.currentTime)} onSeeked={(e) => setNow(e.currentTarget.currentTime)} />
             ) : (
-              <div className="sp-wait">{loading ? <><span className="spinner" /> Cutting a {CLIP} s clip…</> : "No clip"}</div>
+              <div className="sp-wait">{loading || (!clips[spot] && !failed.has(spot)) ? <><span className="spinner" /> Cutting a {CLIP} s clip…</> : "No clip"}</div>
             )}
             {line && <div className="sp-line">{line}</div>}
             {at !== null && <span className="sp-time mono">{clock(start + now)} · {CLIP} s clip</span>}

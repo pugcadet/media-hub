@@ -187,9 +187,16 @@ pub async fn movie_folders(state: State<'_, AppState>) -> Result<Vec<MovieFolder
         .collect();
     let servers: Vec<&str> = wanted.iter().map(|w| w.3).collect();
     let locals = local::to_local_many(&state, &servers);
+    // Moved here a moment ago (Fix selected) and Jellyfin hasn't looked yet: the place from
+    // the move log, so the list shows what's on the NAS now instead of the same suggestions.
+    let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0) - 3 * 86_400;
+    let moves = state.store().and_then(|s| s.renames_since(since)).unwrap_or_default();
+    let settings = state.settings()?;
     let mut movies = Vec::new();
-    for ((id, title, year, _), lp) in wanted.into_iter().zip(locals) {
-        let Some(rel) = lp.and_then(|p| local::rel_to_root(&root, &p)) else { continue };
+    for ((id, title, year, server), lp) in wanted.into_iter().zip(locals) {
+        let known = settings.path_map.as_ref().and_then(|m| crate::media_tools::map_known(server, m)).and_then(|p| p.strip_prefix(&root).ok().map(|r| r.to_string_lossy().replace('\\', "/")));
+        let moved = known.and_then(|r| local::follow_renames(&r, &moves)).filter(|r| root.join(r).is_file());
+        let Some(rel) = moved.or_else(|| lp.and_then(|p| local::rel_to_root(&root, &p))) else { continue };
         movies.push((id, title.to_string(), year, rel));
     }
     let mut list = classify(movies);

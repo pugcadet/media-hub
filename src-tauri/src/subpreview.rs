@@ -69,7 +69,12 @@ pub async fn subtitle_preview(state: State<'_, AppState>, id: String, path: Stri
     if !valid_item_id(&id) {
         return Err(Error::msg("bad id"));
     }
-    let sub = crate::sublock::resolve_sub(&state, &path)?;
+    // A subtitle fetched to look at before downloading lives in the app's own temporary folder.
+    let peek_dir = state.dir.join("tmp").canonicalize().ok();
+    let sub = match (std::path::Path::new(&path).canonicalize().ok(), peek_dir) {
+        (Some(p), Some(d)) if p.starts_with(&d) && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("peek-")) => p,
+        _ => crate::sublock::resolve_sub(&state, &path)?,
+    };
     let lower = sub.to_string_lossy().to_lowercase();
     if !(lower.ends_with(".srt") || lower.ends_with(".vtt")) {
         return Err(Error::msg("Only SRT and VTT subtitles can be previewed."));
@@ -86,6 +91,34 @@ pub async fn subtitle_preview(state: State<'_, AppState>, id: String, path: Stri
     Ok(SubPreview { duration, spots: pick_spots(&starts, duration), lines, file: sub.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() })
 }
 
+/// A subtitle found online, fetched into a temporary file to preview before downloading it.
+/// Returns the file's path (for `subtitle_preview`).
+#[tauri::command]
+pub async fn subtitle_peek(state: State<'_, AppState>, id: String, subtitle_id: String, format: Option<String>) -> Result<String> {
+    if !valid_item_id(&id) {
+        return Err(Error::msg("bad id"));
+    }
+    let bytes = state.reader().await?.remote_subtitle(&subtitle_id).await?;
+    let ext = match format.as_deref().map(str::to_lowercase).as_deref() {
+        Some("vtt" | "webvtt") => "vtt",
+        _ => "srt",
+    };
+    let dir = state.dir.join("tmp");
+    std::fs::create_dir_all(&dir)?;
+    // Only the last few kept (our own temporary files).
+    let mut old: Vec<_> = std::fs::read_dir(&dir).into_iter().flatten().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("peek-")).collect();
+    if old.len() > 8 {
+        old.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+        for e in old.iter().take(old.len() - 8) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+    let name: String = subtitle_id.chars().filter(|c| c.is_ascii_alphanumeric()).take(40).collect();
+    let out = dir.join(format!("peek-{id}-{name}.{ext}"));
+    std::fs::write(&out, bytes)?;
+    Ok(out.to_string_lossy().into_owned())
+}
+
 /// A short, small clip of the video with sound, as base64 MP4 (the window plays it from memory).
 #[tauri::command]
 pub async fn video_clip(state: State<'_, AppState>, id: String, start: f64, seconds: f64) -> Result<String> {
@@ -97,7 +130,7 @@ pub async fn video_clip(state: State<'_, AppState>, id: String, start: f64, seco
     let ff = media_tools::locate_ffmpeg(state.settings()?.ffmpeg_path.as_deref()).ok_or_else(|| Error::msg("The preview needs ffmpeg (Settings → Tools)."))?;
     let dir = state.dir.join("tmp");
     std::fs::create_dir_all(&dir)?;
-    let out = dir.join(format!("clip-{id}.mp4"));
+    let out = dir.join(format!("clip-{id}-{}.mp4", (start * 10.0).round() as i64));
     let (start, seconds) = (start.max(0.0), seconds.clamp(2.0, 20.0));
     let o = out.clone();
     let bytes = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>> {
@@ -106,7 +139,7 @@ pub async fn video_clip(state: State<'_, AppState>, id: String, start: f64, seco
             .args(["-ss", &format!("{start:.3}"), "-t", &format!("{seconds:.3}")])
             .arg("-i")
             .arg(&video)
-            .args(["-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn", "-vf", "scale=854:-2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p"])
+            .args(["-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn", "-vf", "scale=640:-2", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "30", "-pix_fmt", "yuv420p", "-threads", "0"])
             .args(["-c:a", "aac", "-b:a", "96k", "-ac", "2", "-movflags", "+faststart"])
             .arg(&o)
             .stdin(Stdio::null())

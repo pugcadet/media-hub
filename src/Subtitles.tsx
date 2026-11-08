@@ -38,7 +38,7 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [local, setLocal] = useState<LocalSub[]>([]);
-  const [preview, setPreview] = useState<{ path: string; lang: string } | null>(null);
+  const [preview, setPreview] = useState<{ path: string; lang: string; peek?: boolean } | null>(null);
   const p = usePrefs();
 
   async function load() {
@@ -91,6 +91,21 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
       setError(errorText(e));
     } finally {
       setBusy(null);
+    }
+  }
+
+  // Look at a subtitle from the list before downloading it (fetched to a temporary file).
+  const [peeking, setPeeking] = useState<string | null>(null);
+  async function peek(subId: string, format: string | null) {
+    setPeeking(subId);
+    setError(null);
+    try {
+      const path = await api.subtitlePeek(id, subId, format);
+      setPreview({ path, lang, peek: true });
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setPeeking(null);
     }
   }
 
@@ -161,7 +176,7 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
         <SubPreview
           key={preview.path}
           id={id} path={preview.path} lang={preview.lang} label={languageName(preview.lang, list) || "this language"}
-          others={previewOthers} canEdit={canEdit}
+          others={preview.peek ? 0 : previewOthers} canEdit={canEdit && !preview.peek}
           onClose={() => setPreview(null)}
           onDone={(n) => { setPreview(null); setNote(n); void load(); }}
         />
@@ -190,6 +205,9 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
               </div>
             </div>
             {gotSub(p, id, r.sub.Id) && <span className="ok small strong sub-got" title="You downloaded this one before"><Icon name="check" size={14} /> Downloaded</span>}
+            {(!r.sub.Format || /srt|vtt|subrip/i.test(r.sub.Format)) && (
+              <button className="ghost" disabled={!!peeking} title="Watch short clips with this subtitle before downloading it" onClick={() => void peek(r.sub.Id!, r.sub.Format ?? null)}>{peeking === r.sub.Id ? "…" : "Preview"}</button>
+            )}
             <button disabled={!canEdit || !!busy} onClick={() => void download(r.sub.Id!)}>{busy === r.sub.Id ? "…" : gotSub(p, id, r.sub.Id) ? "Again" : "Download"}</button>
           </div>
         ))}

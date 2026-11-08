@@ -15,7 +15,8 @@ import { fmt } from "./Intros";
 type MTab = "albums" | "artists" | "source";
 type Check = "cover" | "year" | "artist";
 const isLocal = (id: string) => /^[LAR][0-9a-f]{16}$/.test(id);
-const unknownArtist = (a: string) => !a.trim() || /^(unknown artist|various( artists)?|va)$/i.test(a.trim());
+/** No artist known. "Various Artists" is a real answer for a compilation, not a gap. */
+const unknownArtist = (a: string) => !a.trim() || /^unknown( artist)?$/i.test(a.trim());
 
 const CHECKS: { id: Check; label: string; icon: "image" | "clock" | "music" }[] = [
   { id: "cover", label: "Cover", icon: "image" },
@@ -188,13 +189,15 @@ function AlbumDetail({ album, changed }: { album: MusicItem; changed: () => void
   /** Removes the disc and/or song number from the selected songs' files (History can undo it). */
   async function clearNums(fields: ("disc" | "track")[]) {
     const what = fields.length === 2 ? "disc and song numbers" : fields[0] === "disc" ? "disc numbers" : "song numbers";
-    if (!(await askConfirm(`Clear the ${what} of ${picked.size} song${picked.size === 1 ? "" : "s"}?\n\nWritten into the files; History can put them back.`, { okLabel: "Clear them" }))) return;
+    // The ticked songs, or with none ticked, every song of the album.
+    const ids = picked.size ? [...picked] : (tracks ?? []).map((t) => t.id);
+    if (!(await askConfirm(`Clear the ${what} of ${picked.size ? `${ids.length} song${ids.length === 1 ? "" : "s"}` : `all ${ids.length} songs`}?\n\nWritten into the files; History can put them back.`, { okLabel: "Clear them" }))) return;
     setBusy(true);
     setError(null);
     try {
       const files = new Map(await api.musicAlbumFiles(album.id));
       const changes: [string, string, string | null][] = [];
-      for (const id of picked) {
+      for (const id of ids) {
         const f = files.get(id);
         if (f) for (const k of fields) changes.push([f, k, null]);
       }
@@ -240,9 +243,10 @@ function AlbumDetail({ album, changed }: { album: MusicItem; changed: () => void
         <div className="m-et-tools">
           <label className="check small"><input type="checkbox" checked={picked.size === tracks.length} ref={(el) => { if (el) el.indeterminate = picked.size > 0 && picked.size < tracks.length; }} onChange={(e) => setPicked(e.target.checked ? new Set(tracks.map((t) => t.id)) : new Set())} />{picked.size ? `${picked.size} selected` : "Select songs"}</label>
           <span className="spacer" />
-          <button className="small-btn" disabled={busy || !picked.size} onClick={() => void clearNums(["disc"])}>Clear disc number</button>
-          <button className="small-btn" disabled={busy || !picked.size} onClick={() => void clearNums(["track"])}>Clear song number</button>
-          <button className="small-btn" disabled={busy || !picked.size} onClick={() => void clearNums(["disc", "track"])}>Clear both</button>
+          <span className="muted small">{picked.size ? `For the ${picked.size} ticked:` : "For all songs:"}</span>
+          <button className="small-btn" disabled={busy || !tracks.length} onClick={() => void clearNums(["disc"])}>Clear disc number</button>
+          <button className="small-btn" disabled={busy || !tracks.length} onClick={() => void clearNums(["track"])}>Clear song number</button>
+          <button className="small-btn" disabled={busy || !tracks.length} onClick={() => void clearNums(["disc", "track"])}>Clear both</button>
         </div>
       )}
       <div className="m-edit-tracks picks">

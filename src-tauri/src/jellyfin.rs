@@ -631,6 +631,18 @@ impl Client {
         Self::read_json(self.send(req).await?).await
     }
 
+    /// The text of a subtitle found online, without saving it (to look at it first).
+    pub async fn remote_subtitle(&self, subtitle_id: &str) -> Result<Vec<u8>> {
+        if subtitle_id.is_empty() || !subtitle_id.chars().all(|c| c.is_ascii_alphanumeric() || "._=-".contains(c)) {
+            return Err(Error::msg("bad subtitle id"));
+        }
+        let resp = self.get(&format!("/Providers/Subtitles/Subtitles/{subtitle_id}"), &[]).await?;
+        if !resp.status().is_success() {
+            return Err(Error::msg(format!("The subtitle couldn't be fetched ({}).", resp.status())));
+        }
+        Ok(resp.bytes().await.map_err(|e| Error::Network(e.without_url().to_string()))?.to_vec())
+    }
+
     /// Fetches a part of a playback stream (playlist, video piece or subtitle file).
     /// Only paths under /videos/ are allowed, so a stream token can't be used for anything else.
     pub async fn raw_get(&self, path_query: &str) -> Result<(Vec<u8>, String)> {

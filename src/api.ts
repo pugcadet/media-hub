@@ -1092,6 +1092,8 @@ export const api = {
   /** Keeps one subtitle: its timing into the file, the others in its language to the trash, named after the video. */
   subtitleLock: (id: string, path: string, lang: string, offset: number, removeOthers: boolean) =>
     invoke<{ shifted: number; removed: number; file: string; renamed: boolean }>("subtitle_lock", { id, path, lang, offset, removeOthers }),
+  /** An online subtitle fetched into a temporary file, to preview it before downloading. */
+  subtitlePeek: (id: string, subtitleId: string, format: string | null) => invoke<string>("subtitle_peek", { id, subtitleId, format }),
   subtitlePreview: (id: string, path: string) =>
     invoke<{ duration: number; lines: { s: number; e: number; t: string }[]; spots: number[]; file: string }>("subtitle_preview", { id, path }),
   /** A short clip of the video with sound, as base64 MP4. */

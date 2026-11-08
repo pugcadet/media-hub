@@ -103,6 +103,8 @@ export interface Prefs {
   uiScale: number;
   /** Library: tiles or a list, and how big the tiles are. */
   libraryView: "list" | "tiles";
+  /** Collections have their own choice: a grid of posters suits them. */
+  collectionsView: "list" | "tiles";
   tileSize: number;
   /** What auto-detect looks for. */
   detectIntro: boolean;
@@ -189,6 +191,7 @@ export const DEFAULT_PREFS: Prefs = {
   sidebarSmall: false,
   uiScale: 0.9,
   libraryView: "list",
+  collectionsView: "tiles",
   tileSize: 150,
   detectIntro: true,
   detectCredits: true,
