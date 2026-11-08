@@ -109,6 +109,16 @@ fn join_rest(base: &Path, rest: &[(usize, &str)]) -> Option<PathBuf> {
     Some(p)
 }
 
+/// The path on this computer by the known map alone, without looking at the NAS. For lists
+/// (which main folder, which movie folder); anything that touches a file uses `map_path`.
+pub fn map_known(server_path: &str, map: &PathMap) -> Option<PathBuf> {
+    let rest = server_path.strip_prefix(map.server.as_str())?;
+    if !(rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\')) {
+        return None;
+    }
+    join_rest(Path::new(&map.local), &components(rest))
+}
+
 /// Finds the file on this computer. With a known map it is a simple swap; otherwise the
 /// server path is tried against the library folder with ever fewer leading folders
 /// ("/volume1/media/TV/x.mkv" -> root/media/TV/x.mkv, root/TV/x.mkv, root/x.mkv) and the

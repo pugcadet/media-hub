@@ -224,6 +224,8 @@ pub fn run() {
             inbox::inbox_resolve,
             inbox::inbox_place,
             inbox::inbox_trash,
+            inbox::inbox_compare,
+            inbox::inbox_replace_old,
             inbox::inbox_reveal,
             inbox::inbox_find_item,
             moviefolders::movie_folders_plan,

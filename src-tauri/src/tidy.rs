@@ -238,14 +238,16 @@ pub async fn tidy_names_plan(state: State<'_, AppState>, skip: Vec<String>) -> R
         )
         .await?;
     let mut list: Vec<(String, String, &'static str, Option<i64>, String)> = Vec::new();
-    for v in &items {
+    let servers: Vec<&str> = items.iter().map(|v| v.get("Path").and_then(Value::as_str).unwrap_or("")).collect();
+    let locals = local::to_local_many(&state, &servers);
+    for (v, lp) in items.iter().zip(locals) {
         let id = v.get("Id").and_then(Value::as_str).unwrap_or("").replace('-', "");
         let kind = if v.get("Type").and_then(Value::as_str) == Some("Series") { "series" } else { "movie" };
-        let (Some(server), Some(name)) = (v.get("Path").and_then(Value::as_str), v.get("Name").and_then(Value::as_str)) else { continue };
+        let (Some(_), Some(name)) = (v.get("Path").and_then(Value::as_str), v.get("Name").and_then(Value::as_str)) else { continue };
         if !valid_item_id(&id) {
             continue;
         }
-        let Ok(lp) = local::to_local(&state, server) else { continue };
+        let Some(lp) = lp else { continue };
         let Some(rel) = local::rel_to_root(&root, &lp) else { continue };
         let top = rel.split('/').next().unwrap_or("").to_lowercase();
         if skip.iter().any(|s| s.to_lowercase() == top) {

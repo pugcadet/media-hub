@@ -211,13 +211,23 @@ impl Client {
         if !crate::config::valid_key(api_key) {
             return Err(Error::msg("That does not look like a Jellyfin API key."));
         }
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            // Never follow a redirect: the key must only ever go to the address the user typed.
-            .redirect(reqwest::redirect::Policy::none())
-            .user_agent("MediaHub/0.8")
-            .build()
-            .map_err(|e| Error::msg(e.to_string()))?;
+        // One connection pool for the whole app: every request reuses open connections instead
+        // of connecting (and on https, shaking hands) again each time.
+        static HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+        let http = match HTTP.get() {
+            Some(h) => h.clone(),
+            None => {
+                let h = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    // Never follow a redirect: the key must only ever go to the address the user typed.
+                    .redirect(reqwest::redirect::Policy::none())
+                    .user_agent("MediaHub/0.8")
+                    .pool_idle_timeout(Duration::from_secs(90))
+                    .build()
+                    .map_err(|e| Error::msg(e.to_string()))?;
+                HTTP.get_or_init(|| h).clone()
+            }
+        };
         Ok(Client {
             http,
             base: base.trim_end_matches('/').to_string(),

@@ -459,6 +459,14 @@ export interface InboxMove {
   to: string;
   have: boolean;
 }
+/** A video in a download that you already have, and how the two compare. */
+export interface InboxUpgrade {
+  from: string;
+  old: string;
+  newQuality: string;
+  oldQuality: string;
+  better: boolean;
+}
 export interface InboxPlan {
   folder: string;
   existing: boolean;
@@ -1069,6 +1077,8 @@ export const api = {
   inboxResolve: (key: string, target: InboxTarget) => invoke<InboxPlan>("inbox_resolve", { key, target }),
   inboxPlace: (key: string, moves: InboxMove[]) => invoke<{ placed: string[]; skipped: number; failed: string[]; trashed: boolean }>("inbox_place", { key, moves }),
   inboxTrash: (key: string) => invoke<void>("inbox_trash", { key }),
+  inboxCompare: (key: string, moves: InboxMove[], tv: boolean) => invoke<InboxUpgrade[]>("inbox_compare", { key, moves, tv }),
+  inboxReplaceOld: (olds: string[], itemId: string | null) => invoke<number>("inbox_replace_old", { olds, itemId }),
   inboxList: () => invoke<[string | null, InboxEntry[]]>("inbox_list"),
   inboxSelect: (name: string) => invoke<ImportSource>("inbox_select", { name }),
   libraryHealth: (fresh: boolean) => invoke<{ at: number; rows: HealthRow[] }>("library_health", { fresh }),

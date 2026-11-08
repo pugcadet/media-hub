@@ -25,6 +25,68 @@ pub struct StoredPlan {
     pub ops: Vec<PlanOp>,
 }
 
+/// The library folder as it is mounted right now. When a Mac reconnects a share while an old
+/// "/Volumes/Media" folder is still in the way, it mounts it as "/Volumes/Media-1" instead, and
+/// the saved folder is then missing (or an empty leftover). In that case use the "-1" one.
+pub fn live_root(saved: &str) -> String {
+    // Asked for on every settings read: the answer is kept for 10 seconds, so loops over
+    // thousands of files don't look at the NAS each time.
+    static LAST: Mutex<Option<(std::time::Instant, String, String)>> = Mutex::new(None);
+    if let Ok(g) = LAST.lock() {
+        if let Some((at, s, live)) = g.as_ref() {
+            if s == saved && at.elapsed() < std::time::Duration::from_secs(10) {
+                return live.clone();
+            }
+        }
+    }
+    let live = find_live_root(saved);
+    if let Ok(mut g) = LAST.lock() {
+        *g = Some((std::time::Instant::now(), saved.to_string(), live.clone()));
+    }
+    live
+}
+
+fn find_live_root(saved: &str) -> String {
+    let p = std::path::Path::new(saved);
+    let (Some(parent), Some(name)) = (p.parent(), p.file_name().and_then(|n| n.to_str())) else { return saved.into() };
+    if parent != std::path::Path::new("/Volumes") || is_mount(p) {
+        return saved.into();
+    }
+    let mut found: Vec<PathBuf> = std::fs::read_dir(parent)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|c| {
+            c.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix(name)).and_then(|n| n.strip_prefix('-')).is_some_and(|n| !n.is_empty() && n.chars().all(|ch| ch.is_ascii_digit()))
+        })
+        .filter(|c| is_mount(c))
+        .collect();
+    found.sort();
+    found.first().map(|c| c.to_string_lossy().into_owned()).unwrap_or_else(|| saved.into())
+}
+
+/// Is the library folder really there? A folder under /Volumes that isn't a mounted share is a
+/// leftover from an earlier connection, so the NAS isn't actually connected.
+pub fn root_ok(root: &str) -> bool {
+    let p = std::path::Path::new(root);
+    p.is_dir() && (!p.starts_with("/Volumes") || p == std::path::Path::new("/Volumes") || is_mount(p) || p.parent() != Some(std::path::Path::new("/Volumes")))
+}
+
+/// Is this folder a mounted drive or share (not just a folder on the same disk as its parent)?
+#[cfg(unix)]
+fn is_mount(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(p), p.parent().map(std::fs::metadata)) {
+        (Ok(m), Some(Ok(up))) => m.is_dir() && m.dev() != up.dev(),
+        _ => false,
+    }
+}
+#[cfg(not(unix))]
+fn is_mount(p: &std::path::Path) -> bool {
+    p.is_dir()
+}
+
 fn lock<T>(m: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
     m.lock().map_err(|_| Error::msg("Internal error: please restart the app."))
 }
@@ -48,7 +110,19 @@ impl AppState {
     }
 
     pub fn settings(&self) -> Result<Settings> {
-        Ok(lock(&self.settings)?.clone())
+        let mut s = lock(&self.settings)?.clone();
+        if let Some(r) = s.library_root.take() {
+            let live = live_root(&r);
+            if live != r {
+                if let Some(m) = s.path_map.as_mut() {
+                    if let Some(rest) = m.local.strip_prefix(r.as_str()).filter(|x| x.is_empty() || x.starts_with('/')) {
+                        m.local = format!("{live}{rest}");
+                    }
+                }
+            }
+            s.library_root = Some(live);
+        }
+        Ok(s)
     }
 
     pub fn update_settings(&self, f: impl FnOnce(&mut Settings)) -> Result<()> {

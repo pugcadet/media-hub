@@ -517,15 +517,26 @@ pub async fn trash_item_file(state: State<'_, AppState>, id: String) -> Result<u
     if !file.canonicalize()?.starts_with(&canon_root) {
         return Err(Error::msg("Only files inside the library folder can be moved."));
     }
+    let stamp = format!("dup-{}", now_secs());
+    let moves = trash_with_siblings(&root, &file, &stamp, |_| true)?;
+    let rec = TrashRecord { root: root.to_string_lossy().into_owned(), moves };
+    let n = rec.moves.len();
+    state.store()?.journal_add("file_trashed", &id, &serde_json::to_string(&rec).unwrap_or_default(), "")?;
+    let _ = state.reader().await.map(|c| async move { c.library_scan().await });
+    Ok(n)
+}
+
+/// Moves a video and the files named after it ("Movie.en.srt", …, the ones `keep` accepts) into
+/// the trash folder in the library. Returns (original, in the trash) pairs for the journal.
+pub fn trash_with_siblings(root: &Path, file: &Path, stamp: &str, keep: impl Fn(&str) -> bool) -> Result<Vec<(String, String)>> {
     let dir = file.parent().ok_or_else(|| Error::msg("bad path"))?.to_path_buf();
     let stem = file.file_stem().and_then(|x| x.to_str()).unwrap_or("").to_string();
-    let stamp = format!("dup-{}", now_secs());
     let mut moves = Vec::new();
     for e in std::fs::read_dir(&dir)?.flatten() {
         let p = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
-        if p == file || (p.is_file() && name.starts_with(&format!("{stem}."))) {
-            let rel = local::rel_to_root(&root, &p).ok_or_else(|| Error::msg("bad path"))?;
+        if p == file || (p.is_file() && name.starts_with(&format!("{stem}.")) && keep(&name)) {
+            let rel = local::rel_to_root(root, &p).ok_or_else(|| Error::msg("bad path"))?;
             let to_rel = format!("{}/{stamp}/{rel}", crate::storage::TRASH);
             let to = root.join(crate::fsops::safe_rel(&to_rel)?);
             if let Some(parent) = to.parent() {
@@ -538,11 +549,12 @@ pub async fn trash_item_file(state: State<'_, AppState>, id: String) -> Result<u
             moves.push((rel, to_rel));
         }
     }
-    let rec = TrashRecord { root: root.to_string_lossy().into_owned(), moves };
-    let n = rec.moves.len();
-    state.store()?.journal_add("file_trashed", &id, &serde_json::to_string(&rec).unwrap_or_default(), "")?;
-    let _ = state.reader().await.map(|c| async move { c.library_scan().await });
-    Ok(n)
+    Ok(moves)
+}
+
+/// The journal entry for files moved into the trash folder (Undo puts them back).
+pub fn trash_record(root: &Path, moves: Vec<(String, String)>) -> String {
+    serde_json::to_string(&TrashRecord { root: root.to_string_lossy().into_owned(), moves }).unwrap_or_default()
 }
 
 /// Undo for "file_trashed".
@@ -745,7 +757,7 @@ fn alert_fix(level: &'static str, title: &str, detail: &str, fix: &str) -> Alert
 /// Is the library folder (the NAS share) there right now? A quick look, for waiting screens.
 #[tauri::command]
 pub fn library_reachable(state: State<'_, AppState>) -> Result<bool> {
-    Ok(state.settings()?.library_root.as_deref().map(|r| Path::new(r).is_dir()).unwrap_or(false))
+    Ok(state.settings()?.library_root.as_deref().map(crate::state::root_ok).unwrap_or(false))
 }
 
 #[tauri::command]
@@ -754,7 +766,14 @@ pub async fn health_alerts(state: State<'_, AppState>) -> Result<Vec<Alert>> {
     let st = state.settings()?;
     match st.library_root.as_deref() {
         None => out.push(alert_fix("warn", "No library folder chosen", "The renamer, intro detection and adding new titles need it.", "settings:folder")),
-        Some(r) if !Path::new(r).is_dir() => out.push(alert_fix("error", "The NAS isn't connected", &format!("{r} can't be reached. Mount the share, then press reload."), "settings:folder")),
+        Some(r) if !crate::state::root_ok(r) => {
+            let denied = matches!(std::fs::metadata(r).and_then(|_| std::fs::read_dir(r).map(|_| ())), Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied);
+            if denied {
+                out.push(alert_fix("error", "Media Hub isn't allowed to open the NAS", &format!("{r} is connected, but the Mac is blocking Media Hub. Open System Settings → Privacy & Security → Files & Folders, and turn on Network Volumes for Media Hub."), "settings:folder"));
+            } else {
+                out.push(alert_fix("error", "The NAS isn't connected", &format!("{r} can't be reached. Connect to the share in Finder; this alert goes away by itself once it's back."), "settings:folder"));
+            }
+        }
         _ => {}
     }
     let c: Option<Client> = match state.reader().await {
@@ -912,7 +931,7 @@ fn make_row(v: &Value, count: &HashMap<String, i64>, root: Option<&str>, map: Op
     let lib = root
         // Only with a known path mapping: guessing one would touch the NAS for every title.
         .filter(|_| map.is_some())
-        .and_then(|r| media_tools::map_path(path, map, Some(Path::new(r))).map(|(p, _)| (r, p)))
+        .and_then(|r| map.and_then(|m| media_tools::map_known(path, m)).map(|p| (r, p)))
         .and_then(|(r, p)| local::rel_to_root(Path::new(r), &p))
         .and_then(|rel| rel.split('/').next().map(String::from))
         .unwrap_or_default();

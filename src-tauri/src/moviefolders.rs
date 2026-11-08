@@ -16,7 +16,7 @@ use crate::state::{AppState, StoredPlan};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 #[derive(Serialize, Clone, Debug)]
@@ -176,16 +176,21 @@ pub async fn movie_folders(state: State<'_, AppState>) -> Result<Vec<MovieFolder
             20_000,
         )
         .await?;
+    // (id, title, year, server path) of every movie file; disc folders (VIDEO_TS, BDMV) are left alone.
+    let wanted: Vec<(String, &str, Option<i64>, &str)> = items
+        .iter()
+        .filter_map(|v| {
+            let id = v.get("Id").and_then(Value::as_str).unwrap_or("").replace('-', "");
+            let (Some(server), Some(title)) = (v.get("Path").and_then(Value::as_str), v.get("Name").and_then(Value::as_str)) else { return None };
+            (valid_item_id(&id) && is_video(last(server.trim_end_matches(['/', '\\'])))).then_some((id, title, v.get("ProductionYear").and_then(Value::as_i64), server))
+        })
+        .collect();
+    let servers: Vec<&str> = wanted.iter().map(|w| w.3).collect();
+    let locals = local::to_local_many(&state, &servers);
     let mut movies = Vec::new();
-    for v in &items {
-        let id = v.get("Id").and_then(Value::as_str).unwrap_or("").replace('-', "");
-        let (Some(server), Some(title)) = (v.get("Path").and_then(Value::as_str), v.get("Name").and_then(Value::as_str)) else { continue };
-        if !valid_item_id(&id) || !is_video(last(server.trim_end_matches(['/', '\\']))) {
-            continue; // disc folders (VIDEO_TS, BDMV) are left alone
-        }
-        let Ok(local_path) = local::to_local(&state, server) else { continue };
-        let Some(rel) = local::rel_to_root(&root, &local_path) else { continue };
-        movies.push((id, title.to_string(), v.get("ProductionYear").and_then(Value::as_i64), rel));
+    for ((id, title, year, _), lp) in wanted.into_iter().zip(locals) {
+        let Some(rel) = lp.and_then(|p| local::rel_to_root(&root, &p)) else { continue };
+        movies.push((id, title.to_string(), year, rel));
     }
     let mut list = classify(movies);
     // Which collection each movie is in (the smallest one, when it's in several).
@@ -220,7 +225,23 @@ pub async fn movie_folders(state: State<'_, AppState>) -> Result<Vec<MovieFolder
             m.collection = member.get(&m.id).map(|(n, _)| sanitize(&crate::inbox::clean_collection(n))).filter(|n| !n.is_empty());
         }
     }
+    if let Ok(mut c) = LAST.lock() {
+        *c = Some((std::time::Instant::now(), root.clone(), list.clone()));
+    }
     Ok(list)
+}
+
+/// The list the Folders screen just showed. "Fix selected" plans from it instead of asking
+/// Jellyfin and the NAS for every movie again (slow over a VPN). The plan itself still checks
+/// every file it moves, and applying checks again.
+static LAST: std::sync::Mutex<Option<(std::time::Instant, PathBuf, Vec<MovieFolder>)>> = std::sync::Mutex::new(None);
+
+async fn recent_movie_folders(state: State<'_, AppState>, root: &Path) -> Result<Vec<MovieFolder>> {
+    let cached = LAST.lock().ok().and_then(|c| c.clone()).filter(|(at, r, _)| r == root && at.elapsed() < std::time::Duration::from_secs(30 * 60));
+    match cached {
+        Some((_, _, list)) => Ok(list),
+        None => movie_folders(state).await,
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -403,7 +424,7 @@ pub async fn movie_folders_plan(state: State<'_, AppState>, moves: Vec<MovieMove
         return Err(Error::msg("bad request"));
     }
     let root = state.library_root()?;
-    let movies = movie_folders(state.clone()).await?;
+    let movies = recent_movie_folders(state.clone(), &root).await?;
     let r2 = root.clone();
     let ops = tauri::async_runtime::spawn_blocking(move || plan(&r2, &movies, &moves, &groups)).await.map_err(|e| Error::msg(e.to_string()))??;
     let plan_id = format!("moviefolders-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));

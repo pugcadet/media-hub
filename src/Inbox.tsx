@@ -5,7 +5,7 @@
 // download goes to the Trash.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { api, errorText, imageUrl, remoteImageUrl, HealthRow, InboxItem, InboxPlan, InboxTarget, scanAround, SearchResult, Status, stripEditions } from "./api";
+import { api, errorText, imageUrl, remoteImageUrl, HealthRow, InboxItem, InboxMove, InboxPlan, InboxTarget, InboxUpgrade, scanAround, SearchResult, Status, stripEditions } from "./api";
 import { track, useEpoch } from "./activity";
 import { askConfirm } from "./confirm";
 import { IconBtn, PageHead, SearchBox, Seg } from "./kit";
@@ -33,6 +33,23 @@ interface Row {
   art?: string | null;
   /** Look up English subtitles after uploading (ticked when the download has none). */
   look?: boolean;
+  /** The videos you already have, and how they compare to the download (null = being checked). */
+  upgrades?: InboxUpgrade[] | null;
+  /** Replace the copies you have with the better ones from the download. */
+  replace?: boolean;
+}
+
+const VIDEO = /\.(mkv|mp4|m4v|avi|mov|wmv|ts|m2ts|webm|mpg|mpeg)$/i;
+const better = (r: Row) => (r.upgrades ?? []).filter((u) => u.better);
+const stemOf = (p: string) => p.replace(/\.[^./]+$/, "");
+
+/** The moves to make: with "replace" on, the better videos (and their subtitles) go in too. */
+function movesFor(r: Row): InboxMove[] {
+  const moves = r.plan?.moves ?? [];
+  if (!r.replace) return moves;
+  const up = new Set(better(r).map((u) => u.from));
+  const stems = moves.filter((m) => up.has(m.from)).map((m) => stemOf(m.to) + ".");
+  return moves.map((m) => (m.have && (up.has(m.from) || (!VIDEO.test(m.to) && stems.some((st) => m.to.startsWith(st)))) ? { ...m, have: false } : m));
 }
 
 /* ------------------------------------------------------------------ matching */
@@ -158,12 +175,25 @@ function placeLabel(t: InboxTarget, p: InboxPlan | null): string {
 }
 
 /** The download brings an English subtitle along. */
-const hasEnglish = (p: InboxPlan | null) => !!p?.moves.some((m) => /\.eng(\.forced|\.sdh)*\.(srt|ass|ssa|vtt|sub|sup)$/i.test(m.to));
+/** A subtitle that comes along with a video: an English one, or one named just like its video
+ * ("Heat (1995).srt", no language in the name; that's the one made for it). Forced-only ones don't count. */
+function englishSubs(p: InboxPlan | null): string[] {
+  const moves = p?.moves ?? [];
+  const stems = new Set(moves.filter((m) => /\.(mkv|mp4|m4v|avi|mov|wmv|ts|m2ts|webm|mpg|mpeg)$/i.test(m.to)).map((m) => m.to.replace(/\.[^./]+$/, "").toLowerCase()));
+  return moves.map((m) => m.to).filter((to) => {
+    if (!/\.(srt|ass|ssa|vtt|sub|sup)$/i.test(to)) return false;
+    let st = to.replace(/\.[^./]+$/, "");
+    if (/\.forced$/i.test(st)) return false;
+    st = st.replace(/\.sdh$/i, "");
+    return /\.(eng|en)$/i.test(st) || stems.has(st.toLowerCase());
+  });
+}
+const hasEnglish = (p: InboxPlan | null) => englishSubs(p).length > 0;
 /** Subtitle lookup after placing: on for a movie without English ones, off for shows (you tick it). */
 const defaultLook = (kind: string, p: InboxPlan | null) => (kind === "movie" && !hasEnglish(p)) || (kind === "pack" && newWithoutEnglish(p).length > 0);
 /** The new movies of a pack that bring no English subtitle along. */
 const newWithoutEnglish = (p: InboxPlan | null) =>
-  (p?.movies ?? []).filter(([dir, , isNew]) => isNew && !p!.moves.some((m) => m.to.startsWith(`${dir}/`) && /\.eng(\.forced|\.sdh)*\.(srt|ass|ssa|vtt|sub|sup)$/i.test(m.to)));
+  (p?.movies ?? []).filter(([dir, , isNew]) => isNew && !englishSubs(p).some((to) => to.startsWith(`${dir}/`)));
 const SUB_EXT = /\.(srt|ass|ssa|vtt|sub|idx|sup)$/i;
 const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|tbn)$/i;
 /** "Sample/sample.mkv, 6 other-language subtitles, RARBG.txt, poster.jpg, .nfo" */
@@ -275,10 +305,22 @@ export default function Inbox({ status }: { status: Status }) {
   const ready = all.filter((r) => r.state === "ready" && picked.has(r.item.key));
   const update = (key: string, p: Partial<Row>) => setRows((rs) => rs?.map((r) => (r.item.key === key ? { ...r, ...p } : r)) ?? null);
 
+  // Downloads with videos you already have: compare the quality (one at a time, it reads the NAS).
+  useEffect(() => {
+    const next = rows?.find((r) => r.upgrades === undefined && r.plan && (r.state === "have" || r.state === "ready") && r.plan.moves.some((m) => m.have && VIDEO.test(m.from)));
+    if (!next || !next.plan) return;
+    update(next.item.key, { upgrades: null });
+    api.inboxCompare(next.item.key, next.plan.moves, next.target?.kind === "tv")
+      .then((u) => update(next.item.key, { upgrades: u }))
+      .catch(() => update(next.item.key, { upgrades: [] }));
+  }, [rows]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function place(list: Row[]) {
     if (!list.length) return;
-    const files = list.reduce((a, r) => a + (r.plan?.moves.filter((m) => !m.have).length ?? 0), 0);
-    if (!(await askConfirm(`Upload ${list.length} download${list.length === 1 ? "" : "s"} (${files} file${files === 1 ? "" : "s"})?\n\nThey go to the NAS with the right names. Once a file has arrived and its size checks out, the download goes to the Trash (you can put it back from there). Anything already in your library is skipped.`, { okLabel: "Upload" }))) return;
+    const files = list.reduce((a, r) => a + movesFor(r).filter((m) => !m.have).length, 0);
+    const replacing = list.reduce((a, r) => a + (r.replace ? better(r).length : 0), 0);
+    const swap = replacing ? `\n\n${replacing} cop${replacing === 1 ? "y" : "ies"} you have in lower quality move${replacing === 1 ? "s" : ""} to the hidden trash folder on the NAS first (with ${replacing === 1 ? "its" : "their"} subtitles). You can put ${replacing === 1 ? "it" : "them"} back from History.` : "";
+    if (!(await askConfirm(`Upload ${list.length} download${list.length === 1 ? "" : "s"} (${files} file${files === 1 ? "" : "s"})?\n\nThey go to the NAS with the right names. Once a file has arrived and its size checks out, the download goes to the Trash (you can put it back from there). ${replacing ? "Anything else" : "Anything"} already in your library is skipped.${swap}`, { okLabel: replacing ? "Replace and upload" : "Upload" }))) return;
     setBusy(true);
     const args = (await import("./Renamer")).namingArgs();
     for (const r of list) {
@@ -295,8 +337,13 @@ export default function Inbox({ status }: { status: Status }) {
             job.update(`${count}${name}${pct}`, x.total ? (x.done / x.total) * 0.8 : null);
           });
           let res;
+          const moves = movesFor(r);
+          if (r.replace && better(r).length) {
+            job.update("Moving the lower-quality copies to the trash folder", 0);
+            await api.inboxReplaceOld(better(r).map((u) => u.old), r.target!.itemId ?? null);
+          }
           try {
-            res = await api.inboxPlace(r.item.key, r.plan!.moves);
+            res = await api.inboxPlace(r.item.key, moves);
           } finally {
             un();
           }
@@ -453,7 +500,7 @@ export default function Inbox({ status }: { status: Status }) {
           <div className="ibx-list">
             {!rows && <div className="pg-loading"><span className="spinner" /> Looking in the downloads folder…</div>}
             {rows && shown.length === 0 && <p className="muted pad">{all.length ? "Nothing here." : "The downloads folder is empty."}</p>}
-            {shown.map((r) => <InboxRowView key={r.item.key} r={r} onChoose={(c) => void choose(r, c)} picked={picked.has(r.item.key)} onPick={(on) => setPicked((s) => { const x = new Set(s); if (on) x.add(r.item.key); else x.delete(r.item.key); return x; })} onEdit={() => setEditing(r.item.key)} onRemove={() => void removeDownload(r)} onPlaceOne={() => void place([r])} busy={busy} onLook={(on) => update(r.item.key, { look: on })} />)}
+            {shown.map((r) => <InboxRowView key={r.item.key} r={r} onChoose={(c) => void choose(r, c)} picked={picked.has(r.item.key)} onPick={(on) => setPicked((s) => { const x = new Set(s); if (on) x.add(r.item.key); else x.delete(r.item.key); return x; })} onEdit={() => setEditing(r.item.key)} onRemove={() => void removeDownload(r)} onPlaceOne={() => void place([r])} busy={busy} onLook={(on) => update(r.item.key, { look: on })} onReplace={(on, now) => { update(r.item.key, { replace: on }); if (now) void place([{ ...r, replace: true }]); }} />)}
           </div>
           <div className="inbox-note small muted"><Icon name="check" size={14} /> Files are moved (or copied and checked when the NAS is another drive). Only after that does the download go to the Trash. Jellyfin is asked to look at just those folders.</div>
         </>
@@ -465,7 +512,11 @@ export default function Inbox({ status }: { status: Status }) {
   );
 }
 
-function InboxRowView({ r, picked, onPick, onEdit, onRemove, onPlaceOne, busy, onChoose, onLook }: { r: Row; onChoose: (c: SearchResult) => void; picked: boolean; onPick: (on: boolean) => void; onEdit: () => void; onRemove: () => void; onPlaceOne: () => void; busy: boolean; onLook: (on: boolean) => void }) {
+function InboxRowView({ r, picked, onPick, onEdit, onRemove, onPlaceOne, busy, onChoose, onLook, onReplace }: { r: Row; onChoose: (c: SearchResult) => void; picked: boolean; onPick: (on: boolean) => void; onEdit: () => void; onRemove: () => void; onPlaceOne: () => void; busy: boolean; onLook: (on: boolean) => void; onReplace: (on: boolean, now: boolean) => void }) {
+  const ups = r.upgrades ?? [];
+  const better = ups.filter((u) => u.better);
+  const one = ups.length === 1 ? ups[0] : null;
+  const onNas = (r.state === "have" || r.state === "done") && !!r.plan?.folder;
   const moving = r.plan?.moves.filter((m) => !m.have) ?? [];
   const firstVideo = moving.find((m) => !SUB_EXT.test(m.to))?.to ?? moving[0]?.to;
   const dest = r.state === "have" ? r.plan?.folder ?? "" : moving.length > 2 ? `${r.plan?.folder}/ (${moving.length} files)` : firstVideo ?? r.plan?.folder ?? "";
@@ -485,18 +536,26 @@ function InboxRowView({ r, picked, onPick, onEdit, onRemove, onPlaceOne, busy, o
           <b className="ellipsis">{what}</b>
           <span className={`ibx-state t-${tone}`}>{r.state === "checking" ? <><span className="spinner small-spin" /> Looking…</> : label}</span>
           <span className="spacer" />
+          {r.state === "have" && better.length > 0 && <button className="link small strong" disabled={busy} onClick={() => onReplace(true, true)}>Replace{better.length > 1 ? ` (${better.length})` : ""}</button>}
           {r.state === "have" && <button className="link small" onClick={onRemove}>Remove download</button>}
+          {onNas && <IconBtn icon="folder" size={14} title="Show the folder on the NAS" onClick={() => void api.revealRel(r.plan!.folder)} />}
           {(r.state === "ready" || r.state === "look" || r.state === "failed") && <button className="link small" onClick={onEdit}>{r.state === "look" ? "Fix" : "Change"}</button>}
           {r.state === "ready" && <button className="link small" disabled={busy} onClick={onPlaceOne}>Upload</button>}
-          {r.state === "done" && r.plan?.folder && <button className="link small" onClick={() => void api.revealRel(r.plan!.folder)}>Open folder</button>}
           {r.state === "done" && r.target?.itemId && <button className="link small" onClick={() => nav.open(r.target!.itemId!)}>Open</button>}
         </div>
         <span className="mono small muted ellipsis" title={r.item.key}>{r.item.key} · {gb(r.item.size)}</span>
         {r.state !== "checking" && dest && <span className="ibx-dest mono ellipsis" title={dest}>→ {dest}</span>}
+        {r.state === "have" && r.upgrades === null && <span className="small muted"><span className="spinner small-spin" /> Comparing the quality with yours…</span>}
+        {r.state === "have" && one && <span className={`small ${one.better ? "ok" : "muted"}`}>Yours: {one.oldQuality} · This download: {one.newQuality}{one.better ? " · better" : ""}</span>}
+        {r.state === "have" && ups.length > 1 && <span className={`small ${better.length ? "ok" : "muted"}`}>{better.length ? `${better.length} of ${ups.length} are better than yours (${better[0].oldQuality} → ${better[0].newQuality})` : `Not better than yours (${ups[0].oldQuality})`}</span>}
         {r.plan && media && r.state !== "done" && r.state !== "have" && (
           <div className="ibx-grid">
             <span className="ibx-k good">Keeps</span><span className="ibx-v">{keeps.length ? keeps.slice(0, 3).join(", ") + (keeps.length > 3 ? ` and ${keeps.length - 3} more` : "") : "nothing new"}</span>
             <span className="ibx-k warn">Trash</span><span className="ibx-v muted">{trashText(r.plan.leftovers)}{r.plan.leftovers.length ? " (with the download)" : ""}</span>
+            {better.length > 0 && <>
+              <span className="ibx-k good">Better</span>
+              <label className="check small ibx-look"><input type="checkbox" checked={!!r.replace} disabled={busy || r.state === "placing"} onChange={(e) => onReplace(e.target.checked, false)} />Replace {better.length} cop{better.length === 1 ? "y" : "ies"} you have<span className="muted"> · {better[0].oldQuality} → {better[0].newQuality}{better.length > 1 ? " …" : ""}</span></label>
+            </>}
             <span className="ibx-k muted">Subtitles</span>
             <label className="check small ibx-look"><input type="checkbox" checked={!!r.look} disabled={busy || r.state === "placing"} onChange={(e) => onLook(e.target.checked)} />Look up English subtitles after uploading<span className="muted"> · {r.target?.kind === "pack" ? (newWithoutEnglish(r.plan).length ? `${newWithoutEnglish(r.plan).length} new movie${newWithoutEnglish(r.plan).length === 1 ? "" : "s"} without English` : "English is included") : hasEnglish(r.plan) ? "English is included" : "none in the download"}</span></label>
           </div>

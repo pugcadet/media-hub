@@ -26,6 +26,31 @@ pub async fn locate(state: &AppState, id: &str) -> Result<PathBuf> {
     }
 }
 
+/// `to_local` for a long list at once: 16 lookups at a time, because each one may wait on the
+/// NAS (slow over a VPN). Same order as the list; None where it isn't found.
+pub fn to_local_many(state: &AppState, servers: &[&str]) -> Vec<Option<PathBuf>> {
+    let mut out: Vec<Option<PathBuf>> = vec![None; servers.len()];
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let found = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|sc| {
+        for _ in 0..16.min(servers.len().max(1)) {
+            sc.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(server) = servers.get(i) else { break };
+                if let Ok(p) = to_local(state, server) {
+                    if let Ok(mut f) = found.lock() {
+                        f.push((i, p));
+                    }
+                }
+            });
+        }
+    });
+    for (i, p) in found.into_inner().unwrap_or_default() {
+        out[i] = Some(p);
+    }
+    out
+}
+
 /// The server path of an item (the folder for a show, the file for a movie or episode).
 async fn server_path(state: &AppState, id: &str) -> Result<String> {
     if !valid_item_id(id) {

@@ -74,7 +74,11 @@ pub fn score(file_stem: &str, sub: &SubInfo) -> (u32, Vec<String>) {
     let mut reasons = Vec::new();
     let name = sub.name.clone().unwrap_or_default();
     if sub.is_hash_match == Some(true) {
-        return (100, vec!["Made for exactly this file".into()]);
+        let mut r = vec!["Made for exactly this file".to_string()];
+        if is_sdh(sub) {
+            r.push("For hearing impaired (sound descriptions)".into());
+        }
+        return (100, r);
     }
     if let (Some(a), Some(b)) = (sxe(file_stem), sxe(&name)) {
         if a != b {
@@ -132,13 +136,24 @@ pub fn score(file_stem: &str, sub: &SubInfo) -> (u32, Vec<String>) {
         points -= 10.0;
         reasons.push("Forced only (partial)".into());
     }
-    let name_l = name.to_lowercase();
-    let sdh_name = name_l.contains("sdh") || name_l.contains(".hi.") || name_l.contains("[hi]") || name_l.contains("hearing");
-    if sub.hearing_impaired == Some(true) || sdh_name {
+    if is_sdh(sub) {
         points -= 8.0;
         reasons.push("For hearing impaired (sound descriptions)".into());
     }
     (points.round().clamp(1.0, 99.0) as u32, reasons)
+}
+
+/// Subtitles with sound descriptions ("[door slams]"), for deaf and hard of hearing viewers.
+pub fn is_sdh(sub: &SubInfo) -> bool {
+    let n = sub.name.clone().unwrap_or_default().to_lowercase();
+    sub.hearing_impaired == Some(true) || n.contains("sdh") || n.contains(".hi.") || n.contains("[hi]") || n.contains("_hi.") || n.contains("hearing")
+}
+
+/// The one to take automatically: the best plain subtitle that scores at least `min`, and only
+/// when there's no plain one good enough, the best SDH one.
+pub fn pick(ranked: &[Scored], min: u32) -> Option<&Scored> {
+    let ok = |s: &&Scored| s.score >= min;
+    ranked.iter().filter(ok).find(|s| !is_sdh(&s.sub)).or_else(|| ranked.iter().find(ok))
 }
 
 /// Best first. Ties go to the more downloaded one.
@@ -152,7 +167,7 @@ pub fn rank(file_stem: &str, subs: Vec<SubInfo>) -> Vec<Scored> {
         })
         .collect();
     // Same score: plain subtitles before ones with sound descriptions, then more downloaded.
-    let hi = |s: &Scored| s.sub.hearing_impaired == Some(true) || s.reasons.iter().any(|r| r.starts_with("For hearing impaired"));
+    let hi = |s: &Scored| is_sdh(&s.sub);
     out.sort_by(|a, b| {
         b.score
             .cmp(&a.score)
@@ -176,6 +191,25 @@ mod tests {
     }
 
     const FILE: &str = "Bluey.S01E05.1080p.WEB-DL.AAC2.0.H.264-NTb";
+
+    #[test]
+    fn plain_subtitles_are_taken_before_sdh_ones() {
+        let mut sdh = sub("Bluey.S01E05.1080p.WEB-DL.AAC2.0.H.264-NTb.SDH");
+        sdh.is_hash_match = Some(true);
+        sdh.id = Some("sdh".into());
+        let mut plain = sub("Bluey.S01E05.1080p.WEB-DL-NTb");
+        plain.id = Some("plain".into());
+        let ranked = rank(FILE, vec![sdh.clone(), plain.clone()]);
+        assert_eq!(pick(&ranked, 50).and_then(|s| s.sub.id.as_deref()), Some("plain"));
+        // Only the SDH one is good enough: take it rather than nothing.
+        assert_eq!(pick(&ranked, 100).and_then(|s| s.sub.id.as_deref()), Some("sdh"));
+        let mut hi = sub("Bluey.S01E05.1080p.WEB-DL-NTb");
+        hi.hearing_impaired = Some(true);
+        hi.id = Some("hi".into());
+        let ranked = rank(FILE, vec![hi, plain]);
+        assert_eq!(ranked[0].sub.id.as_deref(), Some("plain"));
+        assert_eq!(pick(&ranked, 1).and_then(|s| s.sub.id.as_deref()), Some("plain"));
+    }
 
     #[test]
     fn hash_match_wins() {

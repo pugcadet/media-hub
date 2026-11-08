@@ -699,6 +699,18 @@ pub fn plan_tv(
     Ok(ops)
 }
 
+/// Is this folder named after this movie? Letters and digits only (no dots, commas, accents or
+/// case), and the year when both have one.
+fn same_movie_folder(dir_name: &str, title: &str, year: Option<i32>) -> bool {
+    let key = |t: &str| -> String { crate::naming::fold_accents(&t.to_lowercase()).chars().filter(|c| c.is_alphanumeric()).collect() };
+    let d = parse_name(dir_name);
+    let dt = if d.title.is_empty() { dir_name.to_string() } else { d.title };
+    !key(&dt).is_empty() && key(&dt) == key(title) && match (d.year, year) {
+        (Some(a), Some(b)) => i64::from(a) == i64::from(b),
+        _ => true,
+    }
+}
+
 pub fn plan_movies(
     files: &[String],
     req: &PlanRequest,
@@ -779,6 +791,10 @@ pub fn plan_movies(
                 }
                 (join(dir, &new_name), None)
             }
+            // The chosen folder already is this movie's folder (named after it, maybe written a bit
+            // differently: "Monsters, Inc. (2001)"): it stays in there. Never a folder for a movie
+            // inside a folder that already has its name.
+            (Some(_), false, true) if same_movie_folder(split_path(folder).1, &title, year) => (join(dir, &new_name), None),
             // Loose in the chosen folder and the style wants a folder per movie.
             (Some(top), false, true) => (join(&join(folder, top), &new_name), Some("Gets its own folder".to_string())),
             _ => (join(dir, &new_name), None),
@@ -945,6 +961,20 @@ mod tests {
         assert_eq!(ops[0].status, "unchanged");
         assert_eq!(guess_show("Downloads", &f), ("Bluey".to_string(), Some(2018)));
         assert_eq!(guess_show("TV/Season 1", &f).0, "Bluey");
+    }
+
+    #[test]
+    fn a_movie_in_its_own_folder_never_gets_a_folder_inside() {
+        // Placed from the Inbox into the folder you have, which is written a bit differently.
+        let f = files(&["Movies/Monsters, Inc. (2001)/Monsters.Inc.2001.1080p.mp4"]);
+        let r = req("Movies/Monsters, Inc. (2001)", MOVIE);
+        let ops = plan_movies(&f, &r, &HashMap::new(), &nothing_exists).unwrap();
+        let v = ops.iter().find(|o| o.kind == "video").unwrap();
+        assert!(v.to.starts_with("Movies/Monsters, Inc. (2001)/") && v.to.matches('/').count() == 2, "{ops:#?}");
+        // A loose movie in a main folder still gets its own folder.
+        let f = files(&["Movies/Heat.1995.mkv", "Movies/Dune.2021.mkv"]);
+        let ops = plan_movies(&f, &req("Movies", MOVIE), &HashMap::new(), &nothing_exists).unwrap();
+        assert!(ops.iter().any(|o| o.kind == "video" && o.to == "Movies/Heat (1995)/Heat (1995).mkv"), "{ops:#?}");
     }
 
     #[test]

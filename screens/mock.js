@@ -69,7 +69,7 @@
     inbox_scan: ["/Users/me/Downloads", [
       { key: "Severance.S02E05.1080p.WEB.h264-ETHEL.mkv", isFolder: false, size: 2.1e9, modified: Math.floor(Date.now() / 1000) - 600, kind: "tv", title: "Severance", year: null, files: [{ rel: "Severance.S02E05.1080p.WEB.h264-ETHEL.mkv", size: 2.1e9, video: true, season: 2, episodes: [5] }], music: null },
       { key: "Police Academy - The Complete Collection (1984-1994) 1080p", isFolder: true, size: 30e9, modified: Math.floor(Date.now() / 1000) - 1800, kind: "pack", title: "Police Academy Collection", year: null, files: [1, 2, 3].map((n) => ({ rel: `Police Academy ${n} (${1983 + n})/Police.Academy.${n}.mkv`, size: 10e9, video: true, season: null, episodes: [] })), music: null },
-      { key: "Dune.Part.Two.2024.2160p", isFolder: true, size: 18e9, modified: Math.floor(Date.now() / 1000) - 3600, kind: "movie", title: "Dune Part Two", year: 2024, files: [{ rel: "Dune.Part.Two.2024.2160p/Dune.Part.Two.2024.2160p.mkv", size: 18e9, video: true, season: null, episodes: [] }], music: null },
+      { key: "Dune.Part.Two.2024.2160p", isFolder: true, size: 18e9, modified: Math.floor(Date.now() / 1000) - 3600, kind: "movie", title: "Dune Part Two", year: 2024, files: [{ rel: "Dune.Part.Two.2024.2160p/Dune.Part.Two.2024.2160p.mkv", size: 18e9, video: true, season: null, episodes: [] }, { rel: "Dune.Part.Two.2024.2160p/Dune.Part.Two.2024.2160p.srt", size: 9e4, video: false, season: null, episodes: [] }], music: null },
       { key: "Drake feat. Rihanna - Take Care", isFolder: true, size: 9e7, modified: Math.floor(Date.now() / 1000) - 7200, kind: "music", title: "Take Care", year: 2011, files: [], music: { artist: "Drake", album: "Take Care", year: 2011 } },
     ]],
     structure_scan: [
@@ -77,7 +77,10 @@
       { folder: "TV", kind: "tv", shows: [{ folder: "TV/Bluey", name: "Bluey", loose: 12, seasons: 0 }], looseMovies: [], folderedMovies: [] },
       { folder: "YouTube", kind: "tv", shows: [], looseMovies: [], folderedMovies: [] },
     ],
-    inbox_resolve: (a) => a?.target?.kind === "pack" ? { folder: "Movies/Police Academy Collection", existing: true, moves: [
+    inbox_compare: (a) => a?.key?.startsWith("Dune") ? [{ from: "Dune.Part.Two.2024.2160p/Dune.Part.Two.2024.2160p.mkv", old: "Movies/Dune Part Two (2024)/Dune Part Two (2024).mkv", newQuality: "4K HDR · 18.0 GB", oldQuality: "1080p · 6.2 GB", better: true }]
+      : a?.key?.startsWith("Police") ? [{ from: "Police Academy 1 (1984)/Police.Academy.1.mkv", old: "Movies/Police Academy Collection/Police Academy (1984)/Police Academy (1984).mkv", newQuality: "1080p · 10.0 GB", oldQuality: "1080p · 9.1 GB", better: false }] : [],
+    inbox_resolve: (a) => a?.target?.kind === "movie" ? { movies: [], folder: "Movies/Dune Part Two (2024)", existing: true, moves: [{ from: "Dune.Part.Two.2024.2160p/Dune.Part.Two.2024.2160p.mkv", to: "Movies/Dune Part Two (2024)/Dune Part Two (2024).mkv", have: true }, { from: "Dune.Part.Two.2024.2160p/Dune.Part.Two.2024.2160p.srt", to: "Movies/Dune Part Two (2024)/Dune Part Two (2024).srt", have: true }], leftovers: [], note: "You already have this movie.", collection: null }
+      : a?.target?.kind === "pack" ? { folder: "Movies/Police Academy Collection", existing: true, moves: [
       { from: "Police Academy 1 (1984)/Police.Academy.1.mkv", to: "Movies/Police Academy Collection/Police Academy (1984)/Police Academy (1984).mkv", have: true },
       { from: "Police Academy 2 (1985)/Police.Academy.2.mkv", to: "Movies/Police Academy Collection/Police Academy 2: Their First Assignment (1985)/Police Academy 2: Their First Assignment (1985).mkv", have: false },
       { from: "Police Academy 2 (1985)/Subs/English.srt", to: "Movies/Police Academy Collection/Police Academy 2: Their First Assignment (1985)/Police Academy 2: Their First Assignment (1985).eng.srt", have: false },

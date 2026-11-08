@@ -51,6 +51,13 @@ fn file_stem(item: &Value) -> String {
 }
 
 fn has_lang(list: &[SubStream], codes: &[String]) -> bool {
+    has_lang_for(list, codes, "")
+}
+
+/// `stem` is the video's own name: a subtitle file next to it named just like it
+/// ("Movie (2019).srt", no language in the name) came with the video and counts, so nothing
+/// is searched for or downloaded a second time.
+fn has_lang_for(list: &[SubStream], codes: &[String], stem: &str) -> bool {
     list.iter().any(|s| {
         if s.forced {
             return false;
@@ -58,9 +65,23 @@ fn has_lang(list: &[SubStream], codes: &[String]) -> bool {
         if codes.iter().any(|c| c.eq_ignore_ascii_case(&s.language)) {
             return true;
         }
-        // Built-in subtitles often have no language tag, only a name like "English (SDH)".
         let unknown = s.language.is_empty() || s.language == "und" || s.language == "unknown";
-        unknown && !s.external && title_names_lang(&s.title, codes)
+        if !unknown {
+            return false;
+        }
+        if !s.external {
+            // Built-in subtitles often have no language tag, only a name like "English (SDH)".
+            return title_names_lang(&s.title, codes);
+        }
+        let name = s.path.rsplit(['/', '\\']).next().unwrap_or(&s.path);
+        let tail = match name.get(..stem.len()) {
+            Some(head) if !stem.is_empty() && head.eq_ignore_ascii_case(stem) => &name[stem.len()..],
+            _ => name,
+        };
+        match guess_lang(tail) {
+            Some(l) => codes.iter().any(|c| lang_matches(l, c)),
+            None => true,
+        }
     })
 }
 
@@ -443,7 +464,7 @@ pub async fn subtitle_auto(state: State<'_, AppState>, id: String, lang: String,
     let codes = check_codes(&lang, &codes)?;
     let w = state.writer().await?;
     let item = w.reader().item_json(&id).await?;
-    if has_lang(&streams(&item), &codes) {
+    if has_lang_for(&streams(&item), &codes, &file_stem(&item)) {
         return Ok(AutoResult { outcome: "has", score: None, name: None });
     }
     // A subtitle already sits in the folder under another name ("English.srt"): use that.
@@ -455,12 +476,13 @@ pub async fn subtitle_auto(state: State<'_, AppState>, id: String, lang: String,
     }
     let found = w.reader().subtitle_search(&id, &lang).await?;
     let ranked = subs::rank(&file_stem(&item), found);
-    let Some(best) = ranked.first() else {
+    let Some(top) = ranked.first() else {
         return Ok(AutoResult { outcome: "none", score: None, name: None });
     };
-    if best.score < min_score.clamp(1, 100) {
-        return Ok(AutoResult { outcome: "low", score: Some(best.score), name: best.sub.name.clone() });
-    }
+    // Plain subtitles before ones with sound descriptions (SDH), when both are good enough.
+    let Some(best) = subs::pick(&ranked, min_score.clamp(1, 100)) else {
+        return Ok(AutoResult { outcome: "low", score: Some(top.score), name: top.sub.name.clone() });
+    };
     let sub_id = best.sub.id.clone().unwrap_or_default();
     let hint = best.sub.format.clone().unwrap_or_default();
     let mut codes = codes;
@@ -710,6 +732,12 @@ mod tests {
         assert!(!has_lang(&[st("", "Dutch", false)], &eng));
         assert!(!has_lang(&[st("", "Englishman", false)], &eng));
         assert!(has_lang(&[st("", "Nederlands", false)], &["dut".to_string(), "nld".to_string()]));
+        // A subtitle file that came with the video, named just like it: it counts.
+        let file = |path: &str| SubStream { index: 3, language: String::new(), title: String::new(), external: true, forced: false, path: path.into() };
+        assert!(has_lang_for(&[file("/m/Heat (1995)/Heat (1995).srt")], &eng, "Heat (1995)"));
+        assert!(has_lang_for(&[file("/m/Heat (1995)/Heat (1995).en.srt")], &eng, "Heat (1995)"));
+        assert!(!has_lang_for(&[file("/m/Heat (1995)/Heat (1995).nl.srt")], &eng, "Heat (1995)"));
+        assert!(has_lang_for(&[file("/m/It (2017)/It (2017).srt")], &eng, "It (2017)"), "the title isn't read as Italian");
     }
 
     fn item() -> Value {

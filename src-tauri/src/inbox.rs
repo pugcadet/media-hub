@@ -1313,6 +1313,195 @@ pub async fn inbox_trash(state: State<'_, AppState>, key: String) -> Result<()> 
     trash::delete(&item).map_err(|e| Error::msg(format!("It couldn't be moved to the Trash ({e}).")))
 }
 
+/* ------------------------------------------------ duplicates in better quality */
+
+fn last_part(rel: &str) -> String {
+    rel.rsplit('/').next().unwrap_or(rel).to_string()
+}
+
+/// A video in the download that you already have, and how the two compare.
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Upgrade {
+    /// The new video, inside the download.
+    pub from: String,
+    /// The copy you have, relative to the library folder.
+    pub old: String,
+    /// "2160p HDR · 18.3 GB"
+    pub new_quality: String,
+    pub old_quality: String,
+    /// The new one is clearly better (higher resolution, HDR, or a much higher bitrate).
+    pub better: bool,
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct Quality {
+    /// 2160, 1080, 720 or 480 (the class, from the picture size or the name).
+    pub class: u32,
+    pub hdr: bool,
+    /// Bits per second (0 = not known).
+    pub bitrate: u64,
+    pub size: u64,
+}
+
+/// The resolution class of a picture: wide movies (1920×800) are still 1080p.
+pub fn res_class(width: u64, height: u64) -> u32 {
+    let h = height.max(width * 9 / 16);
+    match h {
+        0 => 0,
+        h if h >= 1500 => 2160,
+        h if h >= 900 => 1080,
+        h if h >= 650 => 720,
+        _ => 480,
+    }
+}
+
+/// What a file name says about its quality ("Movie.2019.2160p.HDR.mkv"), for when the file
+/// itself can't be read.
+pub fn name_quality(name: &str) -> Quality {
+    let t: Vec<String> = name.to_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).map(String::from).collect();
+    let has = |w: &str| t.iter().any(|x| x == w);
+    let class = if has("2160p") || has("4k") || has("uhd") {
+        2160
+    } else if has("1080p") || has("1080i") {
+        1080
+    } else if has("720p") {
+        720
+    } else if has("480p") || has("576p") || has("dvdrip") || has("sd") {
+        480
+    } else {
+        0
+    };
+    Quality { class, hdr: has("hdr") || has("hdr10") || has("dv") || has("dovi"), bitrate: 0, size: 0 }
+}
+
+/// Is `new` clearly better than `old`? Unknown resolutions are never "better".
+pub fn is_better(new: &Quality, old: &Quality) -> bool {
+    if new.class == 0 || old.class == 0 {
+        return false;
+    }
+    if new.class != old.class {
+        return new.class > old.class;
+    }
+    if new.hdr != old.hdr {
+        return new.hdr;
+    }
+    let (a, b) = if new.bitrate > 0 && old.bitrate > 0 { (new.bitrate, old.bitrate) } else { (new.size, old.size) };
+    b > 0 && a as f64 >= b as f64 * 1.5
+}
+
+pub fn quality_text(q: &Quality) -> String {
+    let mut parts = Vec::new();
+    match q.class {
+        2160 => parts.push("4K".to_string()),
+        0 => {}
+        c => parts.push(format!("{c}p")),
+    }
+    if q.hdr {
+        parts.push("HDR".into());
+    }
+    let mut out = parts.join(" ");
+    if q.size > 0 {
+        if !out.is_empty() {
+            out.push_str(" · ");
+        }
+        out.push_str(&format!("{:.1} GB", q.size as f64 / 1e9));
+    }
+    if out.is_empty() { "unknown".into() } else { out }
+}
+
+fn quality_of(ffprobe: Option<&Path>, file: &Path) -> Quality {
+    let size = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
+    let by_name = name_quality(&file.to_string_lossy());
+    if let Some(info) = ffprobe.and_then(|fp| crate::storage::probe(fp, file).ok()) {
+        let class = res_class(info.width, info.height);
+        if class > 0 {
+            return Quality { class, hdr: info.hdr || by_name.hdr, bitrate: info.bitrate, size };
+        }
+    }
+    Quality { size, ..by_name }
+}
+
+/// The video you already have that a planned file duplicates: the same episode in the same
+/// folder, or the movie's video in its folder (the biggest one; extras and samples left out).
+fn copy_you_have(root: &Path, to: &str, tv: bool) -> Option<PathBuf> {
+    let target = root.join(to);
+    let dir = target.parent()?;
+    let new_name = last_part(to);
+    let want = if tv { parse_episode(split_ext(&new_name).0, season_from_dir(dir.file_name()?.to_str()?)) } else { None };
+    let mut best: Option<(u64, PathBuf)> = None;
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        let p = e.path();
+        if !is_video(&n) || !p.is_file() || is_sample(&n) {
+            continue;
+        }
+        if tv {
+            let (Some(w), Some(h)) = (want.as_ref(), parse_episode(split_ext(&n).0, season_from_dir(dir.file_name()?.to_str()?))) else { continue };
+            if w.season != h.season || !w.episodes.iter().any(|x| h.episodes.contains(x)) {
+                continue;
+            }
+        }
+        let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+        if best.as_ref().map(|(s, _)| size > *s).unwrap_or(true) {
+            best = Some((size, p));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// For every video in the download that you already have: the copy you have and how the
+/// two compare, so a better one can replace it.
+#[tauri::command]
+pub async fn inbox_compare(state: State<'_, AppState>, key: String, moves: Vec<Placement>, tv: bool) -> Result<Vec<Upgrade>> {
+    let root = state.library_root()?;
+    let item = item_path(&state, &key)?;
+    let base = if item.is_dir() { item.clone() } else { item.parent().map(Path::to_path_buf).ok_or_else(|| Error::msg("bad item"))? };
+    let settings = state.settings()?;
+    let ffprobe = crate::media_tools::locate_ffmpeg(settings.ffmpeg_path.as_deref()).map(|f| crate::storage::ffprobe_for(&f)).filter(|p| p.is_file());
+    for m in &moves {
+        safe_rel(&m.to)?;
+        safe_rel(&m.from)?;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = Vec::new();
+        for m in moves.iter().filter(|m| m.have && is_video(&last_part(&m.from))).take(60) {
+            let Some(old) = copy_you_have(&root, &m.to, tv) else { continue };
+            let Some(old_rel) = local::rel_to_root(&root, &old) else { continue };
+            let new_q = quality_of(ffprobe.as_deref(), &base.join(&m.from));
+            let old_q = quality_of(ffprobe.as_deref(), &old);
+            out.push(Upgrade { from: m.from.clone(), old: old_rel, new_quality: quality_text(&new_q), old_quality: quality_text(&old_q), better: is_better(&new_q, &old_q) });
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| Error::msg(e.to_string()))?
+}
+
+/// Replace: the copies you have (and their subtitles) move into the trash folder in the library,
+/// as one step you can undo in History, so the better ones from the download can go in their place.
+#[tauri::command]
+pub async fn inbox_replace_old(state: State<'_, AppState>, olds: Vec<String>, item_id: Option<String>) -> Result<usize> {
+    let root = state.library_root()?;
+    let canon_root = root.canonicalize()?;
+    let stamp = format!("replaced-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
+    let mut moves = Vec::new();
+    for rel in &olds {
+        let file = root.join(safe_rel(rel)?);
+        if rel.starts_with(crate::storage::TRASH) || !is_video(&last_part(rel)) || !file.is_file() || !file.canonicalize()?.starts_with(&canon_root) {
+            continue; // only videos inside the library
+        }
+        let subs = |n: &str| matches!(split_ext(n).1.to_lowercase().as_str(), "srt" | "ass" | "ssa" | "vtt" | "sub" | "idx" | "sup");
+        moves.extend(crate::library::trash_with_siblings(&root, &file, &stamp, subs)?);
+    }
+    let n = moves.len();
+    if n > 0 {
+        let id = item_id.filter(|i| valid_item_id(i)).unwrap_or_else(|| "inbox".into());
+        state.store()?.journal_add("file_trashed", &id, &crate::library::trash_record(&root, moves), "replaced by a better download")?;
+    }
+    Ok(n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1431,6 +1620,40 @@ mod tests {
         let moves = plan_moves(&root, &item, &t, "TV/Severance (2022)", true, &["eng".to_string()], &titles);
         assert_eq!(moves[0].to, "TV/Severance (2022)/Season 02/Severance - S02E05.mkv");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_better_copy_is_recognised() {
+        let q = |c, hdr, size| Quality { class: c, hdr, bitrate: 0, size };
+        assert!(is_better(&q(2160, false, 20), &q(1080, false, 9)));
+        assert!(!is_better(&q(1080, false, 9), &q(2160, false, 20)));
+        assert!(is_better(&q(1080, true, 9), &q(1080, false, 9)));
+        assert!(is_better(&q(1080, false, 15), &q(1080, false, 9)));
+        assert!(!is_better(&q(1080, false, 10), &q(1080, false, 9)), "a bit bigger isn't better");
+        assert!(!is_better(&q(0, false, 50), &q(1080, false, 9)), "unknown is never better");
+        assert_eq!(res_class(1920, 800), 1080);
+        assert_eq!(res_class(3840, 1600), 2160);
+        assert_eq!(res_class(1280, 720), 720);
+        assert_eq!(name_quality("Heat.1995.2160p.UHD.BluRay.HDR.mkv"), Quality { class: 2160, hdr: true, bitrate: 0, size: 0 });
+        assert_eq!(quality_text(&q(2160, true, 18_300_000_000)), "4K HDR · 18.3 GB");
+    }
+
+    #[test]
+    fn the_copy_you_have_is_found() {
+        let dir = std::env::temp_dir().join(format!("mh-inbox-q-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.as_path();
+        std::fs::create_dir_all(root.join("TV/Bluey/Season 01")).unwrap();
+        std::fs::write(root.join("TV/Bluey/Season 01/Bluey - S01E05 - Hospital.mkv"), b"x").unwrap();
+        std::fs::write(root.join("TV/Bluey/Season 01/Bluey - S01E06 - Daddy Robot.mkv"), b"x").unwrap();
+        let got = copy_you_have(root, "TV/Bluey/Season 01/Bluey - S01E05.mkv", true).unwrap();
+        assert!(got.ends_with("Bluey - S01E05 - Hospital.mkv"), "{got:?}");
+        std::fs::create_dir_all(root.join("Movies/Heat (1995)")).unwrap();
+        std::fs::write(root.join("Movies/Heat (1995)/Heat (1995).mp4"), b"xxxx").unwrap();
+        std::fs::write(root.join("Movies/Heat (1995)/heat-sample.mkv"), b"xxxxxxxx").unwrap();
+        let got = copy_you_have(root, "Movies/Heat (1995)/Heat (1995).mkv", false).unwrap();
+        assert!(got.ends_with("Heat (1995).mp4"), "{got:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

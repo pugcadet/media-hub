@@ -79,7 +79,7 @@ pub fn parse_probe(v: &Value) -> MediaInfo {
     }
 }
 
-fn probe(ffprobe: &Path, file: &Path) -> Result<MediaInfo> {
+pub fn probe(ffprobe: &Path, file: &Path) -> Result<MediaInfo> {
     let mut cmd = Command::new(ffprobe);
     cmd.args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams"])
         .arg(file)

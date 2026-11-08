@@ -31,6 +31,16 @@ export function useRun(onDone: () => void) {
   const [prog, setProg] = useState<{ done: number; total: number; now: string } | null>(null);
   const [marks, setMarks] = useState<Record<string, StepState>>({});
   const [busy, setBusy] = useState(false);
+  /** Working out what would change, before the confirm window: show it on the button right away. */
+  const [getting, setGetting] = useState(false);
+  async function prepare<T>(work: Promise<T>): Promise<T> {
+    setGetting(true);
+    try {
+      return await work;
+    } finally {
+      setGetting(false);
+    }
+  }
   async function run(label: string, planId: string, ops: PlanOp[], keyOf: (from: string) => string | null, confirm: string) {
     const ok = ops.filter((o) => o.status === "ok");
     const clash = ops.length - ok.length;
@@ -78,10 +88,13 @@ export function useRun(onDone: () => void) {
       <div className="struct-bar"><span style={{ width: `${prog.total ? (prog.done / prog.total) * 100 : 0}%` }} /></div>
     </div>
   );
-  return { run, mark, bar, busy };
+  return { run, mark, bar, busy: busy || getting, prepare, getting };
 }
 
 /* ------------------------------------------------------------------ the page */
+
+/** The folder check that's running, shared by every visit to the tab. */
+let LOOKING: Promise<{ s: TopFolder[]; m: MovieFolder[] }> | null = null;
 
 export default function Folders({ status }: { status: Status }) {
   const p = usePrefs();
@@ -101,15 +114,18 @@ export default function Folders({ status }: { status: Status }) {
     setError(null);
     setChecking(true);
     try {
-      await track("Looking at your folders", async (job) => {
+      // Already looking (the tab was left and opened again): wait for that one instead of a second.
+      LOOKING ??= track("Looking at your folders", async (job) => {
         job.update("Folders on the NAS", 0.2);
         const s = await api.structureScan();
-        saveStructure(s);
-        savePart("folders", foldersSummary(s, Date.now()));
         job.update("Movies in Jellyfin", 0.6);
-        saveMovies(await api.movieFolders());
-        setMusicN((x) => x + 1);
-      }, { reload: false });
+        return { s, m: await api.movieFolders() };
+      }, { reload: false }).finally(() => { LOOKING = null; });
+      const { s, m } = await LOOKING;
+      saveStructure(s);
+      savePart("folders", foldersSummary(s, Date.now()));
+      saveMovies(m);
+      setMusicN((x) => x + 1);
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -197,7 +213,7 @@ function MovieSuggestions({ top, list: everything, readOnly, onDone }: { top: st
   const { keepCollections } = usePrefs();
   const [groupOut, setGroupOut] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
-  const { run, mark, bar, busy } = useRun(onDone);
+  const { run, mark, bar, busy, prepare, getting } = useRun(onDone);
   const sel = useUndoableSet<string>();
 
   // With collections: movies of a collection together. Otherwise: per folder they're in.
@@ -228,7 +244,7 @@ function MovieSuggestions({ top, list: everything, readOnly, onDone }: { top: st
     if (!moves.length && !renames.length) return setError("Nothing selected to change.");
     setError(null);
     try {
-      const plan = await api.movieFoldersPlan(moves, renames);
+      const plan = await prepare(api.movieFoldersPlan(moves, renames));
       const byPath = new Map<string, string>();
       for (const m of list) { byPath.set(m.video, m.video); byPath.set(m.folder, m.video); }
       const ok = plan.ops.filter((o) => o.status === "ok");
@@ -295,7 +311,7 @@ function MovieSuggestions({ top, list: everything, readOnly, onDone }: { top: st
           <button className="link small" onClick={() => setGroupOut((x) => ({ ...x, [g]: !out }))}>{out ? "Keep them in this folder" : `Move them to ${top} instead`}</button>);
       })}
       {bar}
-      {picked > 0 && <div className="row end"><button className="primary" disabled={busy || readOnly} onClick={() => void apply()}>{busy ? "Working…" : `Fix ${picked} selected`}</button></div>}
+      {picked > 0 && <div className="row end"><button className="primary" disabled={busy || readOnly} onClick={() => void apply()}>{getting ? <><span className="spinner small-spin" /> Getting ready…</> : busy ? "Working…" : `Fix ${picked} selected`}</button></div>}
       {picked === 0 && all.length === 0 && doubtful.length === 0 && <p className="ok">✓ Every movie folder in {top} is right.</p>}
     </div>
   );
@@ -306,7 +322,7 @@ function MovieSuggestions({ top, list: everything, readOnly, onDone }: { top: st
 function ShowSuggestions({ folder, readOnly, onDone }: { folder: TopFolder | null; readOnly: boolean; onDone: () => void }) {
   const sel = useUndoableSet<string>();
   const [error, setError] = useState<string | null>(null);
-  const { run, mark, bar, busy } = useRun(onDone);
+  const { run, mark, bar, busy, prepare, getting } = useRun(onDone);
   const shows = folder?.shows ?? [];
   const showsKey = shows.map((s) => s.folder).join("|");
   useEffect(() => { sel.reset(shows.map((s) => s.folder)); }, [showsKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -316,7 +332,7 @@ function ShowSuggestions({ folder, readOnly, onDone }: { folder: TopFolder | nul
     if (!actions.length) return;
     setError(null);
     try {
-      const plan = await api.structurePlan(actions);
+      const plan = await prepare(api.structurePlan(actions));
       const wanted = plan.ops;
       await run(`Season folders (${actions.length} show${actions.length === 1 ? "" : "s"})`, plan.planId, wanted, (f) => shows.find((s) => f.startsWith(s.folder + "/"))?.folder ?? null,
         `Give ${actions.length} show${actions.length === 1 ? "" : "s"} proper season folders? Loose episodes move in (with their subtitles) and downloaded season folders are renamed "Season NN".`);
@@ -343,7 +359,7 @@ function ShowSuggestions({ folder, readOnly, onDone }: { folder: TopFolder | nul
         ))}
       </div>
       {bar}
-      <div className="row end"><button className="primary" disabled={busy || readOnly || !sel.set.size} onClick={() => void apply()}>{busy ? "Working…" : `Tidy ${sel.set.size} show${sel.set.size === 1 ? "" : "s"}`}</button></div>
+      <div className="row end"><button className="primary" disabled={busy || readOnly || !sel.set.size} onClick={() => void apply()}>{getting ? <><span className="spinner small-spin" /> Getting ready…</> : busy ? "Working…" : `Tidy ${sel.set.size} show${sel.set.size === 1 ? "" : "s"}`}</button></div>
     </div>
   );
 }
@@ -354,7 +370,7 @@ function MusicSuggestions({ top, readOnly, onDone }: { top: string; readOnly: bo
   const [merges, setMerges] = useState<ArtistMerge[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const sel = useUndoableSet<string>();
-  const { run, mark, bar, busy } = useRun(onDone);
+  const { run, mark, bar, busy, prepare, getting } = useRun(onDone);
   useEffect(() => {
     api.musicArtistMerges(top).then((m) => { setMerges(m); sel.reset(m.map((x) => x.from)); }).catch((e) => setError(errorText(e)));
   }, [top]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -363,7 +379,7 @@ function MusicSuggestions({ top, readOnly, onDone }: { top: string; readOnly: bo
   if (!merges.length) return <div className="card form"><p className="ok">✓ No featured artists with folders of their own.</p></div>;
   async function apply() {
     try {
-      const plan = await api.musicMergePlan(top, merges!.filter((m) => sel.has(m.from)).map((m) => m.from));
+      const plan = await prepare(api.musicMergePlan(top, merges!.filter((m) => sel.has(m.from)).map((m) => m.from)));
       await run("Featured artists into their main artist", plan.planId, plan.ops, (f) => merges!.find((m) => f.startsWith(m.from + "/"))?.from ?? null,
         `Move the albums of ${sel.set.size} featured-artist folder${sel.set.size === 1 ? "" : "s"} into the main artist's folder?`);
     } catch (e) {
@@ -389,7 +405,7 @@ function MusicSuggestions({ top, readOnly, onDone }: { top: string; readOnly: bo
         ))}
       </div>
       {bar}
-      <div className="row end"><button className="primary" disabled={busy || readOnly || !sel.set.size} onClick={() => void apply()}>{busy ? "Working…" : `Merge ${sel.set.size}`}</button></div>
+      <div className="row end"><button className="primary" disabled={busy || readOnly || !sel.set.size} onClick={() => void apply()}>{getting ? <><span className="spinner small-spin" /> Getting ready…</> : busy ? "Working…" : `Merge ${sel.set.size}`}</button></div>
     </div>
   );
 }
