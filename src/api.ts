@@ -1048,8 +1048,9 @@ export const api = {
   openVideo: (id: string) => invoke<void>("open_video", { id }),
   itemFolder: (id: string) => invoke<string>("item_folder", { id }),
   libraryScan: () => invoke<void>("library_scan"),
-  namingCheck: (tvTemplate: string, movieTemplate: string, ids: string[] | null = null, yearOptional = true, minimal = true) =>
-    invoke<CheckResult>("naming_check", { tvTemplate, movieTemplate, ids, yearOptional, minimal }),
+  /** `quick`: titles whose folders didn't change since their last check keep their row. */
+  namingCheck: (tvTemplate: string, movieTemplate: string, ids: string[] | null = null, yearOptional = true, minimal = true, quick = false) =>
+    invoke<CheckResult>("naming_check", { tvTemplate, movieTemplate, ids, yearOptional, minimal, quick }),
   backendTuning: () => invoke<Tuning>("backend_tuning"),
   backendSet: (scope: "library" | "task", target: string, key: string, value: unknown) => invoke<void>("backend_set", { scope, target, key, value }),
   backendApplyRecommended: () => invoke<number>("backend_apply_recommended"),

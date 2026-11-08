@@ -45,6 +45,10 @@ pub struct CheckRow {
     /// Something was renamed in its folder since it was checked: needs a fresh look.
     #[serde(default)]
     pub stale: bool,
+    /// What the check saw (the title, and when its folders last changed): the same next
+    /// time means nothing changed, so a quick check can keep this row.
+    #[serde(default)]
+    pub sig: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -52,6 +56,9 @@ pub struct CheckRow {
 pub struct CheckResult {
     pub at: i64,
     pub rows: Vec<CheckRow>,
+    /// The naming style the rows were checked with (another style: everything again).
+    #[serde(default)]
+    pub style: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -190,6 +197,10 @@ async fn check_one(state: &AppState, root: &Path, id: &str, kind: &str, server: 
     Ok(row)
 }
 
+fn now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
 fn saved_path(state: &AppState) -> std::path::PathBuf {
     state.dir.join("naming-check.json")
 }
@@ -234,23 +245,75 @@ pub fn naming_check_cancel() {
     CANCEL.store(true, Ordering::SeqCst);
 }
 
+/// When a title's folders last changed, as one line: a show folder and its season folders, or a
+/// movie's own folder. Adding, renaming or removing a file changes its folder's time. Empty when
+/// a folder can't be read (then it's always checked).
+fn folder_sig(root: &Path, row: &CheckRow) -> String {
+    let secs = |p: &Path| std::fs::metadata(p).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis());
+    let dir = match (&row.file, row.kind.as_str()) {
+        (Some(f), _) => split_path(f).0.to_string(),
+        (None, _) => row.folder.clone(),
+    };
+    if dir.is_empty() {
+        return String::new();
+    }
+    let top = root.join(&dir);
+    let Some(t) = secs(&top) else { return String::new() };
+    let mut out = format!("{dir}={t}");
+    if row.kind == "series" {
+        let mut subs: Vec<(String, u128)> = std::fs::read_dir(&top)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().map(|f| f.is_dir()).unwrap_or(false))
+            .filter_map(|e| Some((e.file_name().to_string_lossy().into_owned(), secs(&e.path())?)))
+            .collect();
+        subs.sort();
+        for (n, t) in subs {
+            out.push_str(&format!("|{n}={t}"));
+        }
+    }
+    out
+}
+
+fn title_sig(name: &str, year: Option<i32>, matched: bool, folders: &str) -> String {
+    if folders.is_empty() {
+        return String::new();
+    }
+    format!("{matched}|{name}|{year:?}|{folders}")
+}
+
 /// Checks every show and movie (or only `ids`). Sends "naming-progress" events while it runs.
+/// `quick`: titles whose folders haven't changed since their last check keep their row.
 #[tauri::command]
-pub async fn naming_check(app: AppHandle, tv_template: String, movie_template: String, ids: Option<Vec<String>>, year_optional: Option<bool>, minimal: Option<bool>) -> Result<CheckResult> {
+#[allow(clippy::too_many_arguments)]
+pub async fn naming_check(app: AppHandle, tv_template: String, movie_template: String, ids: Option<Vec<String>>, year_optional: Option<bool>, minimal: Option<bool>, quick: Option<bool>) -> Result<CheckResult> {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Err(Error::msg("A check is already running."));
     }
     YEAR_OPTIONAL.store(year_optional.unwrap_or(true), Ordering::SeqCst);
     MINIMAL.store(minimal.unwrap_or(true), Ordering::SeqCst);
     CANCEL.store(false, Ordering::SeqCst);
-    let out = run(&app, &tv_template, &movie_template, ids).await;
+    let style = format!("{tv_template}|{movie_template}|{}|{}", year_optional.unwrap_or(true), minimal.unwrap_or(true));
+    let out = run(&app, &tv_template, &movie_template, ids, quick.unwrap_or(false), &style).await;
     RUNNING.store(false, Ordering::SeqCst);
     out
 }
 
-async fn run(app: &AppHandle, tv_tpl: &str, movie_tpl: &str, only: Option<Vec<String>>) -> Result<CheckResult> {
+async fn run(app: &AppHandle, tv_tpl: &str, movie_tpl: &str, only: Option<Vec<String>>, quick: bool, style: &str) -> Result<CheckResult> {
     let state = app.state::<AppState>();
     let root = state.library_root()?;
+    // The last check, for a quick one: rows of titles that didn't change are kept.
+    let prev: HashMap<String, CheckRow> = if quick {
+        std::fs::read(saved_path(&state))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<CheckResult>(&b).ok())
+            .filter(|r| r.style == style)
+            .map(|r| r.rows.into_iter().map(|x| (x.id.clone(), x)).collect())
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
     let mut work: Vec<(String, String, String, Option<i32>, String, bool)> = Vec::new();
     {
         let store = state.store()?;
@@ -269,6 +332,12 @@ async fn run(app: &AppHandle, tv_tpl: &str, movie_tpl: &str, only: Option<Vec<St
             break;
         }
         let _ = app.emit("naming-progress", Progress { done: i, total, name: name.clone() });
+        if let Some(p) = prev.get(&id).filter(|p| p.error.is_none() && !p.stale && !p.sig.is_empty()) {
+            if title_sig(&name, year, matched, &folder_sig(&root, p)) == p.sig {
+                rows.push(p.clone());
+                continue;
+            }
+        }
         let mut row = match check_one(&state, &root, &id, &kind, &path, matched, tv_tpl, movie_tpl).await {
             Ok(r) => r,
             // Gone from Jellyfin (removed or renamed): not a naming problem. It's listed again
@@ -276,6 +345,8 @@ async fn run(app: &AppHandle, tv_tpl: &str, movie_tpl: &str, only: Option<Vec<St
             Err(e) if e.to_string() == crate::jellyfin::TITLE_GONE => continue,
             Err(e) => CheckRow { id: id.clone(), kind: kind.clone(), error: Some(e.to_string()), ..Default::default() },
         };
+        row.sig = if row.error.is_none() { title_sig(&name, year, matched, &folder_sig(&root, &row)) } else { String::new() };
+        row.checked = now_secs();
         row.name = name;
         row.year = year;
         rows.push(row);
@@ -283,12 +354,7 @@ async fn run(app: &AppHandle, tv_tpl: &str, movie_tpl: &str, only: Option<Vec<St
     let _ = app.emit("naming-progress", Progress { done: total, total, name: String::new() });
     let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     // A partial check (some ids) updates the saved full list.
-    let mut rows = rows;
-    for r in &mut rows {
-        r.checked = at;
-        r.stale = false;
-    }
-    let mut result = CheckResult { at, rows };
+    let mut result = CheckResult { at, rows, style: style.to_string() };
     if only.is_some() {
         if let Some(prev) = std::fs::read(saved_path(&state)).ok().and_then(|b| serde_json::from_slice::<CheckResult>(&b).ok()) {
             let mut merged = prev.rows;
@@ -310,6 +376,23 @@ async fn run(app: &AppHandle, tv_tpl: &str, movie_tpl: &str, only: Option<Vec<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_quick_check_sees_which_titles_changed() {
+        let root = std::env::temp_dir().join(format!("mh-sig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("TV/Bluey/Season 01")).unwrap();
+        let show = CheckRow { kind: "series".into(), folder: "TV/Bluey".into(), ..Default::default() };
+        let a = title_sig("Bluey", Some(2018), true, &folder_sig(&root, &show));
+        assert!(!a.is_empty());
+        assert_eq!(a, title_sig("Bluey", Some(2018), true, &folder_sig(&root, &show)), "nothing changed");
+        assert_ne!(a, title_sig("Bluey", Some(2019), true, &folder_sig(&root, &show)), "Jellyfin's details changed");
+        std::fs::create_dir_all(root.join("TV/Bluey/Season 02")).unwrap();
+        assert_ne!(a, title_sig("Bluey", Some(2018), true, &folder_sig(&root, &show)), "a new season folder");
+        let gone = CheckRow { kind: "movie".into(), folder: "Movies".into(), file: Some("Movies/Heat (1995)/Heat (1995).mkv".into()), ..Default::default() };
+        assert_eq!(folder_sig(&root, &gone), "", "a folder that isn't there is always checked");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn rows_renamed_since_their_check_are_stale() {

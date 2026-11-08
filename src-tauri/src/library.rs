@@ -774,9 +774,9 @@ pub async fn health_alerts(state: State<'_, AppState>) -> Result<Vec<Alert>> {
     match st.library_root.as_deref() {
         None => out.push(alert_fix("warn", "No library folder chosen", "The renamer, intro detection and adding new titles need it.", "settings:folder")),
         Some(r) if !crate::state::root_ok(r) => {
-            let denied = matches!(std::fs::metadata(r).and_then(|_| std::fs::read_dir(r).map(|_| ())), Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied);
-            if denied {
-                out.push(alert_fix("error", "Media Hub isn't allowed to open the NAS", &format!("{r} is connected, but the Mac is blocking Media Hub. Open System Settings → Privacy & Security → Files & Folders, and turn on Network Volumes for Media Hub."), "settings:folder"));
+            let why = crate::state::root_problem(r).unwrap_or_default();
+            if why.starts_with(crate::state::BLOCKED) {
+                out.push(alert_fix("error", "macOS is blocking Media Hub from the NAS", &why, "settings:folder"));
             } else if crate::nas::reconnect(&state, r) || st.nas_url.is_some() {
                 out.push(alert_fix("error", "The NAS isn't connected", &format!("{r} can't be reached. Media Hub is connecting it again by itself. On a VPN? Turn on \"allow local network\" (LAN) in the VPN app, or the NAS can't be seen."), "settings:folder"));
             } else {

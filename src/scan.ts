@@ -209,7 +209,7 @@ export async function scanEverything(status: Status, opts: { force?: boolean } =
         return;
       }
       const ids = !last || opts.force ? null : changed;
-      await api.namingCheck(args[0], args[1], ids, args[2], args[3]);
+      await api.namingCheck(args[0], args[1], ids, args[2], args[3], !opts.force);
     });
 
     // The rest in two lanes at once: what only asks Jellyfin/TMDB, and what reads the disk

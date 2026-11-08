@@ -894,17 +894,18 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
 
   const { tidy } = usePrefs();
   const [checkedTidy, setCheckedTidy] = useState(tidy);
-  async function check(ids: string[] | null = null) {
+  /** `quick`: only titles whose folders changed since their last check are looked at again. */
+  async function check(ids: string[] | null = null, quick = false) {
     setError(null);
     if (!ids) setCheckedTidy(tidy);
     try {
-      await track(ids ? "Checking names again" : "Checking every show and movie", async (job) => {
+      await track(quick ? "Checking what changed" : ids ? "Checking names again" : "Checking every show and movie", async (job) => {
         const un = await listen<{ done: number; total: number; name: string }>("naming-progress", (e) => {
           setChecking(e.payload.name ? `${e.payload.name} (${e.payload.done + 1}/${e.payload.total})` : null);
           job.update(e.payload.name, e.payload.total ? e.payload.done / e.payload.total : null);
         });
         try {
-          setRes(await api.namingCheck(tvTemplate(), MOVIE_TEMPLATE, ids, yearOptional(), minimalNames()));
+          setRes(await api.namingCheck(tvTemplate(), MOVIE_TEMPLATE, ids, yearOptional(), minimalNames(), quick));
         } finally {
           un();
           setChecking(null);
@@ -1025,9 +1026,12 @@ function CheckList({ status, focus }: { status: Status; focus?: string }) {
           <span className="spacer" />
           <span className="muted small">{checking ? `Checking ${checking}…` : res ? `Checked ${new Date(res.at * 1000).toLocaleString()} · numbers are titles to fix` : "Not checked yet. Checking renames nothing."}</span>
           {checking ? <button onClick={() => void api.namingCheckCancel()}><Icon name="stop" size={12} /> Stop</button> : (
-            <button className="primary" title="Reads every show and movie folder on the NAS and compares the names (renames nothing)" onClick={() => void check(folderTab === "@all" ? null : rows.filter((r) => top(r) === folderTab).map((r) => r.id))}>
-              <Icon name="search" /> {res ? (checkedTidy !== tidy ? "Check names with the new setting" : folderTab === "@all" ? "Check all names" : `Check names in ${folderTab}`) : "Check my library"}
-            </button>
+            <>
+              {res && <button className="link small" title="Looks at every title again, also the ones whose folders didn't change" onClick={() => void check(folderTab === "@all" ? null : rows.filter((r) => top(r) === folderTab).map((r) => r.id))}>Check everything again</button>}
+              <button className="primary" title="Looks again at the titles whose folders changed since the last check (renames nothing)" onClick={() => void check(folderTab === "@all" ? null : rows.filter((r) => top(r) === folderTab).map((r) => r.id), !!res && checkedTidy === tidy)}>
+                <Icon name="search" /> {res ? (checkedTidy !== tidy ? "Check names with the new setting" : folderTab === "@all" ? "Check all names" : `Check names in ${folderTab}`) : "Check my library"}
+              </button>
+            </>
           )}
         </>}
       />

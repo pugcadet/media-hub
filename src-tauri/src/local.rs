@@ -83,8 +83,8 @@ pub fn to_local(state: &AppState, server: &str) -> Result<PathBuf> {
     let Some(root) = root else {
         return Err(Error::msg("Choose your library folder in Settings first, so Media Hub can find files on this computer."));
     };
-    if !root.exists() {
-        return Err(Error::msg(format!("Your library folder ({}) isn't reachable right now. Is the NAS connected?", root.display())));
+    if let Some(why) = crate::state::root_problem(&root.to_string_lossy()) {
+        return Err(Error::msg(why));
     }
     if let Some(p) = find_renamed(&root, settings.path_map.as_ref(), server) {
         return Ok(p);

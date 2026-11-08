@@ -69,8 +69,63 @@ fn find_live_root(saved: &str) -> String {
 /// Is the library folder really there? A folder under /Volumes that isn't a mounted share is a
 /// leftover from an earlier connection, so the NAS isn't actually connected.
 pub fn root_ok(root: &str) -> bool {
+    root_problem(root).is_none()
+}
+
+/// Why the library folder can't be used right now, in plain words; None when it's fine.
+/// The answer is kept for 10 seconds (it's asked before every bigger job).
+pub fn root_problem(root: &str) -> Option<String> {
+    static LAST: Mutex<Option<(std::time::Instant, String, Option<String>)>> = Mutex::new(None);
+    if let Ok(g) = LAST.lock() {
+        if let Some((at, r, ans)) = g.as_ref() {
+            if r == root && at.elapsed() < std::time::Duration::from_secs(10) {
+                return ans.clone();
+            }
+        }
+    }
+    let ans = find_root_problem(root);
+    if let Ok(mut g) = LAST.lock() {
+        *g = Some((std::time::Instant::now(), root.to_string(), ans.clone()));
+    }
+    ans
+}
+
+/// macOS said no ("Operation not permitted"): the app may not open network drives.
+pub const BLOCKED: &str = "macOS is blocking Media Hub from the NAS";
+
+fn find_root_problem(root: &str) -> Option<String> {
     let p = std::path::Path::new(root);
-    p.is_dir() && (!p.starts_with("/Volumes") || p == std::path::Path::new("/Volumes") || is_mount(p) || p.parent() != Some(std::path::Path::new("/Volumes")))
+    let denied = |e: &std::io::Error| e.kind() == std::io::ErrorKind::PermissionDenied || e.raw_os_error() == Some(1);
+    let blocked = || {
+        crate::nas::ask_again();
+        Some(format!("{BLOCKED} ({root}). This happens after an update: macOS sees the new version as a new app. A question should pop up: click Allow. No question? Open System Settings → Privacy & Security → Files & Folders → Media Hub and turn on Network Volumes, then press Refresh."))
+    };
+    match std::fs::metadata(p) {
+        Err(e) if denied(&e) => return blocked(),
+        Err(_) => {
+            // Mounted under another name? Then say which, so it's clear what to pick in Settings.
+            let others: Vec<String> = std::fs::read_dir("/Volumes")
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .filter(|x| is_mount(x) && x.read_link().is_err())
+                .map(|x| x.to_string_lossy().into_owned())
+                .collect();
+            let hint = if others.is_empty() { String::new() } else { format!(" Connected right now: {}. Is your library on one of those? Then choose it in Settings → Library folder.", others.join(", ")) };
+            return Some(format!("Your library folder ({root}) isn't reachable right now: the NAS isn't connected. Connect it in Finder (Media Hub reconnects it by itself after that).{hint}"));
+        }
+        Ok(m) if !m.is_dir() => return Some(format!("Your library folder ({root}) isn't a folder.")),
+        Ok(_) => {}
+    }
+    let leftover = p.parent() == Some(std::path::Path::new("/Volumes")) && !is_mount(p);
+    if leftover {
+        return Some(format!("Your library folder ({root}) isn't reachable right now: the NAS isn't connected (only an empty leftover folder is there). Connect it in Finder."));
+    }
+    match std::fs::read_dir(p) {
+        Err(e) if denied(&e) => blocked(),
+        _ => None,
+    }
 }
 
 /// Is this folder a mounted drive or share (not just a folder on the same disk as its parent)?
@@ -149,11 +204,14 @@ impl AppState {
         }
     }
 
+    /// The library folder, ready to use: an error in plain words when it isn't (not connected,
+    /// or blocked by macOS), so no job starts and then fails on every file.
     pub fn library_root(&self) -> Result<PathBuf> {
-        self.settings()?
-            .library_root
-            .map(PathBuf::from)
-            .ok_or_else(|| Error::msg("Choose your library folder first."))
+        let root = self.settings()?.library_root.ok_or_else(|| Error::msg("Choose your library folder first."))?;
+        if let Some(why) = root_problem(&root) {
+            return Err(Error::msg(why));
+        }
+        Ok(PathBuf::from(root))
     }
 
     pub fn device_id(&self) -> Result<String> {

@@ -53,6 +53,24 @@ pub fn remember(state: &AppState, root: &str) {
     }
 }
 
+/// macOS blocks the app from network drives (an old "allowed" that belonged to the previous
+/// version): forget that answer for Media Hub only, so macOS asks again. Once per app start.
+pub fn ask_again() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if !cfg!(target_os = "macos") || DONE.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        let _ = std::process::Command::new("/usr/bin/tccutil")
+            .args(["reset", "SystemPolicyNetworkVolumes", "app.mediahub.desktop"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
+}
+
 /// The share is gone: ask macOS to mount it again (at most once a minute, in the background).
 /// Returns true when a try was started.
 pub fn reconnect(state: &AppState, root: &str) -> bool {

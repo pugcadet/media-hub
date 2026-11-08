@@ -215,7 +215,7 @@ function trashText(left: string[]): string {
 
 /* ------------------------------------------------------------------ the page */
 
-const STATE_LABEL: Record<State, string> = { checking: "Looking…", ready: "Ready", look: "Needs a look", offline: "NAS not connected", have: "Duplicate", placing: "Uploading…", done: "Done", failed: "Didn't work" };
+const STATE_LABEL: Record<State, string> = { checking: "Looking…", ready: "Ready", look: "Needs a look", offline: "NAS not reachable", have: "Duplicate", placing: "Uploading…", done: "Done", failed: "Didn't work" };
 const gb = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
 
 export default function Inbox({ status }: { status: Status }) {
@@ -462,7 +462,7 @@ export default function Inbox({ status }: { status: Status }) {
     { id: "all", label: "All", n: all.length, tone: "" },
     { id: "ready", label: "Ready", n: count("ready"), tone: "ok" },
     { id: "look", label: "Needs a look", n: count("look"), tone: "warn" },
-    { id: "offline", label: "NAS not connected", n: count("offline"), tone: "warn" },
+    { id: "offline", label: "NAS not reachable", n: count("offline"), tone: "warn" },
     { id: "have", label: "Duplicates", n: count("have"), tone: "" },
     { id: "done", label: "Done", n: count("done"), tone: "" },
   ];
