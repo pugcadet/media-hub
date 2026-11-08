@@ -232,8 +232,6 @@ pub fn run() {
             inbox::inbox_reveal,
             inbox::inbox_find_item,
             moviefolders::movie_folders_plan,
-            backend::intro_skipper_libraries,
-            backend::set_intro_skipper_libraries,
             sub_cmds::local_subtitles,
             sub_cmds::adopt_subtitles,
             seg_cmds::segments_overview,

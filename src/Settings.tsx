@@ -232,43 +232,12 @@ function FolderOrderSettings() {
 
 /* ------------------------------------------------------------- intros */
 
-/** Which libraries Jellyfin's Intro Skipper plugin looks at. */
-function IntroSettings({ status }: { status: Status }) {
-  const [info, setInfo] = useState<{ installed: boolean; available: string[]; selected: string[]; all: boolean } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const load = () => void api.introSkipperLibraries().then(setInfo).catch((e) => setError(errorText(e)));
-  useEffect(load, []);
-  async function save(names: string[]) {
-    setError(null);
-    try {
-      await track("Saving Intro Skipper's folders", () => api.setIntroSkipperLibraries(names));
-      load();
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-  const on = (n: string) => !!info && (info.all || info.selected.includes(n));
+/** Intros: which libraries are scanned is set in Jellyfin itself, not here. */
+function IntroSettings(_props: { status: Status }) {
   const p = usePrefs();
   return (
-    <Section id="intros" title="Intros" icon="skip" hint="Which libraries Jellyfin's Intro Skipper scans for intros and credits. Media Hub's own detection works on any show you open.">
-      {error && <p className="error">{error}</p>}
+    <Section id="intros" title="Intros" icon="skip" hint="Which libraries Intro Skipper scans is set in Jellyfin: Dashboard → Libraries → a library → Media segment providers. Media Hub follows that.">
       <Switch checked={p.recapsOff} onChange={(v) => setPrefs({ recapsOff: v })}>Leave recaps out (no recap markers in the intros tool)</Switch>
-      {!info && !error && <p className="muted small">Reading Intro Skipper's settings…</p>}
-      {info && !info.installed && <p className="muted small">The Intro Skipper plugin isn't installed in Jellyfin. Media Hub can still find intros itself (Intros and credits).</p>}
-      {info?.installed && (
-        <>
-          <div className="stack-s">
-            {info.available.map((n) => (
-              <Switch key={n} disabled={status.readOnly} checked={on(n)} onChange={(v) => {
-                const cur = info.all ? info.available : info.selected;
-                const next = v ? [...new Set([...cur, n])] : cur.filter((x) => x !== n);
-                void save(next.length === info.available.length ? [] : next);
-              }}>{n}</Switch>
-            ))}
-          </div>
-          <p className="muted small">{info.all ? "All libraries are scanned." : `Only ${info.selected.join(", ") || "none"}.`}{status.readOnly ? " Turn on changes to choose." : ""}</p>
-        </>
-      )}
     </Section>
   );
 }

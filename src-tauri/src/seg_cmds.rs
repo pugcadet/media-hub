@@ -507,9 +507,24 @@ pub async fn store_markers(w: &Writer, item_id: &str, kinds: &[String], new: &[S
     }
     let stored = w.reader().segments_editor(item_id).await.ok().flatten().map(|r| read_segs(&r.items)).unwrap_or_default();
     if matches(&stored, kinds, new) {
+        // Stored, but not handed to players: saved without a provider players are given. Save
+        // them again the Segment Editor's second way, under Intro Skipper, and look again.
+        for old in stored.iter().filter(|s| kinds.contains(&s.kind) && !s.id.is_empty()) {
+            let _ = w.segment_delete_editor(&old.id, item_id, &old.kind).await;
+        }
+        for s in new {
+            w.segment_post_editor(item_id, &s.kind, s.start, s.end).await?;
+        }
+        for wait in [500u64, 1500, 3000] {
+            tokio_sleep_ms(wait).await;
+            let seen = read_segs(&w.reader().segments(item_id).await.unwrap_or_default());
+            if matches(&seen, kinds, new) {
+                return Ok(SaveReport { confirmed: true, message: "Saved and confirmed".into() });
+            }
+        }
         return Ok(SaveReport {
             confirmed: false,
-            message: "Saved, but players won't see it: “Intro Skipper” is switched off as a segment provider for this library. Turn it on under Intros → Options (or Jellyfin → Libraries → Manage library).".into(),
+            message: "Saved in Jellyfin, but Jellyfin isn't showing it to players yet. Run “Media segment scan” in Jellyfin (Dashboard → Scheduled tasks), then check again.".into(),
         });
     }
     Err(Error::msg("Jellyfin accepted the markers but didn't keep them. Check that Intro Skipper is up to date (Jellyfin page → Plugins), then save again."))

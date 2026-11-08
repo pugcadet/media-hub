@@ -966,7 +966,9 @@ impl Writer {
         }
         let url = self.c.url(&format!("/MediaSegmentsApi/{id}"));
         for attempt in 0..2 {
-            let req = self.c.http.put(&url).header("If-Match", etag).json(&serde_json::Value::Array(all.to_vec()));
+            // Under Intro Skipper's provider, so Jellyfin hands them to players (markers of an
+            // unknown provider are stored but not shown).
+            let req = self.c.http.put(&url).query(&[("providerId", EDITOR_PROVIDER)]).header("If-Match", etag).json(&serde_json::Value::Array(all.to_vec()));
             let resp = self.c.send_raw(req).await?;
             match resp.status().as_u16() {
                 200..=299 => return Ok(true),
@@ -1031,7 +1033,6 @@ impl Writer {
         self.post(&format!("/Items/{id}/Refresh"), &q, None).await
     }
 }
-
 
 /// Fields the home page, collections and "more like this" lists need.
 const LIST_FIELDS: &str = "ProductionYear,PremiereDate,RunTimeTicks,ChildCount,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,CommunityRating,Genres,ProviderIds,DateCreated";
@@ -1128,14 +1129,6 @@ impl Writer {
             return Ok(());
         }
         self.post(&format!("/Items/{id}/Images/{kind}/{index}/Index"), &[("newIndex", new_index.to_string())], None).await
-    }
-
-    /// Saves a plugin's whole configuration (read it first with `plugin_config`).
-    pub async fn set_plugin_config(&self, id: &str, config: &serde_json::Value) -> Result<()> {
-        if !valid_item_id(id) {
-            return Err(Error::msg("bad id"));
-        }
-        self.post(&format!("/Plugins/{id}/Configuration"), &[], Some(config)).await
     }
 
     /// Makes a new collection and returns its id.
@@ -1589,24 +1582,6 @@ impl Client {
                 (s("Name"), s("Version"), s("Status"))
             })
             .collect())
-    }
-
-    /// Id of the first installed plugin whose name matches.
-    pub async fn plugin_id(&self, name_has: &str) -> Result<Option<String>> {
-        let v: serde_json::Value = self.get_json("/Plugins", &[]).await?;
-        // Only a working copy has settings (an old version or one waiting for a restart doesn't).
-        Ok(v.as_array().into_iter().flatten().find_map(|p| {
-            let n = p.get("Name")?.as_str()?.to_lowercase();
-            let active = p.get("Status").and_then(|s| s.as_str()).map(|s| s.eq_ignore_ascii_case("active")).unwrap_or(true);
-            (n.contains(name_has) && active).then(|| p.get("Id")?.as_str().map(|x| x.replace('-', "")))?
-        }))
-    }
-
-    pub async fn plugin_config(&self, id: &str) -> Result<serde_json::Value> {
-        if !valid_item_id(id) {
-            return Err(Error::msg("bad id"));
-        }
-        self.get_json(&format!("/Plugins/{id}/Configuration"), &[]).await
     }
 
     /// Playlists of the chosen user.
