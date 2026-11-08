@@ -458,7 +458,7 @@ pub fn album_artist_of(song_artists: &[&str]) -> String {
     }
     let n = song_artists.len().max(1);
     let top = c.values().max_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1))).cloned().unwrap_or((0, String::new()));
-    if c.len() >= 3 && top.0 * 2 < n {
+    if c.len() >= 3 && top.0 * 2 <= n {
         "Various Artists".into()
     } else {
         top.1
