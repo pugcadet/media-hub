@@ -1911,7 +1911,7 @@ dependencies = [
 
 [[package]]
 name = "media-hub"
-version = "0.26.17"
+version = "0.26.18"
 dependencies = [
  "base64 0.22.1",
  "flate2",
