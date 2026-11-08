@@ -38,7 +38,7 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [local, setLocal] = useState<LocalSub[]>([]);
-  const [preview, setPreview] = useState<{ path: string; lang: string; peek?: boolean } | null>(null);
+  const [preview, setPreview] = useState<{ path: string; lang: string; peek?: boolean; subId?: string } | null>(null);
   const p = usePrefs();
 
   async function load() {
@@ -101,7 +101,7 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
     setError(null);
     try {
       const path = await api.subtitlePeek(id, subId, format);
-      setPreview({ path, lang, peek: true });
+      setPreview({ path, lang, peek: true, subId });
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -176,7 +176,8 @@ export function SubtitlesTab({ id, canEdit, subLangs }: { id: string; canEdit: b
         <SubPreview
           key={preview.path}
           id={id} path={preview.path} lang={preview.lang} label={languageName(preview.lang, list) || "this language"}
-          others={preview.peek ? 0 : previewOthers} canEdit={canEdit && !preview.peek}
+          others={preview.peek ? 0 : previewOthers} canEdit={canEdit}
+          onDownload={preview.peek && preview.subId ? () => { const sid = preview.subId!; setPreview(null); void download(sid); } : undefined}
           onClose={() => setPreview(null)}
           onDone={(n) => { setPreview(null); setNote(n); void load(); }}
         />

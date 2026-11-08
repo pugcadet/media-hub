@@ -22,7 +22,9 @@
     collection_members: { [hex(801)]: ["toy story", "up", "cars", "coco"] },
     collection_items: items.slice(12, 16).map((i) => card(i)),
     item_children: episodes,
-    item_details: { item: { Id: hex(2), Name: "Nijntje", Type: "Series", ProductionYear: 2003, Overview: "Miffy and her friends.", Genres: ["Kids"], CommunityRating: 7.2, ProviderIds: { Tmdb: "1" }, ImageTags: { Primary: "x" }, People: [{ Id: hex(600), Name: "Some Actor", Role: "Miffy" }] }, images: [{ ImageType: "Primary" }, { ImageType: "Backdrop", ImageIndex: 0 }], seasons: [{ Id: hex(700), Name: "Season 1", Type: "Season", IndexNumber: 1 }, { Id: hex(701), Name: "Specials", Type: "Season", IndexNumber: 0 }], changes: [], canEdit: true },
+    subtitle_peek: () => "/tmp/mediahub/tmp/peek-x-1.srt",
+    video_clip: () => fetch("./clip.b64").then((r) => r.text()).catch(() => ""),
+    item_details: (a) => a?.id === hex(950) ? { item: { Id: hex(950), Name: "Moana", Type: "Movie", ProductionYear: 2016, RunTimeTicks: 64000000000, Path: "/data/Movies/Moana (2016)/Moana (2016).mkv", ImageTags: { Primary: "x" }, ProviderIds: { Tmdb: "2" } }, images: [{ ImageType: "Primary" }], seasons: [], changes: [], canEdit: true } : { item: { Id: hex(2), Name: "Nijntje", Type: "Series", ProductionYear: 2003, Overview: "Miffy and her friends.", Genres: ["Kids"], CommunityRating: 7.2, ProviderIds: { Tmdb: "1" }, ImageTags: { Primary: "x" }, People: [{ Id: hex(600), Name: "Some Actor", Role: "Miffy" }] }, images: [{ ImageType: "Primary" }, { ImageType: "Backdrop", ImageIndex: 0 }], seasons: [{ Id: hex(700), Name: "Season 1", Type: "Season", IndexNumber: 1 }, { Id: hex(701), Name: "Specials", Type: "Season", IndexNumber: 0 }], changes: [], canEdit: true },
     naming_check_last: { at: Math.floor(Date.now() / 1000), rows: items.map((it, i) => ({ id: it.id, kind: it.kind, name: it.name, year: it.year, folder: `TV/${it.name}`, file: null, toRename: i % 3 ? 4 : 0, folders: i % 4 === 0 && i > 0 ? 1 : 0, problems: i % 5 === 0 ? 2 : 0, right: 10, sure: i % 3 === 1, reasons: i % 3 ? ["4 episode names to fix", "Folder “x” should be “X (2019)”"] : i % 5 === 0 ? ["2 would clash with a file that already exists"] : [], example: i % 3 ? [`${it.name}.S01E01.1080p.mkv`, `${it.name} - S01E01 - Pilot.mkv`] : null, error: null })) },
     rename_history: [{ batch: "1", at: Math.floor(Date.now() / 1000) - 3600, files: 12, undone: 0, example: "Bluey/Season 01/Bluey - S01E01.mkv" }],
     journal_all: [{ id: 1, at: Math.floor(Date.now() / 1000) - 60, action: "image", target: hex(1) + "|Primary|0", title: "Bluey", undone: false }],
@@ -93,10 +95,14 @@
     subtitle_options: { file: "Severance (2022) - S02E04.mkv", current: [{ index: 3, language: "eng", title: "", external: true, forced: false, path: "/data/TV/Severance (2022)/Season 02/Severance (2022) - S02E04.eng.srt" }],
       results: [{ sub: { Id: "s1", Name: "Severance.S02E04.1080p.WEB.h264-ETHEL", ProviderName: "Open Subtitles", DownloadCount: 18402, Format: "srt" }, score: 100, reasons: ["matches your file"] }, { sub: { Id: "s2", Name: "Severance.2x04.WEBRip", ProviderName: "subbuzz", DownloadCount: 9113, Format: "srt" }, score: 82, reasons: [] }] },
     local_subtitles: [{ name: "Severance (2022) - S02E04.eng.srt", path: "/data/TV/Severance (2022)/Season 02/Severance (2022) - S02E04.eng.srt", lang: "eng", linked: true }, { name: "Severance (2022) - S02E04.en.2.srt", path: "/data/TV/Severance (2022)/Season 02/Severance (2022) - S02E04.en.2.srt", lang: "eng", linked: true }],
-    subtitle_preview: { duration: 2900, file: "Severance (2022) - S02E04.eng.srt", spots: [45, 761, 1450, 2461], lines: [{ s: 760, e: 765, t: "I don't remember signing up for this." }] },
+    subtitle_preview: { duration: 2900, file: "Severance (2022) - S02E04.eng.srt", spots: [45, 761, 1450, 2461], lines: Array.from({ length: 960 }, (_, i) => ({ s: i * 3, e: i % 2 ? i * 3 + 900 : i * 3 + 2.5, t: `Line ${i + 1} at ${Math.floor(i * 3 / 60)}:${String((i * 3) % 60).padStart(2, "0")}` })) },
     music_artist_merges: [{ from: "Drake feat. Rihanna", to: "Drake", albums: ["Take Care"] }],
     missing_language: { TotalRecordCount: 8, Items: episodes.map((e) => ({ ...e, SeriesName: "Nijntje" })) },
     missing_subtitles: { TotalRecordCount: 8, Items: episodes },
+    server_update_plugins: ["Intro Skipper 1.10.10.5"],
+    collections_remove_empty: 1,
+    music_album_files: Array.from({ length: 10 }, (_, i) => [hex(300 + i), `/Volumes/media/Music/Album/${String(i + 1).padStart(2, "0")} Song.flac`]),
+    music_tags_apply: 10,
   };
   const kinds = window.__KINDS__ || {};
   const fallback = (cmd) => {
@@ -118,7 +124,7 @@
     invoke: async (cmd, args) => {
       window.__CALLS__ = (window.__CALLS__ || []).concat(cmd);
       if (cmd.startsWith("plugin:")) return cmd.includes("listen") ? cb++ : null;
-      if (cmd in fixtures) return JSON.parse(JSON.stringify(typeof fixtures[cmd] === "function" ? fixtures[cmd](args) : fixtures[cmd]));
+      if (cmd in fixtures) return JSON.parse(JSON.stringify(typeof fixtures[cmd] === "function" ? await fixtures[cmd](args) : fixtures[cmd]));
       return fallback(cmd);
     },
   };

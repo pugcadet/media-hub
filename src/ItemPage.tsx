@@ -12,7 +12,7 @@ import { askChoice, CardTile, Icon, type IconName, itemMenu, openMenu, scanLibra
 import { subSkipped, usePrefs } from "./prefs";
 import { artSkipped, CORE_ART, fixTitles, FixTarget, namingStatus, noSubsOf, safeFixes } from "./fixers";
 import { askFixes } from "./FixDialog";
-import { applyArt, askArt, fillOptional, rankImages } from "./ArtPicker";
+import { applyArt, askArt, fillOptional, lowRes, rankImages } from "./ArtPicker";
 import { askIdentify } from "./IdentifyDialog";
 import { askCrop, readPaste, showPreview, type CropSource } from "./ArtTools";
 import { numberYouTube } from "./youtube";
@@ -116,7 +116,7 @@ function tabFor(t: string | undefined): { tab: TabId; season?: string; action?: 
     case undefined: case "": case "main": case "cast": return { tab: "main" };
     case "identify": return { tab: "main", action: "identify" };
     case "rename": return { tab: "main", action: "rename" };
-    case "art": case "subs": case "intros": case "collection": case "episodes": return { tab: t };
+    case "art": case "subs": case "intros": case "episodes": return { tab: t };
     case "season": return { tab: "episodes" };
     default: return { tab: "episodes", season: t };
   }
@@ -242,7 +242,6 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
   tabs.push({ id: "art", label: "Artwork", icon: "image" });
   if (playable || isSeries || isSeason) tabs.push({ id: "subs", label: "Subtitles", icon: "subtitles" });
   if (isSeries || isSeason) tabs.push({ id: "intros", label: "Intros & credits", icon: "skip" });
-  if (kind) tabs.push({ id: "collection", label: "Collection", icon: "stack" });
   const shownTab: TabId = tabs.some((t) => t.id === tab) ? tab : "main";
 
   const save = () => void run("Saving…", () => api.saveMetadata(id, edits), "Saved.");
@@ -386,7 +385,6 @@ export default function ItemPage({ id, initialTab, tabNonce, onBack, onNav, subL
       {shownTab === "intros" && (isSeries
         ? <ShowIntros seriesId={id} canEdit={d.canEdit} />
         : isSeason && <IntrosTab seasonId={id} seasonName={item.Name} canEdit={d.canEdit} onSettings={() => onNav("settings")} />)}
-      {shownTab === "collection" && kind && <CollectionTab item={item} canEdit={d.canEdit} />}
     </div>
   );
 }
@@ -421,7 +419,11 @@ function useTitleState(d: Details, kind: "series" | "movie") {
     const clean = item.Id.replace(/-/g, "");
     api.namingCheckLast().then((r) => setCheck(r?.rows.find((x) => x.id === item.Id || x.id === clean) ?? null)).catch(() => setCheck(null));
     api.libraryHealth(false).then((h) => setRow(h.rows.find((x) => x.id === item.Id || x.id === clean) ?? null)).catch(() => setRow(null));
-    if (kind === "series") api.segmentSummary(item.Id).then(setSeg).catch(() => setSeg(null));
+    // The kept count first, then a fresh one (markers may have changed in Jellyfin since).
+    if (kind === "series") {
+      api.segmentSummary(item.Id).then(setSeg).catch(() => setSeg(null));
+      api.segmentSummary(item.Id, true).then(setSeg).catch(() => undefined);
+    }
   }, [item.Id, kind, epoch, itemEpoch]);
   const has = (k: ImageKind) => d.images.some((i) => i.ImageType === k);
   const identified = ["Tmdb", "Tvdb"].some((k) => !!item.ProviderIds?.[k]);
@@ -450,7 +452,7 @@ function TitleHealth({ d, kind, canEdit, subLangs, onTab, onIdentify }: { d: Det
     (() => { const n = namingStatus(check); return { ok: n.ok, label: !check ? "Names not checked" : n.ok === false ? (n.count ? `${n.count} name${n.count === 1 ? "" : "s"} to look at` : "Names couldn't be checked") : n.ok ? "Names right" : "Names: look again", go: () => nav.route({ view: "renamer", item: item.Id }) }; })(),
   ];
   if (kind === "series" && seg && seg.episodes > 0) {
-    chips.push({ ok: seg.intro >= seg.episodes * 0.8, label: seg.intro === 0 ? "No intro markers" : seg.intro >= seg.episodes ? "Intro markers" : `Intros in ${seg.intro} of ${seg.episodes}`, go: () => onTab("intros") });
+    chips.push({ ok: Math.max(seg.intro, seg.credits) >= seg.episodes * 0.8, label: seg.intro === 0 ? "No intro markers" : seg.intro >= seg.episodes ? "Intro markers" : `Intros in ${seg.intro} of ${seg.episodes}`, go: () => onTab("intros") });
   }
   const auto = safeFixes(target);
   const todo = chips.filter((c) => c.ok === false).length;
@@ -515,14 +517,15 @@ function StatusCards({ d, kind, onTab, onIdentify }: { d: Details; kind: "series
       <button className={ok === false ? "primary" : ""} disabled={!d.canEdit && ok === false} onClick={run}>{button}</button>
     </div>
   );
-  const introOk = seg ? seg.episodes > 0 && seg.intro >= seg.episodes * 0.8 : null;
+  // Some episodes simply have no intro: a show is fine when most episodes have intro or credits markers.
+  const introOk = seg ? seg.episodes > 0 && Math.max(seg.intro, seg.credits) >= seg.episodes * 0.8 : null;
   return (
     <div className="step-rows">
       {step(1, "Identify", identified, identified ? `Matched${ids.length ? `: ${ids.map(([k, v]) => `${k.toUpperCase()} ${v}`).join(" · ")}` : ""}` : "No match with TMDB or TVDB yet", identified ? "Change" : "Identify", onIdentify)}
       {step(2, "Artwork", missingArt.length === 0, missingArt.length ? `Missing: ${missingArt.map((k) => artNames[k]).join(", ")}` : "Poster, background, logo and thumbnail are there", missingArt.length ? "Add artwork" : "Change", () => onTab("art"))}
       {step(3, "Naming", naming.ok, <span title={naming.line}>{naming.line}</span>, naming.ok === false ? (check && check.toRename + check.folders > 0 ? `Fix names (${check.toRename + check.folders})` : "Look at names") : "Open", () => nav.route({ view: "renamer", item: item.Id }))}
       {step(4, "Subtitles", kind === "series" && !row ? null : noSubs === 0, kind === "movie" ? (noSubs ? "No subtitles in your language yet" : "Subtitles in your language are there") : row ? (noSubs ? `${noSubs} of ${row.videos} episodes without your language` : `All ${row.videos} episodes have them`) : "Not checked yet", noSubs ? "Find subtitles" : "Open", () => onTab("subs"))}
-      {kind === "series" && step(5, "Intros", introOk, seg ? `${seg.intro} of ${seg.episodes} episodes have an intro · ${seg.credits} have credits` : "Not read yet", introOk ? "Open" : "Set intros", () => onTab("intros"))}
+      {kind === "series" && step(5, "Intros", introOk, seg ? `Of ${seg.episodes} episodes: ${seg.intro} with an intro, ${seg.credits} with credits` : "Not read yet", introOk ? "Open" : "Set intros", () => onTab("intros"))}
     </div>
   );
 }
@@ -689,7 +692,7 @@ function ArtworkTab({ d, title }: { d: Details; title: string }) {
   }
 
 
-  const opts = (options ?? []).filter((o) => o.Url);
+  const opts = rankImages(options ?? [], kind, "en");
   const shown = opts.slice(0, showAll ? 80 : 12);
   return (
     <div className="stack">
@@ -742,7 +745,7 @@ function ArtworkTab({ d, title }: { d: Details; title: string }) {
                   {kind === "Backdrop" && idx === 0 && current.length > 1 && <span className="flag ok">Main</span>}
                 </button>
                 <div className="row">
-                  <span className="muted small grow">{img.Width ? `${img.Width}×${img.Height}` : ""}</span>
+                  <span className={`small grow ${lowRes(img, kind) ? "warn-t" : "muted"}`} title={lowRes(img, kind) ? "Too small: it looks blurry in apps. Pick a sharper one below." : undefined}>{img.Width ? `${img.Width}×${img.Height}` : ""}{lowRes(img, kind) ? " · low quality, pick a sharper one" : ""}</span>
                   {kind === "Backdrop" && idx > 0 && <button className="mini-btn" disabled={!canEdit || !!saving} onClick={() => void act("Making it the main backdrop", () => api.mainBackdrop(id, idx))}>Make main</button>}
                   <button className="mini-btn danger-outline" disabled={!canEdit || !!saving} onClick={() => void askConfirm(`Remove this ${info.label.toLowerCase()}? A copy is kept so you can undo it.`, { okLabel: "Remove", danger: true }).then((ok) => { if (ok) void act(`Removing ${info.label.toLowerCase()}`, () => api.removeImage(id, kind, idx)); })}>Remove</button>
                 </div>
@@ -782,7 +785,7 @@ function ArtworkTab({ d, title }: { d: Details; title: string }) {
             <div key={o.Url} className="art-opt-wrap">
               <button className={`art-opt ${info.wide ? "wide" : ""}`} disabled={!canEdit || !!saving} onClick={() => void act(`Using new ${info.label.toLowerCase()}`, async () => { await api.setImage(id, kind, o.Url!); await fillOptional(id); })} title={`${o.ProviderName ?? ""} ${o.Width ? `${o.Width}×${o.Height}` : ""} ${o.Language ?? ""}`}>
                 <img src={remoteImageUrl(o.ThumbnailUrl || o.Url!)} alt="" loading="lazy" />
-                <span className="src">{o.ProviderName?.replace("TheMovieDb", "TMDB").replace("TheTVDB", "TVDB") ?? ""}{o.Language ? ` · ${o.Language}` : ""}{o.Width ? ` · ${o.Width}` : ""}</span>
+                <span className={`src ${lowRes(o, kind) ? "low" : ""}`}>{o.ProviderName?.replace("TheMovieDb", "TMDB").replace("TheTVDB", "TVDB") ?? ""}{o.Language ? ` · ${o.Language}` : ""}{o.Width ? ` · ${o.Width}×${o.Height}` : ""}{lowRes(o, kind) ? " · low quality" : ""}</span>
               </button>
               <button className="expand on-opt" aria-label="Show big" onClick={() => showPicture(remoteImageUrl(o.Url!), `${title} · ${info.label} · ${o.ProviderName ?? ""} ${o.Width ? `${o.Width}×${o.Height}` : ""}`)}><Icon name="expand" size={14} /></button>
             </div>
@@ -1134,52 +1137,6 @@ function SeasonPanel({ season, canEdit, subLangs }: { season: JfItem; canEdit: b
   );
 }
 
-/* ------------------------------------------------------------- collections */
-
-/** The collections a title is in: open one, add it to another, take it out. */
-function CollectionTab({ item, canEdit }: { item: JfItem; canEdit: boolean }) {
-  const itemEpoch = useItemEpoch(item.Id);
-  const [list, setList] = useState<Card[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const load = useCallback(() => api.collectionsOf(item.Id).then(setList).catch((e) => setError(errorText(e))), [item.Id]);
-  useEffect(() => void load(), [load, itemEpoch]);
-
-  async function add() {
-    const all = await api.collections().catch(() => [] as Card[]);
-    const have = new Set((list ?? []).map((c) => c.id));
-    const r = await askChoice(`Add ${cleanTitle(item.Name)} to a collection`, all.filter((c) => !have.has(c.id)).map((c) => ({ value: c.id, label: c.title, hint: c.subtitle })), { label: "Or make a new one", placeholder: "e.g. Pixar, Christmas", okLabel: "Create" });
-    if (!r) return;
-    await track("Adding to collection", async () => {
-      if ("value" in r) await api.collectionAdd(r.value, [item.Id]);
-      else if (r.text.trim()) await api.collectionCreate(r.text.trim(), [item.Id]);
-    }, { items: [item.Id] }).catch((e) => setError(errorText(e)));
-    void load();
-  }
-
-  async function remove(c: Card) {
-    if (!(await askConfirm(`Take ${cleanTitle(item.Name)} out of “${c.title}”?`, { okLabel: "Take out" }))) return;
-    await track("Removing from collection", () => api.collectionRemove(c.id, [item.Id]), { items: [item.Id, c.id] }).catch((e) => setError(errorText(e)));
-    void load();
-  }
-
-  return (
-    <div className="stack">
-      <div className="row between">
-        <span className="muted small">{list === null ? "Looking…" : list.length ? `In ${list.length} collection${list.length === 1 ? "" : "s"}. Collections show up in Infuse too.` : "Not in a collection."}</span>
-        <button className="primary" disabled={!canEdit} onClick={() => void add()}><Icon name="plus" /> Add to a collection…</button>
-      </div>
-      {error && <p className="error">{error}</p>}
-      <div className="grid">
-        {(list ?? []).map((c) => (
-          <div key={c.id} className="coll-member">
-            <CardTile c={c} canEdit={canEdit} onOpen={() => nav.open(c.id)} />
-            {canEdit && <button className="mini-btn danger-outline" onClick={() => void remove(c)}>Take out</button>}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 /** A collection's own page: the titles in it. */
 function BoxSetTitles({ id, canEdit }: { id: string; canEdit: boolean }) {

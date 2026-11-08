@@ -35,13 +35,17 @@ function close(r: ArtChoice | null) {
   c?.resolve(r);
 }
 
+/** Narrower than this and a picture looks blurry where apps show it (same as Media Hub's own pick). */
+const MIN_WIDTH: Record<string, number> = { Logo: 400, Backdrop: 1280, Thumb: 640, Banner: 600 };
+export const lowRes = (o: { Width?: number | null }, kind: string) => !!o.Width && o.Width < (MIN_WIDTH[kind] ?? 500);
+
 /** Same order as Media Hub's own pick: your language (no text for backgrounds), rating, votes, size. */
 export function rankImages(options: RemoteImage[], kind: string, lang: string): RemoteImage[] {
   const l2 = lang.slice(0, 2).toLowerCase();
   const score = (o: RemoteImage) => {
     const l = (o.Language ?? "").toLowerCase();
     const ls = kind === "Backdrop" ? (!l ? 3 : l === l2 ? 2 : 0) : l === l2 ? 3 : l === "en" ? 2 : !l ? 1 : 0;
-    return ls * 100 + (o.CommunityRating ?? 0) * 5 + Math.min(o.VoteCount ?? 0, 50) * 0.2 + Math.min((o.Width ?? 0) / 1000, 4);
+    return (lowRes(o, kind) ? -250 : 0) + ls * 100 + (o.CommunityRating ?? 0) * 5 + Math.min(o.VoteCount ?? 0, 50) * 0.2 + Math.min((o.Width ?? 0) / 1000, 4);
   };
   return options.filter((o) => o.Url).sort((a, b) => score(b) - score(a));
 }

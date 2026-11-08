@@ -1023,6 +1023,8 @@ export const api = {
   serverOverview: () => invoke<ServerOverview>("server_overview"),
   serverTaskRun: (id: string) => invoke<void>("server_task_run", { id }),
   serverTaskStop: (id: string) => invoke<void>("server_task_stop", { id }),
+  /** Installs every plugin update; returns "Name version" per plugin. They work after a restart. */
+  serverUpdatePlugins: () => invoke<string[]>("server_update_plugins"),
   serverTaskRunKey: (key: string) => invoke<void>("server_task_run_key", { key }),
   serverRestart: () => invoke<void>("server_restart"),
   picksLeftovers: () => invoke<number>("picks_leftovers"),
@@ -1037,6 +1039,8 @@ export const api = {
   collectionItems: (id: string) => invoke<Card[]>("collection_items", { id }),
   /** Every collection's titles (lower case), keyed by collection id without dashes. */
   collectionMembers: () => invoke<Record<string, string[]>>("collection_members"),
+  /** Removes collections with nothing in them; returns how many (Undo in History makes them again). */
+  collectionsRemoveEmpty: () => invoke<number>("collections_remove_empty"),
   similar: (id: string) => invoke<Card[]>("similar_items", { id }),
   personItems: (id: string) => invoke<Card[]>("person_items", { id }),
   collectionCreate: (name: string, ids: string[]) => invoke<string>("collection_create", { name, ids }),

@@ -44,6 +44,14 @@ fn read_segs(list: &[Value]) -> Vec<Seg> {
         .collect()
 }
 
+/// An episode you have: Jellyfin also lists ones it knows of but that aren't in your folder
+/// ("missing" episodes from TVDB); those have no file and are left out.
+fn real_episode(e: &Value) -> bool {
+    e.get("Type").and_then(Value::as_str) == Some("Episode")
+        && e.get("LocationType").and_then(Value::as_str) != Some("Virtual")
+        && e.get("IsMissing").and_then(Value::as_bool) != Some(true)
+}
+
 /// Does this marker fit in the episode? (Intro Skipper sometimes stores credits from 0:00 over
 /// the whole episode, or past its end.)
 fn plausible(s: &Seg, duration: f64) -> bool {
@@ -90,7 +98,7 @@ async fn reader(state: &AppState) -> Result<crate::jellyfin::Client> {
 pub async fn segments_overview(state: State<'_, AppState>, season_id: String) -> Result<Overview> {
     let c = reader(&state).await?;
     let children = c.children(&season_id).await?;
-    let eps: Vec<&Value> = children.iter().filter(|e| e.get("Type").and_then(Value::as_str) == Some("Episode")).collect();
+    let eps: Vec<&Value> = children.iter().filter(|e| real_episode(e)).collect();
     // Every episode's markers asked for at once (one at a time made a season slow to open).
     let tasks: Vec<_> = eps
         .iter()
@@ -184,7 +192,7 @@ pub async fn detect_season(
     let children = c.children(&season_id).await?;
     let episodes: Vec<&Value> = children
         .iter()
-        .filter(|e| e.get("Type").and_then(Value::as_str) == Some("Episode"))
+        .filter(|e| real_episode(e))
         .collect();
     // Only some episodes asked for: those, plus the 3 nearest others to compare with (an intro
     // is found by hearing the same music in several episodes). The rest isn't listened to.

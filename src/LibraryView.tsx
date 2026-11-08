@@ -11,6 +11,7 @@ import { artSkipped, fixTitles, FixKind, targetOf } from "./fixers";
 import { askFixes } from "./FixDialog";
 import { Studio, StudioItem } from "./Studio";
 import ItemPage from "./ItemPage";
+import { askConfirm } from "./confirm";
 import { askChoice, Icon, type IconName, Img, itemMenu, openMenu, reloadData, type MenuItem } from "./ui";
 import { askIdentify } from "./IdentifyDialog";
 import { namingLeftAlone, prefs, setPrefs, usePrefs } from "./prefs";
@@ -448,6 +449,7 @@ function CollectionsView({ canEdit, top, view, toggle }: { canEdit: boolean; top
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = usePageState("collections.query", "");
   const [members, setMembers] = useState<Record<string, string[]> | null>(COLL_CACHE.members);
+  const [note, setNote] = useState<string | null>(null);
   useEffect(() => {
     api.collections().then((l) => { COLL_CACHE.list = l; setList(l); }).catch((e) => setError(errorText(e)));
   }, [epoch]);
@@ -459,6 +461,18 @@ function CollectionsView({ canEdit, top, view, toggle }: { canEdit: boolean; top
     return () => { live = false; };
   }, [query, members]);
   useEffect(() => { COLL_CACHE.members = null; setMembers(null); }, [epoch]);
+
+  async function removeEmpty() {
+    if (!(await askConfirm("Remove the collections that have nothing in them?\n\nNo titles are touched. Each one goes into History, where Undo makes it again.", { okLabel: "Remove empty ones" }))) return;
+    try {
+      const n = await track("Removing empty collections", () => api.collectionsRemoveEmpty());
+      COLL_CACHE.list = null;
+      setNote(n ? `${n} empty collection${n === 1 ? "" : "s"} removed.` : "No empty collections found.");
+      api.collections().then((l) => { COLL_CACHE.list = l; setList(l); }).catch(() => undefined);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
 
   async function create() {
     const r = await askChoice("New collection", [], { label: "Name", placeholder: "e.g. Pixar, Christmas, Marvel", okLabel: "Create" });
@@ -496,6 +510,7 @@ function CollectionsView({ canEdit, top, view, toggle }: { canEdit: boolean; top
           <span className="spacer" />
           {noArt.length > 0 && <button disabled={!canEdit} onClick={() => void fillArt()}><Icon name="image" /> Fill missing artwork ({noArt.length})</button>}
           <button disabled={!canEdit} onClick={() => void create()}><Icon name="plus" /> New collection</button>
+          <button className="ghost" disabled={!canEdit} title="Removes collections that have nothing in them" onClick={() => void removeEmpty()}>Remove empty ones</button>
           <SearchBox value={query} onChange={setQuery} placeholder="Find a collection or movie" />
           {toggle}
         </div>
@@ -503,7 +518,8 @@ function CollectionsView({ canEdit, top, view, toggle }: { canEdit: boolean; top
       <div className="lib-body pad">
         {error && <p className="error">{error}</p>}
         {!members && q && <p className="muted small"><span className="spinner small-spin" /> Looking inside the collections…</p>}
-        {list && list.length === 0 && <p className="muted">No collections yet. Make one here, or use the Collection tab of a movie.</p>}
+        {note && <p className="note">{note}</p>}
+        {list && list.length === 0 && <p className="muted">No collections yet. Make one here with New collection.</p>}
         {list && list.length > 0 && shown.length === 0 && !!members && <p className="muted">No collection has “{query}” in its name or among its movies.</p>}
         {view === "tiles" ? (
           <div className="lib-grid" style={{ ["--tile" as string]: "160px" }}>

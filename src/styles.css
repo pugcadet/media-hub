@@ -346,8 +346,10 @@ details ol { padding-left: 20px; }
 .picker-row.up:hover { background: var(--panel2); }
 .picker-open { all: unset; flex: 1; display: flex; align-items: center; gap: 10px; padding: 9px 10px; cursor: pointer; min-width: 0; }
 .picker-open span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.small-btn { height: 30px; padding: 0 12px; font-size: 12px; opacity: 0; }
-.picker-row:hover .small-btn, .small-btn:focus-visible { opacity: 1; }
+.small-btn { height: 30px; padding: 0 12px; font-size: 12px; }
+/* Only in picker rows they appear on hover; everywhere else they're always visible. */
+.picker-row .small-btn { opacity: 0; }
+.picker-row:hover .small-btn, .picker-row .small-btn:focus-visible { opacity: 1; }
 .ico { width: 20px; text-align: center; flex: 0 0 20px; }
 .chosen { display: flex; align-items: center; gap: 12px; padding: 12px 16px; flex-wrap: wrap; }
 .grow { flex: 1; min-width: 0; }
@@ -2559,3 +2561,4 @@ button.warn-btn { background: var(--amber); color: #1a1206; border: 0; font-weig
 button.link-plain.sx-name { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; overflow: hidden; padding: 8px 0; }
 button.link-plain.sx-name > span { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sx-detail .seg-preview { padding: 0; }
+.art-opt .src.low { color: #f5c46b; }

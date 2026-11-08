@@ -129,7 +129,8 @@ export default function Dashboard({ status }: { status: Status }) {
     if (HOME.epoch === epoch && Date.now() - HOME.at < 60_000) return;
     HOME.epoch = epoch;
     HOME.at = Date.now();
-    api.inboxScan().then(([dir, items]) => setInbox({ dir, items })).catch(() => setInbox({ dir: null, items: [] }));
+    // The folder can't be read right now (drive asleep, VPN): it's still chosen, so keep it.
+    api.inboxScan().then(([dir, items]) => setInbox({ dir, items })).catch(() => setInbox({ dir: inbox?.dir ?? "(not reachable right now)", items: inbox?.items ?? [] }));
     api.homeFeed().then((f) => setRecent(f.recent)).catch(() => undefined);
     api.serverOverview().then(setServer).catch(() => setServer(null));
     api.healthAlerts().then(setAlerts).catch(() => undefined);

@@ -236,10 +236,18 @@ pub async fn server_overview(state: State<'_, AppState>) -> Result<ServerOvervie
     let version = s(&info, "Version").to_string();
     let catalog_ok = packages.as_ref().map(|p| !p.is_empty()).unwrap_or(false);
     let packages = packages.unwrap_or_default();
-    let plugins = plugins
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(name, v, status)| ServerPlugin { update: best_update(&packages, &name, &v, &version), name, version: v, status })
+    // A newer version already installed and waiting for a restart: no update to offer for it.
+    let all = plugins.unwrap_or_default();
+    let newest = |name: &str| all.iter().filter(|(n, _, _)| n.eq_ignore_ascii_case(name)).map(|(_, v, _)| v.clone()).fold(String::new(), |a, b| if a.is_empty() || newer(&b, &a) { b } else { a });
+    let mut seen = std::collections::HashSet::new();
+    let plugins = all
+        .iter()
+        .filter(|(name, _, _)| seen.insert(name.to_lowercase()))
+        .map(|(name, _, _)| {
+            let v = newest(name);
+            let status = all.iter().find(|(n, x, _)| n.eq_ignore_ascii_case(name) && *x == v).map(|t| t.2.clone()).unwrap_or_default();
+            ServerPlugin { update: best_update(&packages, name, &v, &version), name: name.clone(), version: v, status }
+        })
         .collect();
     let tasks = tasks
         .unwrap_or_default()
@@ -310,6 +318,31 @@ pub async fn server_task_run(state: State<'_, AppState>, id: String) -> Result<(
 #[tauri::command]
 pub async fn server_task_stop(state: State<'_, AppState>, id: String) -> Result<()> {
     state.writer().await?.stop_task(&id).await
+}
+
+/// Installs the newest version this server can run of every plugin that has one. Returns
+/// "Name version" for each; they work after Jellyfin restarts.
+#[tauri::command]
+pub async fn server_update_plugins(state: State<'_, AppState>) -> Result<Vec<String>> {
+    let w = state.writer().await?;
+    let c = w.reader();
+    let version = s(&c.system_info_raw().await?, "Version").to_string();
+    let packages = c.packages().await?;
+    let mut done = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let installed = c.plugins().await?;
+    for (name, v, _) in &installed {
+        if !seen.insert(name.to_lowercase()) {
+            continue;
+        }
+        let newest = installed.iter().filter(|(n, _, _)| n.eq_ignore_ascii_case(name)).map(|(_, x, _)| x.clone()).fold(v.clone(), |a, b| if newer(&b, &a) { b } else { a });
+        let Some(up) = best_update(&packages, name, &newest, &version) else { continue };
+        let Some(pkg) = packages.iter().find(|p| s(p, "name").eq_ignore_ascii_case(name)) else { continue };
+        let repo = pkg.get("versions").and_then(|x| x.as_array()).into_iter().flatten().find(|x| s(x, "version") == up).map(|x| s(x, "repositoryUrl").to_string()).unwrap_or_default();
+        w.install_package(s(pkg, "name"), s(pkg, "guid"), &up, &repo).await?;
+        done.push(format!("{name} {up}"));
+    }
+    Ok(done)
 }
 
 /// Runs the task with this key ("RefreshLibrary", "PluginUpdates" …).

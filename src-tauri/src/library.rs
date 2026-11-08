@@ -1026,6 +1026,16 @@ pub struct SegSummary {
     intro: usize,
     credits: usize,
     recap: usize,
+    /// When it was counted (seconds). Markers can change outside Media Hub (Intro Skipper's own
+    /// analysis, Jellyfin), so a count older than a few hours is counted again.
+    #[serde(default)]
+    at: u64,
+}
+
+const SEG_FRESH_SECS: u64 = 6 * 3600;
+
+fn now_secs_u() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// Intro/credits coverage per show, kept on disk so the Library can filter on it at once.
@@ -1066,7 +1076,7 @@ async fn seg_compute(c: &Client, series_id: &str) -> Result<SegSummary> {
     let mut sum = SegSummary::default();
     for e in &eps {
         let id = clean_id(s(e, "Id"));
-        if !valid_item_id(&id) || s(e, "LocationType") == "Virtual" {
+        if !valid_item_id(&id) || s(e, "LocationType") == "Virtual" || e.get("IsMissing").and_then(Value::as_bool) == Some(true) {
             continue;
         }
         sum.episodes += 1;
@@ -1076,6 +1086,7 @@ async fn seg_compute(c: &Client, series_id: &str) -> Result<SegSummary> {
         sum.credits += has("Outro") as usize;
         sum.recap += has("Recap") as usize;
     }
+    sum.at = now_secs_u();
     Ok(sum)
 }
 
@@ -1085,7 +1096,7 @@ pub async fn segment_summary(state: State<'_, AppState>, series_id: String, fres
     check_id(&series_id)?;
     let id = clean_id(&series_id);
     if !fresh.unwrap_or(false) {
-        if let Some(v) = seg_with(&state.dir, |m| m.get(&id).cloned()) {
+        if let Some(v) = seg_with(&state.dir, |m| m.get(&id).cloned()).filter(|v| now_secs_u().saturating_sub(v.at) < SEG_FRESH_SECS) {
             return Ok(v);
         }
     }
@@ -1102,6 +1113,10 @@ pub async fn segment_summary(state: State<'_, AppState>, series_id: String, fres
 pub async fn segment_coverage(app: AppHandle, state: State<'_, AppState>, ids: Vec<String>, fill: bool) -> Result<HashMap<String, SegSummary>> {
     let ids: Vec<String> = ids.iter().filter(|i| valid_item_id(i)).map(|i| clean_id(i)).collect();
     let mut out: HashMap<String, SegSummary> = seg_with(&state.dir, |m| ids.iter().filter_map(|i| m.get(i).map(|v| (i.clone(), v.clone()))).collect());
+    // Counted long ago: read again when filling (markers may have changed outside Media Hub).
+    if fill {
+        out.retain(|_, v| now_secs_u().saturating_sub(v.at) < SEG_FRESH_SECS);
+    }
     if !fill {
         return Ok(out);
     }

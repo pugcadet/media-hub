@@ -106,9 +106,18 @@ export default function Folders({ status }: { status: Status }) {
   const [error, setError] = useState<string | null>(null);
   const [musicN, setMusicN] = useState(0);
 
+  const [topsError, setTopsError] = useState<string | null>(null);
   useEffect(() => {
-    api.folders("").then((f) => setTops(f.map((x) => x.name))).catch(() => setTops([]));
-  }, []);
+    let t = 0;
+    const read = (again: boolean) => api.folders("").then((f) => { setTopsError(null); setTops(f.map((x) => x.name)); }).catch((e) => {
+      setTopsError(errorText(e));
+      setTops([]);
+      // The NAS may still be waking up: once more in a few seconds.
+      if (again) t = window.setTimeout(() => void read(false), 5000);
+    });
+    void read(true);
+    return () => window.clearTimeout(t);
+  }, [musicN]);
 
   async function look() {
     setError(null);
@@ -150,7 +159,10 @@ export default function Folders({ status }: { status: Status }) {
     const mv = (movies?.data ?? []).filter((m) => m.top === t && movieNeeds(m, p.keepCollections)).length;
     return shows + mv;
   };
-  const list = tops ?? [];
+  // The main folders as the NAS lists them; when that can't be read right now, the ones the
+  // last check found (so the tab never goes blank).
+  const fromCheck = [...new Set([...(structure?.data ?? []).map((x) => x.folder), ...(movies?.data ?? []).map((m) => m.top)])].sort();
+  const list = tops && tops.length ? tops : fromCheck;
   const active = sel && list.includes(sel) ? sel : list.find((t) => todoOf(t) > 0) ?? list[0] ?? null;
 
   if (!status.libraryRoot) return <p className="note">Choose your library folder in Settings first.</p>;
@@ -164,6 +176,8 @@ export default function Folders({ status }: { status: Status }) {
         <button disabled={checking} onClick={() => void look()}>{checking ? <span className="spinner small-spin" /> : <Icon name="reload" />} Refresh</button>
       </div>
       {error && <p className="error">{error}</p>}
+      {topsError && <p className="error">Couldn't read the folders on the NAS: {topsError} <button className="link" onClick={() => setMusicN((x) => x + 1)}>Try again</button></p>}
+      {tops !== null && list.length === 0 && !topsError && !checking && <div className="card form"><p className="muted">No folders found in your library folder ({status.libraryRoot}). <button className="link" onClick={() => void look()}>Look again</button></p></div>}
       {active && (
         <details className="folders-options small">
           <summary className="muted">Options for {active}</summary>

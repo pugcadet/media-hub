@@ -78,7 +78,9 @@ pub fn root_problem(root: &str) -> Option<String> {
     static LAST: Mutex<Option<(std::time::Instant, String, Option<String>)>> = Mutex::new(None);
     if let Ok(g) = LAST.lock() {
         if let Some((at, r, ans)) = g.as_ref() {
-            if r == root && at.elapsed() < std::time::Duration::from_secs(10) {
+            // A good answer is kept 10 seconds; a problem only 2, so a waking NAS is seen soon.
+            let keep = if ans.is_none() { 10 } else { 2 };
+            if r == root && at.elapsed() < std::time::Duration::from_secs(keep) {
                 return ans.clone();
             }
         }

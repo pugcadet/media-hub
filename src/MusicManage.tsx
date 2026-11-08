@@ -212,6 +212,30 @@ function AlbumDetail({ album, changed }: { album: MusicItem; changed: () => void
       setBusy(false);
     }
   }
+  /** Numbers the songs 1, 2, 3… in the order shown (the ticked ones, or all), written into the files. */
+  async function numberInOrder() {
+    const ids = (tracks ?? []).map((t) => t.id).filter((id) => !picked.size || picked.has(id));
+    if (!(await askConfirm(`Number ${picked.size ? `the ${ids.length} ticked songs` : `all ${ids.length} songs`} 1 to ${ids.length}, in the order shown?\n\nWritten into the files; History can put the old numbers back.`, { okLabel: "Number them" }))) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const files = new Map(await api.musicAlbumFiles(album.id));
+      const changes: [string, string, string | null][] = [];
+      ids.forEach((id, i) => {
+        const f = files.get(id);
+        if (f) changes.push([f, "track", String(i + 1)]);
+      });
+      if (!changes.length) throw new Error("These songs' files weren't found on this computer.");
+      await track("Numbering songs in order", () => api.musicTagsApply(album.id, changes), { reload: false });
+      setPicked(new Set());
+      setN((x) => x + 1);
+      changed();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   const set = (id: string, k: keyof Draft, v: string) => setDrafts((d) => ({ ...d, [id]: { ...d[id], [k]: v } }));
   const dirty = albumDirty || changedTracks.length > 0;
   return (
@@ -244,6 +268,7 @@ function AlbumDetail({ album, changed }: { album: MusicItem; changed: () => void
           <label className="check small"><input type="checkbox" checked={picked.size === tracks.length} ref={(el) => { if (el) el.indeterminate = picked.size > 0 && picked.size < tracks.length; }} onChange={(e) => setPicked(e.target.checked ? new Set(tracks.map((t) => t.id)) : new Set())} />{picked.size ? `${picked.size} selected` : "Select songs"}</label>
           <span className="spacer" />
           <span className="muted small">{picked.size ? `For the ${picked.size} ticked:` : "For all songs:"}</span>
+          <button className="small-btn" disabled={busy || !tracks.length} onClick={() => void numberInOrder()}>Number in order</button>
           <button className="small-btn" disabled={busy || !tracks.length} onClick={() => void clearNums(["disc"])}>Clear disc number</button>
           <button className="small-btn" disabled={busy || !tracks.length} onClick={() => void clearNums(["track"])}>Clear song number</button>
           <button className="small-btn" disabled={busy || !tracks.length} onClick={() => void clearNums(["disc", "track"])}>Clear both</button>

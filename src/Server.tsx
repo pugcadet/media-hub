@@ -60,6 +60,7 @@ export default function Server({ status }: { status: Status }) {
     }
   }
 
+  const [installed, setInstalled] = useState<string[]>([]);
   const readOnly = status.readOnly;
   const updates = data?.plugins.filter((p) => p.update) ?? [];
   const broken = data?.plugins.filter((p) => /malfunction|notsupported|superceded|superseded/i.test(p.status)) ?? [];
@@ -127,12 +128,24 @@ export default function Server({ status }: { status: Status }) {
               <div className="row between">
                 <h2>Plugins</h2>
                 {updates.length > 0 && (
-                  <button className="primary" disabled={readOnly || busy === "plugins"} onClick={() => void act("plugins", "Updating plugins", () => api.serverTaskRunKey("PluginUpdates"))}>
-                    {busy === "plugins" ? <span className="spinner small-spin" /> : null} Update {updates.length}
+                  <button className="primary" disabled={readOnly || busy === "plugins"} onClick={() => void act("plugins", `Updating ${updates.map((u) => u.name).join(", ")}`, async () => { setInstalled(await api.serverUpdatePlugins()); })}>
+                    {busy === "plugins" ? <span className="spinner small-spin" /> : null} Update {updates.length === 1 ? updates[0].name : `${updates.length} plugins`}
                   </button>
                 )}
               </div>
-              {updates.length > 0 && <p className="muted small">After updating, Jellyfin needs a restart for the new versions to work.</p>}
+              {updates.length > 0 && (
+                <div className="stack-xs">
+                  {updates.map((u) => <div key={u.name} className="small"><b>{u.name}</b> <span className="muted">{u.version} → {u.update}</span></div>)}
+                  <p className="muted small">Jellyfin needs a restart after updating for the new versions to work.</p>
+                </div>
+              )}
+              {installed.length > 0 && (
+                <div className="home-notice">
+                  <b>Installed: {installed.join(", ")}</b>
+                  <span className="grow">Restart Jellyfin to finish.</span>
+                  <button className="link" disabled={readOnly} onClick={() => void restart()}>Restart</button>
+                </div>
+              )}
               {NEEDED.map((r) => {
                 const p = has(r.names);
                 return (

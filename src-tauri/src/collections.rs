@@ -257,8 +257,34 @@ pub async fn undo(w: &Writer, id: &str, what: &str, ids_json: &str) -> Result<()
         "removed" => w.collection_add(id, &ids).await,
         // Only ever removes the collection this app made; the titles in it stay.
         "created" => w.collection_delete(id).await,
+        // An empty collection that was removed: made again under its name (still empty).
+        x if x.starts_with("deleted:") => w.collection_create(&x["deleted:".len()..], &[]).await.map(|_| ()),
         _ => Err(Error::msg("bad journal entry")),
     }
+}
+
+/// Removes the collections with nothing in them (they show up as empty tiles). Each one goes
+/// into History, where Undo makes it again. Returns how many.
+#[tauri::command]
+pub async fn collections_remove_empty(state: State<'_, AppState>) -> Result<usize> {
+    let w = state.writer().await?;
+    forget_members();
+    let m = membership(w.reader()).await?;
+    let mut n = 0;
+    for col in &m.collections {
+        let id = s(col, "Id").replace('-', "");
+        let name = s(col, "Name").to_string();
+        if !valid_item_id(&id) || name.is_empty() || name == PICKS_NAME || !m.items.get(&id).is_some_and(|v| v.is_empty()) {
+            continue;
+        }
+        let entry = state.store()?.journal_add("collection", &id, &format!("deleted:{name}"), "[]")?;
+        match w.collection_delete(&id).await {
+            Ok(()) => n += 1,
+            Err(_) => state.store()?.journal_delete(entry)?,
+        }
+    }
+    forget_members();
+    Ok(n)
 }
 
 pub const PICKS_NAME: &str = "Picks of the day";

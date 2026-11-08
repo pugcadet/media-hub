@@ -105,7 +105,20 @@ export interface JobHandle {
  * "import"); `cancellable` lets `work` check `job.cancelled` between its own steps.
  * Either way the screen stops waiting right away and the job rejects with STOPPED.
  */
-export async function track<T>(label: string, work: (job: JobHandle) => Promise<T>, opts: { reload?: boolean; cancellable?: boolean; stop?: string; items?: (string | null | undefined)[] } = {}): Promise<T> {
+/** Jobs running right now, by their label: the same action clicked again joins the running one
+ * instead of starting a second (one progress line, one piece of work). */
+const RUNNING = new Map<string, Promise<unknown>>();
+
+export function track<T>(label: string, work: (job: JobHandle) => Promise<T>, opts: { reload?: boolean; cancellable?: boolean; stop?: string; items?: (string | null | undefined)[] } = {}): Promise<T> {
+  const key = `${label}|${(opts.items ?? []).filter(Boolean).join(",")}`;
+  const already = RUNNING.get(key);
+  if (already) return already as Promise<T>;
+  const p = runTracked(label, work, opts).finally(() => RUNNING.delete(key));
+  RUNNING.set(key, p);
+  return p;
+}
+
+async function runTracked<T>(label: string, work: (job: JobHandle) => Promise<T>, opts: { reload?: boolean; cancellable?: boolean; stop?: string; items?: (string | null | undefined)[] }): Promise<T> {
   const id = nextId++;
   let cancelled = false;
   let abort: (e: unknown) => void = () => undefined;

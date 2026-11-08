@@ -22,7 +22,7 @@ export function titleState(r: HealthRow & { check?: CheckRow | null; seg?: SegSu
     case "identified": return r.identified;
     case "artwork": return TITLE_ART.every((a) => r[a.key] || artSkipped(r.id).includes(a.kind));
     case "subtitles": return noSubsOf(r) === 0;
-    case "intros": return r.kind !== "series" ? null : r.seg ? r.seg.episodes === 0 || r.seg.intro >= r.seg.episodes * 0.8 : null;
+    case "intros": return r.kind !== "series" ? null : r.seg ? r.seg.episodes === 0 || Math.max(r.seg.intro, r.seg.credits) >= r.seg.episodes * 0.8 : null;
   }
 }
 

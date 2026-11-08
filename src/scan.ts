@@ -252,7 +252,7 @@ export async function scanEverything(status: Status, opts: { force?: boolean } =
         });
         const cov = await api.segmentCoverage(series.map((r) => r.id), true);
         const known = Object.values(cov);
-        savePart("intros", { at: Date.now(), shows: series.length, known: known.length, withoutIntro: known.filter((c) => c.episodes > 0 && c.intro < c.episodes * 0.8).length });
+        savePart("intros", { at: Date.now(), shows: series.length, known: known.length, withoutIntro: known.filter((c) => c.episodes > 0 && Math.max(c.intro, c.credits) < c.episodes * 0.8).length });
       });
       lanePart("Intro markers checked");
       // 8. Episodes without a picture.

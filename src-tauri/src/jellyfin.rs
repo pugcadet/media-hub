@@ -582,6 +582,11 @@ pub struct SegRead {
 /// The provider id the Segment Editor writes under (Intro Skipper's own).
 pub const EDITOR_PROVIDER: &str = "IntroSkipper";
 
+/// A plugin name in a path ("Intro Skipper" → "Intro%20Skipper").
+fn urlencoding_name(name: &str) -> String {
+    name.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
 /// Where the MediaSegments API plugin accepts new segments and deletions. Found in the
 /// server's own API description, so the app adapts to the installed plugin version.
 #[derive(Debug, Clone, PartialEq)]
@@ -1747,6 +1752,20 @@ impl Writer {
         }
         let req = self.c.http.post(self.c.url(&format!("/ScheduledTasks/{task_id}/Triggers"))).json(triggers);
         self.c.send(req).await.map(|_| ())
+    }
+
+    /// Installs one version of a plugin from Jellyfin's catalogue (it works after a restart).
+    pub async fn install_package(&self, name: &str, guid: &str, version: &str, repository: &str) -> Result<()> {
+        let ok = |x: &str| !x.is_empty() && x.len() < 200 && !x.contains(['/', '\\', '?', '#']);
+        if !ok(name) || !ok(version) || !guid.chars().all(|c| c.is_ascii_hexdigit() || c == '-') || guid.is_empty() {
+            return Err(Error::msg("bad package"));
+        }
+        let mut q = vec![("assemblyGuid", guid.to_string()), ("version", version.to_string())];
+        if repository.starts_with("https://") {
+            q.push(("repositoryUrl", repository.to_string()));
+        }
+        let path = format!("/Packages/Installed/{}", urlencoding_name(name));
+        self.post(&path, &q, None).await
     }
 
     pub async fn run_task(&self, task_id: &str) -> Result<()> {

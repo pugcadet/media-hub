@@ -516,6 +516,17 @@ pub fn save_hint(e: &str) -> String {
     }
 }
 
+/// Narrower than this (pixels) and a picture looks blurry where apps show it.
+pub fn min_width(kind: &str) -> f64 {
+    match kind {
+        "Logo" => 400.0,
+        "Backdrop" => 1280.0,
+        "Thumb" => 640.0,
+        "Banner" => 600.0,
+        _ => 500.0,
+    }
+}
+
 /// Best picture: your language (or no text for backdrops), then rating, votes and size.
 pub fn best_image(options: &[Value], kind: &str, lang: &str) -> Option<String> {
     let lang2: String = lang.chars().take(2).collect::<String>().to_lowercase();
@@ -535,7 +546,9 @@ pub fn best_image(options: &[Value], kind: &str, lang: &str) -> Option<String> {
         let rating = o.get("CommunityRating").and_then(Value::as_f64).unwrap_or(0.0);
         let votes = o.get("VoteCount").and_then(Value::as_f64).unwrap_or(0.0);
         let width = o.get("Width").and_then(Value::as_f64).unwrap_or(0.0);
-        lang_score * 100.0 + rating * 5.0 + votes.min(50.0) * 0.2 + (width / 1000.0).min(4.0)
+        // A tiny picture (an 84-pixel logo) looks blurry everywhere: below anything sharp.
+        let tiny = if width > 0.0 && width < min_width(kind) { -250.0 } else { 0.0 };
+        tiny + lang_score * 100.0 + rating * 5.0 + votes.min(50.0) * 0.2 + (width / 1000.0).min(4.0)
     };
     options
         .iter()
