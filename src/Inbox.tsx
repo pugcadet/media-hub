@@ -323,8 +323,12 @@ export default function Inbox({ status }: { status: Status }) {
     if (!(await askConfirm(`Upload ${list.length} download${list.length === 1 ? "" : "s"} (${files} file${files === 1 ? "" : "s"})?\n\nThey go to the NAS with the right names. Once a file has arrived and its size checks out, the download goes to the Trash (you can put it back from there). ${replacing ? "Anything else" : "Anything"} already in your library is skipped.${swap}`, { okLabel: replacing ? "Replace and upload" : "Upload" }))) return;
     setBusy(true);
     const args = (await import("./Renamer")).namingArgs();
+    // The counter runs over the whole upload ("3/17"), not per download.
+    let before = 0;
     for (const r of list) {
       if (!r.plan || !r.target) continue;
+      const offset = before;
+      before += movesFor(r).filter((m) => !m.have).length;
       update(r.item.key, { state: "placing" });
       try {
         await track(`Uploading ${placeLabel(r.target, r.plan)}`, async (job) => {
@@ -332,7 +336,7 @@ export default function Inbox({ status }: { status: Status }) {
             const x = e.payload;
             if (x.key !== r.item.key) return;
             const name = x.file ? x.file.split("/").pop() ?? "" : "Checking";
-            const count = x.of > 0 ? `${x.n}/${x.of} · ` : "";
+            const count = x.of > 0 && x.n > 0 ? `${Math.min(files, offset + x.n)}/${files} · ` : "";
             const pct = x.fileSize > 0 && x.file ? ` · ${Math.min(100, Math.floor((x.fileDone / x.fileSize) * 100))}%` : "";
             job.update(`${count}${name}${pct}`, x.total ? (x.done / x.total) * 0.8 : null);
           });

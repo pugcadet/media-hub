@@ -1159,13 +1159,13 @@ fn copy_checked(app: &AppHandle, key: &str, from: &Path, to: &Path, done: &mut u
             let _ = std::fs::remove_file(&tmp); // our own partial file only
             return Err(Error::Stopped);
         }
-        let n = src.read(&mut buf)?;
-        if n == 0 {
+        let got = src.read(&mut buf)?;
+        if got == 0 {
             break;
         }
-        dst.write_all(&buf[..n])?;
-        *done += n as u64;
-        mine += n as u64;
+        dst.write_all(&buf[..got])?;
+        *done += got as u64;
+        mine += got as u64;
         if last.elapsed().as_millis() > 300 {
             last = std::time::Instant::now();
             let _ = app.emit("inbox-progress", Progress { key: key.into(), done: *done, total, file: label.into(), file_done: mine, file_size: size, n, of });
