@@ -46,8 +46,27 @@ jobs:
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee -a ci.log
 
+      # The Windows installer tool (NSIS) Tauri downloads from GitHub: kept between builds, so a
+      # GitHub download hiccup (504) doesn't stop the build.
+      - name: Keep the installer tools
+        if: matrix.label == 'windows'
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/tauri
+          key: tauri-tools-${{ runner.os }}-nsis-3.13
+
+      # Tried up to 4 times: the second try only redoes the packaging (the build itself is kept),
+      # for when a download from GitHub times out.
       - name: Build installer
-        run: npx tauri build --bundles ${{ matrix.bundles }} ${{ matrix.target && format('--target {0}', matrix.target) || '' }} 2>&1 | tee -a ci.log
+        run: |
+          for wait in 0 30 90 180; do
+            sleep $wait
+            if npx tauri build --bundles ${{ matrix.bundles }} ${{ matrix.target && format('--target {0}', matrix.target) || '' }} 2>&1 | tee -a ci.log; then
+              exit 0
+            fi
+            echo "Build didn't finish; trying again in a moment" | tee -a ci.log
+          done
+          exit 1
 
       - name: Publish release
         if: github.ref == 'refs/heads/main'
