@@ -1,37 +1,9 @@
 
-added 75 packages in 6s
+added 75 packages in 4s
 [1m[92m    Updating[0m crates.io index
-[1m[92m   Compiling[0m media-hub v0.26.10 (D:\a\media-hub\media-hub\src-tauri)
-[1m[93mwarning[0m[1m[97m: unreachable pattern[0m
-   [1m[96m--> [0msrc\library.rs:787:9
-    [1m[96m|[0m
-[1m[96m787[0m [1m[96m|[0m         _ => {}
-    [1m[96m|[0m         [1m[93m^[0m [1m[93mno value can reach this[0m
-    [1m[96m|[0m
-[1m[92mnote[0m: multiple earlier patterns match some of the same values
-   [1m[96m--> [0msrc\library.rs:787:9
-    [1m[96m|[0m
-[1m[96m775[0m [1m[96m|[0m [1m[96m...[0m   None => out.push(alert_fix("warn", "No library folder chosen", "The renamer, intro detection and adding new titles need it.",[1m[96m...[0m
-    [1m[96m|[0m       [1m[96m----[0m [1m[96mmatches some of the same values[0m
-[1m[96m...[0m
-[1m[96m786[0m [1m[96m|[0m [1m[96m...[0m   Some(r) => crate::nas::remember(&state, r),
-    [1m[96m|[0m       [1m[96m-------[0m [1m[96mmatches some of the same values[0m
-[1m[96m787[0m [1m[96m|[0m [1m[96m...[0m   _ => {}
-    [1m[96m|[0m       [1m[92m^[0m [1m[92mcollectively making this unreachable[0m
-    [1m[96m= [0m[1m[97mnote[0m: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
-
-[1m[93mwarning[0m[1m[97m: function `has_lang` is never used[0m
-  [1m[96m--> [0msrc\sub_cmds.rs:53:4
-   [1m[96m|[0m
-[1m[96m53[0m [1m[96m|[0m fn has_lang(list: &[SubStream], codes: &[String]) -> bool {
-   [1m[96m|[0m    [1m[93m^^^^^^^^[0m
-   [1m[96m|[0m
-   [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-[1m[93mwarning[0m: `media-hub` (lib test) generated 1 warning
-[1m[93mwarning[0m: `media-hub` (lib) generated 2 warnings (1 duplicate)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 2m 05s
-[1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-047ff71daa2a18a3.exe)
+[1m[92m   Compiling[0m media-hub v0.26.11 (D:\a\media-hub\media-hub\src-tauri)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 02s
+[1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\media_hub_lib-3e9a0a98877345a4.exe)
 
 running 209 tests
 test backend::tests::versions ... ok
@@ -52,10 +24,10 @@ test downloads::tests::audio_mode ... ok
 test downloads::tests::builds_safe_arguments ... ok
 test downloads::tests::helper_programs_and_cookies ... ok
 test downloads::tests::plain_error_text ... ok
-test bulk::tests::drops_release_tags ... ok
 test downloads::tests::reads_progress_and_checksums ... ok
 test downloads::tests::rejects_non_web_addresses ... ok
 test downloads::tests::search_targets_and_results ... ok
+test bulk::tests::drops_release_tags ... ok
 test downloads::tests::series_naming_makes_jellyfin_style_names ... ok
 test downloads::tests::summarizes_playlists ... ok
 test bulk::tests::plans_files_sidecars_and_folder ... ok
@@ -64,15 +36,15 @@ test fake_jellyfin::tests::clearing_removes_only_that_kind ... ok
 test fake_jellyfin::tests::a_conflict_reads_again_and_still_saves ... ok
 test fake_jellyfin::tests::missing_markers_plugin_is_not_called_a_missing_title ... ok
 test fake_jellyfin::tests::markers_are_saved_like_the_segment_editor_and_confirmed ... ok
-test fake_jellyfin::tests::older_intro_skipper_gets_delete_then_add ... ok
 test fake_jellyfin::tests::position_falls_back_to_the_older_route_when_the_new_one_keeps_nothing ... ok
+test fake_jellyfin::tests::older_intro_skipper_gets_delete_then_add ... ok
 test fake_jellyfin::tests::subtitle_download_limit_is_reported_not_hidden ... ok
 test fake_jellyfin::tests::position_is_saved_and_read_back ... ok
 test fingerprint::tests::fft_matches_a_plain_dft ... ok
 test fingerprint::tests::short_input_gives_empty_fingerprint ... ok
 test fingerprint::tests::silence_does_not_match ... ok
-test fake_jellyfin::tests::hidden_from_players_is_said_not_called_saved ... ok
 test fingerprint::tests::survives_noise_like_a_different_encode ... ok
+test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
 test fsops::tests::apply_then_undo_restores_everything ... ok
 test fsops::tests::case_only_rename_works ... ok
 test fsops::tests::folders_are_renamed_after_their_files_and_undo_reverses_it ... ok
@@ -83,22 +55,22 @@ test fsops::tests::unsafe_paths_are_refused ... ok
 test images::tests::cache_names_are_safe ... ok
 test images::tests::reads_width ... ok
 test images::tests::remote_hosts_are_allow_listed ... ok
-test fingerprint::tests::finds_a_shared_intro_at_different_places ... ok
+test import::tests::describes_a_show_folder ... ok
 test import::tests::folder_names ... ok
 test inbox::tests::a_better_copy_is_recognised ... ok
-test import::tests::describes_a_show_folder ... ok
-test inbox::tests::a_movie_brings_only_the_video_and_your_subtitles_with_clean_names ... ok
 test inbox::tests::a_collection_pack_adds_only_the_movies_you_miss ... ok
+test inbox::tests::a_movie_brings_only_the_video_and_your_subtitles_with_clean_names ... ok
 test inbox::tests::a_pack_with_a_folder_per_movie_and_subtitles_deeper_inside ... ok
 test inbox::tests::a_title_you_have_is_never_given_a_second_folder ... ok
 test inbox::tests::artists_combine_under_their_first_name ... ok
 test inbox::tests::episodes_get_their_title_and_junk_stays_behind ... ok
 test inbox::tests::episodes_without_a_season_go_in_the_show_folder ... ok
+test inbox::tests::movies_find_the_collection_you_already_have ... ok
 test inbox::tests::plans_episodes_into_the_show_and_skips_what_is_there ... ok
 test inbox::tests::season_folders_follow_the_show ... ok
 test inbox::tests::season_packs_are_seen_as_seasons_of_the_show ... ok
 test inbox::tests::show_titles_and_artists ... ok
-test inbox::tests::movies_find_the_collection_you_already_have ... ok
+test inbox::tests::the_copy_you_have_is_found ... ok
 test jellyfin::date_tests::dates_look_right ... ok
 test jellyfin::tests::bad_edits_are_refused ... ok
 test jellyfin::tests::client_rejects_odd_keys ... ok
@@ -108,26 +80,25 @@ test jellyfin::tests::finds_segment_endpoints_in_the_api_description ... ok
 test jellyfin::tests::id_and_image_kind_checks ... ok
 test jellyfin::tests::missing_null_and_value_are_different ... ok
 test jellyfin::tests::not_found_names_the_right_thing ... ok
-test inbox::tests::the_copy_you_have_is_found ... ok
-test jfserver::tests::playing_and_watched_read_plainly ... ok
 test jellyfin::tests::parses_a_jellyfin_page ... ok
-test jfserver::tests::versions_compare ... ok
+test jfserver::tests::playing_and_watched_read_plainly ... ok
 test jfserver::tests::update_respects_server_version ... ok
+test jfserver::tests::versions_compare ... ok
 test library::tests::best_version_wins_on_resolution_then_hdr ... ok
+test library::tests::different_shows_are_not_duplicates ... ok
 test library::tests::merging_genres ... ok
 test library::tests::missing_skips_unaired_and_counts_specials ... ok
 test library::tests::today_looks_like_a_date ... ok
 test local::tests::finds_titles_that_were_renamed_since_jellyfin_last_looked ... ok
 test local::tests::relative_paths_use_forward_slashes ... ok
-test library::tests::different_shows_are_not_duplicates ... ok
-test localmusic::edit_tests::names_compare_loosely ... ok
 test localmusic::edit_tests::edits_go_over_the_files_and_reset ... ok
+test localmusic::edit_tests::names_compare_loosely ... ok
 test localmusic::edit_tests::only_picture_hosts_from_the_choices ... ok
 test localmusic::tag_tests::songs_pair_with_tracks_by_number_then_title ... ok
-test localmusic::tests::reads_tags_and_cover_when_available ... ok
 test localmusic::tests::file_and_folder_names ... ok
-test media_tools::tests::learns_and_reuses_the_path_map ... ok
+test localmusic::tests::reads_tags_and_cover_when_available ... ok
 test localmusic::tests::scans_a_folder ... ok
+test media_tools::tests::learns_and_reuses_the_path_map ... ok
 test media_tools::tests::maps_back_to_the_server ... ok
 test media_tools::tests::splits_both_separator_styles ... ok
 test meta_cmds::tests::best_picture_prefers_language_then_rating ... ok
@@ -141,8 +112,8 @@ test music::tests::tracks_borrow_the_album_picture ... ok
 test naming::tests::a_year_is_written_once ... ok
 test naming::tests::bad_templates_are_rejected ... ok
 test naming::tests::edition_words_are_not_the_title ... ok
-test naming::tests::fuller_titles ... ok
 test naming::tests::episode_formats ... ok
+test naming::tests::fuller_titles ... ok
 test naming::tests::messy_names ... ok
 test naming::tests::names_with_years_and_ids ... ok
 test naming::tests::release_season_folders ... ok
@@ -153,8 +124,8 @@ test naming::tests::templates_fill_in_and_skip_optional_parts ... ok
 test naming::tests::titles_after_marker ... ok
 test naming_check::tests::a_quick_check_sees_which_titles_changed ... ok
 test naming_check::tests::already_right_has_no_reasons ... ok
-test naming_check::tests::rows_renamed_since_their_check_are_stale ... ok
 test naming_check::tests::problems_are_counted ... ok
+test naming_check::tests::rows_renamed_since_their_check_are_stale ... ok
 test naming_check::tests::sure_only_when_identified_and_every_episode_known ... ok
 test nas::tests::reads_the_share_from_the_list_of_mounts ... ok
 test picks::tests::date_check ... ok
@@ -221,17 +192,18 @@ test sub_cmds::tests::language_lists_are_checked ... ok
 test sub_cmds::tests::limits_are_named ... ok
 test sub_cmds::tests::reads_streams_and_file_name ... ok
 test sub_cmds::tests::subtitle_text_and_format ... ok
+test sublock::tests::finds_the_same_language_by_name ... ok
 test subpreview::tests::spots_spread_out ... ok
 test subpreview::tests::tags_are_removed ... ok
 test subs::tests::hash_match_wins ... ok
 test subs::tests::language_codes ... ok
-test sublock::tests::finds_the_same_language_by_name ... ok
 test subs::tests::machine_translation_is_penalised ... ok
 test subs::tests::parses_jellyfin_json ... ok
 test subs::tests::plain_subtitles_are_taken_before_sdh_ones ... ok
 test subs::tests::ranking_sorts_and_drops_empty_ids ... ok
 test subs::tests::same_release_beats_other_release ... ok
 test subs::tests::wrong_episode_is_zero ... ok
+test subsync::tests::finds_a_shift ... ok
 test subsync::tests::reads_and_writes_srt_and_vtt ... ok
 test subsync::tests::speech_detection_follows_loudness ... ok
 test tidy::tests::movies_get_one_name_for_folder_video_and_subtitles ... ok
@@ -240,13 +212,13 @@ test tidy::tests::years_only_come_out_of_episode_names ... ok
 test updater::tests::checksums_and_assets ... ok
 test updater::tests::swap_keeps_old_when_new_is_missing ... ok
 test updater::tests::versions_compare ... ok
-test subsync::tests::finds_a_shift ... ok
-test fingerprint::tests::unrelated_audio_has_no_match ... ok
+test fake_jellyfin::tests::hidden_from_players_is_said_not_called_saved ... ok
 test detect::tests::finds_the_intro_in_every_episode_of_a_season ... ok
+test fingerprint::tests::unrelated_audio_has_no_match ... ok
 
-test result: ok. 209 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.97s
+test result: ok. 209 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.61s
 
-[1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-c27b0e0abc7951aa.exe)
+[1m[92m     Running[0m unittests src\main.rs (src-tauri\target\debug\deps\media_hub-e13ff660f2be0f66.exe)
 
 running 0 tests
 
@@ -261,7 +233,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         Info Looking up installed tauri packages to check mismatched versions...
      Running beforeBuildCommand `npm run build`
 
-> media-hub@0.26.10 build
+> media-hub@0.26.11 build
 > tsc && vite build
 
 [36mvite v5.4.21 [32mbuilding for production...[36m[39m
@@ -336,39 +308,195 @@ computing gzip size...
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 3.75s[39m
-[1m[92m   Compiling[0m media-hub v0.26.10 (D:\a\media-hub\media-hub\src-tauri)
-[1m[93mwarning[0m[1m[97m: unreachable pattern[0m
-   [1m[96m--> [0msrc\library.rs:787:9
-    [1m[96m|[0m
-[1m[96m787[0m [1m[96m|[0m         _ => {}
-    [1m[96m|[0m         [1m[93m^[0m [1m[93mno value can reach this[0m
-    [1m[96m|[0m
-[1m[92mnote[0m: multiple earlier patterns match some of the same values
-   [1m[96m--> [0msrc\library.rs:787:9
-    [1m[96m|[0m
-[1m[96m775[0m [1m[96m|[0m [1m[96m...[0m   None => out.push(alert_fix("warn", "No library folder chosen", "The renamer, intro detection and adding new titles need it.",[1m[96m...[0m
-    [1m[96m|[0m       [1m[96m----[0m [1m[96mmatches some of the same values[0m
-[1m[96m...[0m
-[1m[96m786[0m [1m[96m|[0m [1m[96m...[0m   Some(r) => crate::nas::remember(&state, r),
-    [1m[96m|[0m       [1m[96m-------[0m [1m[96mmatches some of the same values[0m
-[1m[96m787[0m [1m[96m|[0m [1m[96m...[0m   _ => {}
-    [1m[96m|[0m       [1m[92m^[0m [1m[92mcollectively making this unreachable[0m
-    [1m[96m= [0m[1m[97mnote[0m: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
-
-[1m[93mwarning[0m[1m[97m: function `has_lang` is never used[0m
-  [1m[96m--> [0msrc\sub_cmds.rs:53:4
-   [1m[96m|[0m
-[1m[96m53[0m [1m[96m|[0m fn has_lang(list: &[SubStream], codes: &[String]) -> bool {
-   [1m[96m|[0m    [1m[93m^^^^^^^^[0m
-   [1m[96m|[0m
-   [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-[1m[93mwarning[0m: `media-hub` (lib) generated 2 warnings
-[1m[92m    Finished[0m `release` profile [optimized] target(s) in 8m 02s
+[32m✓ built in 2.45s[39m
+[1m[92m   Compiling[0m media-hub v0.26.11 (D:\a\media-hub\media-hub\src-tauri)
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 5m 07s
        Built application at: D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe
         Info Patching D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe with bundle type information: nsis
         Info Verifying NSIS package
  Downloading https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip
 failed to bundle project: `http status: 504`
        Error failed to bundle project: `http status: 504`
+Build didn't finish; trying again in a moment
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm run build`
+
+> media-hub@0.26.11 build
+> tsc && vite build
+
+[36mvite v5.4.21 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 94 modules transformed.
+[1m[33m[plugin:vite:reporter][39m[22m [33m[plugin vite:reporter] 
+(!) D:/a/media-hub/media-hub/src/Renamer.tsx is dynamically imported by D:/a/media-hub/media-hub/src/Inbox.tsx, D:/a/media-hub/media-hub/src/LibraryView.tsx, D:/a/media-hub/media-hub/src/scan.ts but also statically imported by D:/a/media-hub/media-hub/src/App.tsx, dynamic import will not move module into another chunk.
+[39m
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html                                                 [39m[1m[2m    0.41 kB[22m[1m[22m[2m │ gzip:   0.27 kB[22m
+[2mdist/[22m[32massets/jetbrains-mono-greek-400-normal-C190GLew.woff2      [39m[1m[2m    4.23 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-500-normal-DCXiE_xi.woff2        [39m[1m[2m    4.32 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-400-normal-DHb3EETF.woff2        [39m[1m[2m    4.46 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-600-normal-C1J5PCl_.woff2        [39m[1m[2m    4.47 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-700-normal-CUqMx5-1.woff2        [39m[1m[2m    4.55 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-600-normal-BoRV6lzK.woff2             [39m[1m[2m    5.23 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-700-normal-CHUG9PD8.woff2             [39m[1m[2m    5.24 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-500-normal-GeMIHyWm.woff2             [39m[1m[2m    5.25 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-400-normal-CM4qok81.woff2             [39m[1m[2m    5.28 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-cyrillic-400-normal-BEIGL1Tu.woff2   [39m[1m[2m    5.33 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-vietnamese-400-normal-CqNFfHCs.woff  [39m[1m[2m    5.37 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-greek-400-normal-B9oWc5Lo.woff       [39m[1m[2m    5.66 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-500-normal-DaZ8i3XM.woff         [39m[1m[2m    6.06 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-400-normal-D7E_mLGF.woff         [39m[1m[2m    6.11 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-600-normal-lA7a_7Ok.woff         [39m[1m[2m    6.14 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-700-normal-pt65Fn2Z.woff         [39m[1m[2m    6.36 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-600-normal-CF2i9ZRY.woff              [39m[1m[2m    6.74 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-700-normal-DyfsrCpP.woff              [39m[1m[2m    6.74 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-500-normal-DyxYGEtJ.woff              [39m[1m[2m    6.76 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-400-normal-DuX9RsAR.woff              [39m[1m[2m    6.77 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-cyrillic-400-normal-ugxPyKxw.woff    [39m[1m[2m    6.98 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-latin-ext-400-normal-Bc8Ftmh3.woff2  [39m[1m[2m    7.34 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-400-normal-BMzJvInZ.woff2          [39m[1m[2m    7.84 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-700-normal-Dw_fZAg2.woff2          [39m[1m[2m    7.85 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-500-normal-B1OEZity.woff2          [39m[1m[2m    7.87 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-600-normal-DvRl3Mj-.woff2          [39m[1m[2m    7.87 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-500-normal-dm74KBQw.woff2         [39m[1m[2m    8.19 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-700-normal-DYOwVNan.woff2         [39m[1m[2m    8.28 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-400-normal-CMDvPJRp.woff2         [39m[1m[2m    8.29 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-600-normal-_gBojHdJ.woff2         [39m[1m[2m    8.30 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-700-normal-7JNVKxyl.woff           [39m[1m[2m   10.00 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-500-normal-CNwnNrRC.woff           [39m[1m[2m   10.01 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-400-normal-Dvx59UGC.woff           [39m[1m[2m   10.03 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-600-normal-It4mZcQk.woff           [39m[1m[2m   10.06 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-latin-ext-400-normal-fXTG6kC5.woff   [39m[1m[2m   10.13 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-vietnamese-wght-normal-CBcvBZtf.woff2         [39m[1m[2m   10.25 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-greek-ext-wght-normal-DlzME5K_.woff2          [39m[1m[2m   11.23 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-500-normal-EtoS1VaI.woff          [39m[1m[2m   11.25 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-600-normal-u5Pl7hTU.woff          [39m[1m[2m   11.25 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-400-normal-C-X6QNXX.woff          [39m[1m[2m   11.32 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-700-normal-eVCcYqtJ.woff          [39m[1m[2m   11.35 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-500-normal-BYYD-dBL.woff2             [39m[1m[2m   14.04 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-400-normal-PaqtzbVb.woff2             [39m[1m[2m   14.11 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-600-normal-4f0koTD-.woff2             [39m[1m[2m   14.17 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-700-normal-BZp_XxE4.woff2             [39m[1m[2m   14.21 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-500-normal-DMZssgOp.woff              [39m[1m[2m   18.24 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-400-normal-8tf8FM3T.woff              [39m[1m[2m   18.29 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-600-normal-BqgrALkZ.woff              [39m[1m[2m   18.38 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-700-normal-DGRFkw-m.woff              [39m[1m[2m   18.41 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-cyrillic-wght-normal-DqGufNeO.woff2           [39m[1m[2m   18.75 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-greek-wght-normal-CkhJZR-_.woff2              [39m[1m[2m   19.00 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-latin-400-normal-V6pRDFza.woff2      [39m[1m[2m   21.17 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-cyrillic-ext-wght-normal-BOeWTOD4.woff2       [39m[1m[2m   25.96 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-latin-400-normal-6-qcROiO.woff       [39m[1m[2m   27.50 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-latin-wght-normal-Dx4kXJAl.woff2              [39m[1m[2m   48.26 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-latin-ext-wght-normal-DO1Apj_S.woff2          [39m[1m[2m   85.07 kB[22m[1m[22m
+[2mdist/[22m[35massets/index-CKazJeNb.css                                  [39m[1m[2m  208.99 kB[22m[1m[22m[2m │ gzip:  54.92 kB[22m
+[2mdist/[22m[36massets/index-DijxLaXo.js                                   [39m[1m[33m1,225.84 kB[39m[22m[2m │ gzip: 377.58 kB[22m
+[33m
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[32m✓ built in 2.57s[39m
+[1m[92m   Compiling[0m media-hub v0.26.11 (D:\a\media-hub\media-hub\src-tauri)
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 5m 14s
+       Built application at: D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe
+        Info Patching D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe with bundle type information: nsis
+        Info Verifying NSIS package
+ Downloading https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip
+failed to bundle project: `http status: 504`
+       Error failed to bundle project: `http status: 504`
+Build didn't finish; trying again in a moment
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm run build`
+
+> media-hub@0.26.11 build
+> tsc && vite build
+
+[36mvite v5.4.21 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 94 modules transformed.
+[1m[33m[plugin:vite:reporter][39m[22m [33m[plugin vite:reporter] 
+(!) D:/a/media-hub/media-hub/src/Renamer.tsx is dynamically imported by D:/a/media-hub/media-hub/src/Inbox.tsx, D:/a/media-hub/media-hub/src/LibraryView.tsx, D:/a/media-hub/media-hub/src/scan.ts but also statically imported by D:/a/media-hub/media-hub/src/App.tsx, dynamic import will not move module into another chunk.
+[39m
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html                                                 [39m[1m[2m    0.41 kB[22m[1m[22m[2m │ gzip:   0.27 kB[22m
+[2mdist/[22m[32massets/jetbrains-mono-greek-400-normal-C190GLew.woff2      [39m[1m[2m    4.23 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-500-normal-DCXiE_xi.woff2        [39m[1m[2m    4.32 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-400-normal-DHb3EETF.woff2        [39m[1m[2m    4.46 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-600-normal-C1J5PCl_.woff2        [39m[1m[2m    4.47 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-700-normal-CUqMx5-1.woff2        [39m[1m[2m    4.55 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-600-normal-BoRV6lzK.woff2             [39m[1m[2m    5.23 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-700-normal-CHUG9PD8.woff2             [39m[1m[2m    5.24 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-500-normal-GeMIHyWm.woff2             [39m[1m[2m    5.25 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-400-normal-CM4qok81.woff2             [39m[1m[2m    5.28 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-cyrillic-400-normal-BEIGL1Tu.woff2   [39m[1m[2m    5.33 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-vietnamese-400-normal-CqNFfHCs.woff  [39m[1m[2m    5.37 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-greek-400-normal-B9oWc5Lo.woff       [39m[1m[2m    5.66 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-500-normal-DaZ8i3XM.woff         [39m[1m[2m    6.06 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-400-normal-D7E_mLGF.woff         [39m[1m[2m    6.11 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-600-normal-lA7a_7Ok.woff         [39m[1m[2m    6.14 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-vietnamese-700-normal-pt65Fn2Z.woff         [39m[1m[2m    6.36 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-600-normal-CF2i9ZRY.woff              [39m[1m[2m    6.74 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-700-normal-DyfsrCpP.woff              [39m[1m[2m    6.74 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-500-normal-DyxYGEtJ.woff              [39m[1m[2m    6.76 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-greek-400-normal-DuX9RsAR.woff              [39m[1m[2m    6.77 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-cyrillic-400-normal-ugxPyKxw.woff    [39m[1m[2m    6.98 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-latin-ext-400-normal-Bc8Ftmh3.woff2  [39m[1m[2m    7.34 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-400-normal-BMzJvInZ.woff2          [39m[1m[2m    7.84 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-700-normal-Dw_fZAg2.woff2          [39m[1m[2m    7.85 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-500-normal-B1OEZity.woff2          [39m[1m[2m    7.87 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-600-normal-DvRl3Mj-.woff2          [39m[1m[2m    7.87 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-500-normal-dm74KBQw.woff2         [39m[1m[2m    8.19 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-700-normal-DYOwVNan.woff2         [39m[1m[2m    8.28 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-400-normal-CMDvPJRp.woff2         [39m[1m[2m    8.29 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-600-normal-_gBojHdJ.woff2         [39m[1m[2m    8.30 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-700-normal-7JNVKxyl.woff           [39m[1m[2m   10.00 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-500-normal-CNwnNrRC.woff           [39m[1m[2m   10.01 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-400-normal-Dvx59UGC.woff           [39m[1m[2m   10.03 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-cyrillic-600-normal-It4mZcQk.woff           [39m[1m[2m   10.06 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-latin-ext-400-normal-fXTG6kC5.woff   [39m[1m[2m   10.13 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-vietnamese-wght-normal-CBcvBZtf.woff2         [39m[1m[2m   10.25 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-greek-ext-wght-normal-DlzME5K_.woff2          [39m[1m[2m   11.23 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-500-normal-EtoS1VaI.woff          [39m[1m[2m   11.25 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-600-normal-u5Pl7hTU.woff          [39m[1m[2m   11.25 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-400-normal-C-X6QNXX.woff          [39m[1m[2m   11.32 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-ext-700-normal-eVCcYqtJ.woff          [39m[1m[2m   11.35 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-500-normal-BYYD-dBL.woff2             [39m[1m[2m   14.04 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-400-normal-PaqtzbVb.woff2             [39m[1m[2m   14.11 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-600-normal-4f0koTD-.woff2             [39m[1m[2m   14.17 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-700-normal-BZp_XxE4.woff2             [39m[1m[2m   14.21 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-500-normal-DMZssgOp.woff              [39m[1m[2m   18.24 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-400-normal-8tf8FM3T.woff              [39m[1m[2m   18.29 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-600-normal-BqgrALkZ.woff              [39m[1m[2m   18.38 kB[22m[1m[22m
+[2mdist/[22m[32massets/manrope-latin-700-normal-DGRFkw-m.woff              [39m[1m[2m   18.41 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-cyrillic-wght-normal-DqGufNeO.woff2           [39m[1m[2m   18.75 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-greek-wght-normal-CkhJZR-_.woff2              [39m[1m[2m   19.00 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-latin-400-normal-V6pRDFza.woff2      [39m[1m[2m   21.17 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-cyrillic-ext-wght-normal-BOeWTOD4.woff2       [39m[1m[2m   25.96 kB[22m[1m[22m
+[2mdist/[22m[32massets/jetbrains-mono-latin-400-normal-6-qcROiO.woff       [39m[1m[2m   27.50 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-latin-wght-normal-Dx4kXJAl.woff2              [39m[1m[2m   48.26 kB[22m[1m[22m
+[2mdist/[22m[32massets/inter-latin-ext-wght-normal-DO1Apj_S.woff2          [39m[1m[2m   85.07 kB[22m[1m[22m
+[2mdist/[22m[35massets/index-CKazJeNb.css                                  [39m[1m[2m  208.99 kB[22m[1m[22m[2m │ gzip:  54.92 kB[22m
+[2mdist/[22m[36massets/index-DijxLaXo.js                                   [39m[1m[33m1,225.84 kB[39m[22m[2m │ gzip: 377.58 kB[22m
+[33m
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[32m✓ built in 2.48s[39m
+[1m[92m   Compiling[0m media-hub v0.26.11 (D:\a\media-hub\media-hub\src-tauri)
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 4m 54s
+       Built application at: D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe
+        Info Patching D:\a\media-hub\media-hub\src-tauri\target\release\media-hub.exe with bundle type information: nsis
+        Info Verifying NSIS package
+ Downloading https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip
+        Info validating hash
+        Info extracting NSIS
+ Downloading https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll
+        Info validating hash
+        Info Target: x64
+     Running makensis to produce D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.26.11_x64-setup.exe
+    Finished 1 bundle at:
+        D:\a\media-hub\media-hub\src-tauri\target\release\bundle\nsis\Media Hub_0.26.11_x64-setup.exe (7.43 MiB)
+
