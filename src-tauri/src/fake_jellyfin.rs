@@ -26,6 +26,9 @@ pub struct FakeState {
     pub hide_from_players: bool,
     /// Answer the next PUT with 412 (changed meanwhile), as when Intro Skipper is analysing.
     pub put_conflict_once: bool,
+    /// The one-step save stores markers without a provider players are given (they're kept but
+    /// not shown); markers added one by one under Intro Skipper are shown.
+    pub put_hidden: bool,
 }
 
 pub struct Fake {
@@ -113,7 +116,7 @@ fn answer(st: &Arc<Mutex<FakeState>>, method: &str, target: &str, body: &str, if
             if s.seg_mode == 0 {
                 return (404, String::new());
             }
-            let shown: Vec<serde_json::Value> = if s.hide_from_players { vec![] } else { s.segs.clone() };
+            let shown: Vec<serde_json::Value> = if s.hide_from_players { vec![] } else { s.segs.iter().filter(|x| x.get("_hidden").is_none()).cloned().collect() };
             (200, serde_json::json!({ "Items": shown }).to_string())
         }
         (_, p) if p.starts_with("/MediaSegmentsApi/") && s.seg_mode == 0 => (404, String::new()),
@@ -128,6 +131,11 @@ fn answer(st: &Arc<Mutex<FakeState>>, method: &str, target: &str, body: &str, if
                 return (412, String::new());
             }
             s.segs = serde_json::from_str(body).unwrap_or_default();
+            if s.put_hidden {
+                for x in &mut s.segs {
+                    x["_hidden"] = serde_json::json!(true);
+                }
+            }
             s.etag += 1;
             (200, serde_json::Value::Array(s.segs.clone()).to_string())
         }
@@ -288,7 +296,24 @@ mod tests {
         let w = client(&f).into_writer();
         let r = tauri::async_runtime::block_on(crate::seg_cmds::store_markers(&w, ITEM, &["Intro".into()], &intro(0.0, 60.0))).unwrap();
         assert!(!r.confirmed);
-        assert!(r.message.contains("switched off"), "{}", r.message);
+        assert!(r.message.contains("isn't showing it to players"), "{}", r.message);
+    }
+
+    #[test]
+    fn stored_but_not_shown_is_saved_again_under_intro_skipper() {
+        let f = start();
+        {
+            let mut g = f.state.lock().unwrap();
+            g.seg_mode = 2;
+            g.put_hidden = true;
+        }
+        let w = client(&f).into_writer();
+        let r = tauri::async_runtime::block_on(crate::seg_cmds::store_markers(&w, ITEM, &["Intro".into()], &intro(0.0, 60.0))).unwrap();
+        assert!(r.confirmed, "{}", r.message);
+        let g = f.state.lock().unwrap();
+        assert!(g.log.iter().any(|l| l.starts_with("POST /MediaSegmentsApi/") && l.contains("providerId=IntroSkipper")), "{:?}", g.log);
+        assert!(g.log.iter().any(|l| l.starts_with("PUT /MediaSegmentsApi/") && l.contains("providerId=IntroSkipper")), "{:?}", g.log);
+        assert_eq!(g.segs.iter().filter(|x| x.get("_hidden").is_none()).count(), 1);
     }
 
     #[test]
